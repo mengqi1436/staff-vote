@@ -1,0 +1,22 @@
+packages:
+  - "apps/*"
+
+# pnpm 11 默认不执行依赖的安装脚本。以下三个包必须放行：
+#   esbuild        —— vite / vitest 的构建引擎，需落地平台二进制
+#   prisma         —— Prisma CLI，需落地 schema engine
+#   @prisma/engines —— 同上
+allowBuilds:
+  '@prisma/engines': true
+  esbuild: true
+  prisma: true
+
+minimumReleaseAgeExclude:
+  - '@types/node@26.6.2'
+  - dotenv@18.0.1
+
+# pnpm 10+ 默认不执行依赖的安装脚本；以下是本项目确认需要执行构建脚本的包。
+onlyBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - esbuild
+  - prisma

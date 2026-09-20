@@ -1,0 +1,39 @@
+{
+  "name": "@staff-vote/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:generate": "prisma generate",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:drift": "prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "dotenv": "18.0.1",
+    "exceljs": "4.4.0",
+    "express": "5.2.1",
+    "express-rate-limit": "8.7.0",
+    "helmet": "8.3.0",
+    "jsonwebtoken": "9.0.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/jsonwebtoken": "9.0.10",
+    "@types/node": "26.6.2",
+    "@types/supertest": "7.2.1",
+    "prisma": "7.10.0",
+    "supertest": "7.2.2",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

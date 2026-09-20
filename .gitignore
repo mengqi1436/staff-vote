@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+coverage/
+
+# 环境变量：数据库口令等敏感值只存在于本地，绝不入库
+.env
+.env.local
+.env.*.local
+
+# Prisma 生成的客户端（可由 prisma generate 重建）
+apps/api/src/generated/
+
+# impeccable 的版面证据（截图与审计输出）：体积大且可重新生成。
+# 设计系统的源不在此列 —— PRODUCT.md / DESIGN.md / .impeccable/design.json /
+# 方向契约都要入库，它们才是后续工作的权威。
+apps/web/.impeccable/review/
+
+# 会话工具产物：浏览器快照、代码图索引、影子配置，都不属于源码，
+# 也不该进代码审查的范围
+.playwright-cli/
+.codegraph/
+.arts/
+.codeartsdoer/
+.merkle-snapshot.json
+
+# 日志与编辑器
+*.log
+.DS_Store
+.vscode/
+.idea/
