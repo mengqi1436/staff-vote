@@ -1,0 +1,21 @@
+{
+  "name": "staff-vote",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "职工素质投票系统：匿名投票入口 + 后台管理",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build",
+    "dev:api": "pnpm --filter @staff-vote/api dev",
+    "dev:web": "pnpm --filter @staff-vote/web dev",
+    "db:generate": "pnpm --filter @staff-vote/api db:generate",
+    "db:deploy": "pnpm --filter @staff-vote/api db:deploy",
+    "db:seed": "pnpm --filter @staff-vote/api db:seed",
+    "db:drift": "pnpm --filter @staff-vote/api db:drift"
+  }
+}

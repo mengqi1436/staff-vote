@@ -1,0 +1,60 @@
+# 职工素质评议系统 —— 后端 systemd 服务
+#
+# 安装：
+#   sudo cp deploy/staff-vote-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now staff-vote-api
+#   sudo systemctl status staff-vote-api --no-pager
+#
+# 路径约定：部署根目录 /opt/staff-vote，后端在 /opt/staff-vote/apps/api。
+# 若实际路径不同，请同步修改 WorkingDirectory / EnvironmentFile / ReadWritePaths。
+
+[Unit]
+Description=职工素质投票系统后端 API
+Documentation=file:///opt/staff-vote/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=staff-vote
+Group=staff-vote
+WorkingDirectory=/opt/staff-vote/apps/api
+
+# 数据库口令、JWT_SECRET 等敏感值都在这个文件里，权限应为 600 且属主为 staff-vote
+EnvironmentFile=/opt/staff-vote/apps/api/.env
+
+# 时区固定。所有时间列都是 timestamptz，但进程时区会影响日志与
+# `new Date()` 的本地化输出，固定它可避免跨环境排查时的困扰。
+Environment=TZ=Asia/Shanghai
+
+ExecStart=/usr/bin/node dist/index.js
+
+Restart=on-failure
+RestartSec=5s
+# 反复崩溃时不要无限重启打满日志
+StartLimitBurst=10
+StartLimitIntervalSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=staff-vote-api
+
+# --- 安全加固 ---------------------------------------------------------------
+# 应用只需要读代码、连数据库、写日志，不需要任何系统能力。
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+# ProtectSystem=strict 会把整个文件系统设为只读，
+# 因此必须显式列出进程需要写入的目录（日志）。
+ReadWritePaths=/opt/staff-vote/apps/api/logs
+
+[Install]
+WantedBy=multi-user.target

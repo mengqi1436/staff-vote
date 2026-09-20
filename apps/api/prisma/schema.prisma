@@ -1,0 +1,262 @@
+// =============================================================================
+// 职工素质投票系统 —— 数据模型
+// =============================================================================
+// 约定：
+//   1. 主键统一 UUID v7（`String @id @default(uuid(7))`），由 Prisma 客户端生成。
+//      PostgreSQL 17 尚无内置 uuidv7()（PG 18 才引入），因此数据库列不设 DEFAULT，
+//      迁移 SQL 里主键为 TEXT NOT NULL 且无默认值，schema 与库之间因此零漂移。
+//   2. 时间列一律 `@db.Timestamptz(3)`。Prisma 默认把 DateTime 映射为
+//      timestamp(3)（不带时区），在跨时区与夏令时场景下有歧义，
+//      PostgreSQL 官方对绝大多数应用推荐 timestamptz。
+//   3. 数据库表名与列名统一 snake_case（@@map / @map），让 DBA 直接阅读
+//      prisma/migrations 里的手写 SQL 时无认知负担。
+//   4. 约束保留 Prisma 的默认命名（`<表>_pkey` / `_key` / `_fkey` / `_idx`）：
+//      它本身就是显式且带表名前缀的，已满足「便于 ALTER 与排障」的目标，
+//      为此在 schema 里堆几十个 map 参数属于无收益的复杂度。
+// =============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7 起连接串配置在 prisma.config.ts 的 datasource.url
+}
+
+/// 随机码状态。用数据库原生 enum，避免字符串字面量漂移。
+enum TicketStatus {
+  unused
+  used
+  revoked
+
+  @@map("ticket_status")
+}
+
+/// 后台管理员。支持多账号，权限由角色决定。
+model AdminUser {
+  id           String   @id @default(uuid(7))
+  username     String   @unique
+  /// scrypt 格式串：scrypt$N$r$p$salt$hash。绝不可存明文或可逆加密值。
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  /// 角色。为空表示未分配角色，等价于只读：没有任何写权限。
+  roleId String? @map("role_id")
+
+  /// 停用后无法登录，且未过期的会话令牌立即失效（adminAuth 每次请求查库）。
+  enabled Boolean @default(true)
+
+  role AdminRole? @relation(fields: [roleId], references: [id], onDelete: SetNull)
+
+  @@map("admin_users")
+}
+
+/// 权限目录。权限码的唯一真源在 src/lib/permissions.ts，seed 按 code 幂等同步到本表；
+/// 表里存权威副本是为了让角色勾选能走外键，避免权限码在角色表里变成自由文本。
+model Permission {
+  id        String   @id @default(uuid(7))
+  code      String   @unique
+  name      String
+  groupName String   @map("group_name")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// 角色。内置角色（builtin = true）不允许删除，避免把系统锁死在自己改不回来的状态。
+model AdminRole {
+  id          String   @id @default(uuid(7))
+  code        String   @unique
+  name        String
+  description String?
+  builtin     Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  permissions RolePermission[]
+  admins      AdminUser[]
+
+  @@map("admin_roles")
+}
+
+/// 角色与权限的多对多。删除角色或权限时级联清理关联。
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       AdminRole  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// 部门。打分表按部门取一套项点列。
+model Department {
+  id        String   @id @default(uuid(7))
+  name      String   @unique
+  sortOrder Int      @default(0) @map("sort_order")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  employees Employee[]
+  criteria  Criterion[]
+  sheets    ScoreSheet[]
+
+  @@map("departments")
+}
+
+/// 被评职工，即打分表的「行」。
+model Employee {
+  id           String   @id @default(uuid(7))
+  departmentId String   @map("department_id")
+  name         String
+  /// 外部唯一标识，为将来对接人事系统预留（届时按此列 upsert，无需改表结构）
+  employeeNo   String?  @unique @map("employee_no")
+  sortOrder    Int      @default(0) @map("sort_order")
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  scoreItems ScoreItem[]
+
+  @@index([departmentId])
+  @@map("employees")
+}
+
+/// 素质项点，即打分表的「列」。每个部门可配一套，min/max 单独设置。
+model Criterion {
+  id           String   @id @default(uuid(7))
+  departmentId String   @map("department_id")
+  name         String
+  minScore     Int      @default(0) @map("min_score")
+  maxScore     Int      @default(100) @map("max_score")
+  sortOrder    Int      @default(0) @map("sort_order")
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  scoreItems ScoreItem[]
+
+  @@index([departmentId])
+  @@map("criteria")
+}
+
+/// 票种（A / B / C ...）。weightPercent 即「占比」，用于最终加权求和。
+model TicketType {
+  id            String   @id @default(uuid(7))
+  code          String   @unique
+  name          String
+  /// 启用票种的 weightPercent 合计必须为 100，由服务层在写入时校验
+  weightPercent Int      @map("weight_percent")
+  sortOrder     Int      @default(0) @map("sort_order")
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  tickets     Ticket[]
+  batches     TicketBatch[]
+  scoreSheets ScoreSheet[]
+
+  @@map("ticket_types")
+}
+
+/// 一次批量发码的批次，用于后台按批次追踪发放情况。
+model TicketBatch {
+  id           String   @id @default(uuid(7))
+  ticketTypeId String   @map("ticket_type_id")
+  count        Int
+  operator     String
+  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  tickets    Ticket[]
+
+  @@index([ticketTypeId])
+  @@map("ticket_batches")
+}
+
+/// 随机码。只记录状态与核销时间，**不记录投向**，保证与评分数据的匿名隔断。
+model Ticket {
+  id           String       @id @default(uuid(7))
+  code         String       @unique
+  ticketTypeId String       @map("ticket_type_id")
+  batchId      String       @map("batch_id")
+  status       TicketStatus @default(unused)
+  usedAt       DateTime?    @db.Timestamptz(3) @map("used_at")
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  batch      TicketBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([batchId])
+  @@index([ticketTypeId])
+  @@map("tickets")
+}
+
+/// 一张提交的打分表。
+/// 匿名边界：本表**不含** ticketId / IP / UA，因此无法从评分反推投票人；
+/// 票种只保留到类别粒度（A/B/C），这是加权求和所必需的最小信息。
+model ScoreSheet {
+  id           String   @id @default(uuid(7))
+  departmentId String   @map("department_id")
+  ticketTypeId String   @map("ticket_type_id")
+  submittedAt  DateTime @default(now()) @db.Timestamptz(3) @map("submitted_at")
+
+  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  items      ScoreItem[]
+
+  @@index([departmentId])
+  @@index([ticketTypeId])
+  @@map("score_sheets")
+}
+
+/// 一个打分单元格。score 为整数，区间由所属项点的 min/max 决定。
+model ScoreItem {
+  id          String @id @default(uuid(7))
+  sheetId     String @map("sheet_id")
+  employeeId  String @map("employee_id")
+  criterionId String @map("criterion_id")
+  score       Int
+
+  sheet     ScoreSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  employee  Employee   @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  criterion Criterion  @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+
+  @@unique([sheetId, employeeId, criterionId])
+  @@index([employeeId, criterionId])
+  @@index([criterionId])
+  @@map("score_items")
+}
+
+/// 全局设置：投票总开关、开放起止时间、系统标题等。值为字符串，按 key 解析。
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  @@map("settings")
+}
+
+/// 管理动作留痕：发码、改权重、改开放时间。
+model AuditLog {
+  id        String   @id @default(uuid(7))
+  action    String
+  detail    Json?
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  @@index([createdAt])
+  @@map("audit_logs")
+}
