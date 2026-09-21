@@ -30,7 +30,7 @@ const CRITERIA: VoteCriterionDto[] = [
   { id: 'c1', name: '政治素质', description: '信念坚定、对党忠诚。', minScore: 0, maxScore: 20 },
 ];
 
-const VOTE_COLUMNS: VoteColumnBrief[] = [{ id: 'v1', name: '主任' }];
+const VOTE_COLUMNS: VoteColumnBrief[] = [{ id: 'v1', name: '主任', employeeName: '张三' }];
 
 /** 打分表响应体：与 GET /api/vote/sheet 的契约一致（表头文案 + 项点行 + 被评列）。 */
 function sheetBody(overrides: Record<string, unknown> = {}) {

@@ -231,6 +231,297 @@ body {
 }
 
 /* =============================================================================
+   问卷配置页：附件8.问卷调查表.xlsx 版式（所见即所得）
+   尺寸换算：行高/字号 pt × 4/3 → px；Excel 列宽字符 × 7 + 5 → px。
+   与附件8一致的三处特例：
+     1. 抬头两行（附件号、表标题）与表尾填写说明行**不带框线**（原表 borderId=0）；
+     2. 全表字体宋体，标题 16pt 粗体，正文 11pt（车间问卷 12pt），个人问卷列头 10pt；
+     3. 表头「职务与姓名 / 评价项点」用左上→右下的对角斜线分隔（原表 diagonalDown）。
+   ============================================================================= */
+
+.sheet-wrap {
+  overflow-x: auto;
+  background: #fff;
+}
+
+.sheet-excel {
+  border-collapse: collapse;
+  table-layout: fixed;
+  /* MDN：fixed 布局必须显式指定宽度，否则退回 auto 算法。
+     width:100% 让表格填满页面；列宽全部由 colgroup 决定。 */
+  width: 100%;
+  background: #fff;
+  color: #000;
+  font-family: '宋体', SimSun, serif;
+  font-size: 14.7px; /* 11pt */
+  line-height: 1.5;
+}
+
+.sheet-excel th,
+.sheet-excel td {
+  border: 1px solid #000;
+  padding: 2px 6px;
+  font-weight: normal;
+  vertical-align: middle;
+}
+
+/*
+ * 列宽按附件8 比例：序号列固定窄宽（4.88 / 5.8 字符 → px）；
+ * 被评列按原表占比用百分比（个人 17.5/121.38 ≈ 14.42%，车间 13.8/144.9 ≈ 9.52%）；
+ * 项点列不设宽——MDN fixed 算法中未定宽的列吸收全部剩余空间，
+ * 恰好落在原表 46.5 字符的占比附近（4 个被评列时约 40%），页面任何宽度下都铺满。
+ * 被评列多到超过容器宽时，fixed 表格按列宽和撑开，由 .sheet-wrap 横向滚动。
+ */
+.sheet-excel.is-person col.col-no { width: 39px; }
+.sheet-excel.is-person col.col-score { width: 14.42%; }
+/* 车间问卷：序号 5.8 字符、得分列 13.8 字符（项点列同样吸收剩余） */
+.sheet-excel.is-workshop col.col-no { width: 46px; }
+.sheet-excel.is-workshop col.col-score { width: 9.52%; }
+
+/* 抬头与表尾行：无框线（原表这几行 borderId=0） */
+.sheet-excel .row-caption > td,
+.sheet-excel .row-title > td,
+.sheet-excel .row-spacer > td,
+.sheet-excel .row-footer > td {
+  border: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* 行高（附件8 customHeight） */
+.sheet-excel .row-caption > td { height: 33px; }          /* 25pt */
+.sheet-excel.is-person .row-title > td { height: 40px; }  /* 30pt */
+.sheet-excel.is-workshop .row-title > td { height: 55px; } /* 41pt */
+.sheet-excel .row-spacer > td { height: 18px; }           /* 13.5pt 空行，仅个人问卷有 */
+.sheet-excel.is-person .row-head > th { height: 35px; }   /* 26pt × 2 行 */
+/* 表头第二行只有带框空格，没有内容，必须显式给高度，否则整行塌陷 */
+.sheet-excel.is-person tr.row-head2 > td { height: 35px; padding: 0; }
+.sheet-excel.is-workshop .row-head > th { height: 29px; } /* 22pt */
+.sheet-excel .row-criterion > td,
+.sheet-excel .row-criterion > th { height: 91px; }        /* 68pt */
+.sheet-excel .row-footer > td { height: 61px; }           /* 46pt */
+
+/* 附件号行：黑体、左对齐 */
+.sheet-excel .row-caption {
+  font-family: '黑体', SimHei, '宋体', serif;
+}
+
+/* 表标题行：宋体 16pt 粗体居中 */
+.sheet-excel .row-title > td {
+  text-align: center;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+.sheet-excel .title-text {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* 标题里的部门下拉：无边框、无箭头图标——单元格看起来就是一段标题文字 */
+.sheet-excel .title-dept.ant-select {
+  font-size: inherit;
+  font-weight: inherit;
+  margin: 0 2px;
+}
+
+.sheet-excel .title-dept .ant-select-selector {
+  padding: 0 4px !important;
+}
+
+.sheet-excel .title-dept .ant-select-selection-item {
+  font-size: inherit;
+  font-weight: inherit;
+  color: #000;
+}
+
+.sheet-excel .title-dept .ant-select-suffix {
+  display: none;
+}
+
+/*
+ * Excel 化：所有单元格内的下拉都不显示箭头控件（antd 6.6 的箭头在 .ant-select-suffix 里），
+ * 静态观感就是纯文字；悬停时文字出现虚线下划线，提示此处可点选。
+ */
+.sheet-excel .col-employee-select .ant-select-suffix,
+.sheet-excel .title-dept .ant-select-suffix {
+  display: none;
+}
+
+.sheet-excel .col-employee-select:not(.ant-select-disabled):hover .ant-select-selection-item,
+.sheet-excel .title-dept:not(.ant-select-disabled):hover .ant-select-selection-item {
+  text-decoration: underline dashed;
+  text-underline-offset: 4px;
+}
+
+/* 行内编辑铅笔：悬停该行才出现，避免破坏 Excel 版面 */
+.sheet-excel .sheet-edit-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+  vertical-align: middle;
+}
+
+.sheet-excel tr:hover .sheet-edit-btn {
+  opacity: 1;
+}
+
+/* 表头 */
+.sheet-excel .row-head {
+  text-align: center;
+  font-weight: 700;
+}
+
+.sheet-excel.is-person .row-head {
+  font-size: 13.3px; /* 10pt */
+}
+
+.sheet-excel.is-workshop .row-head {
+  font-size: 16px; /* 12pt */
+}
+
+/* 斜线表头：原表 diagonalDown，左上角→右下角的贴角直线（SVG 精确贴角，方向随格子宽高），
+   职务在线上方靠右、项点在线下方靠左 */
+.sheet-excel .cell-diag {
+  position: relative;
+  padding: 0;
+}
+
+.sheet-excel .cell-diag .diag-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sheet-excel .diag-name {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+}
+
+.sheet-excel .diag-criterion {
+  position: absolute;
+  bottom: 4px;
+  left: 8px;
+}
+
+/* 被评列列头：内联输入 + 悬停删除 */
+.sheet-excel .cell-col-head {
+  position: relative;
+}
+
+/*
+ * antd 无边框 Input 的 className 直接落在 <input> 元素上（没有外层包装），
+ * 所以这里直接选中 input 本身：字体继承表格的宋体/字号/字重，列名居中（原表 10pt 粗体居中）。
+ */
+.sheet-excel input.col-name-input {
+  text-align: center;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: #000;
+}
+
+/* 表头第二行：为该职务选择具体被评人（下拉无边框无箭头、文字居中，静态时就是一格纯文字） */
+.sheet-excel .row-head2 > td {
+  height: 35px;
+  padding: 0 4px;
+}
+
+.sheet-excel .col-employee-select {
+  width: 100%;
+}
+
+.sheet-excel .col-employee-select .ant-select-selection-item,
+.sheet-excel .col-employee-select .ant-select-selection-placeholder {
+  text-align: center;
+}
+
+.sheet-excel .col-employee-select .ant-select-selection-item {
+  font-size: 13.3px;
+  font-weight: normal;
+  color: #000;
+}
+
+.sheet-excel .col-remove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sheet-excel .cell-col-head:hover .col-remove {
+  opacity: 1;
+}
+
+/* 项点行：名称粗体 + 描述缩进（原表富文本：名称 b 标签，描述换行后接续）。
+   名称与描述都是常驻无框输入，className 直接落在 input/textarea 上。 */
+.sheet-excel .cell-criterion {
+  text-align: left;
+  white-space: normal;
+  line-height: 1.7;
+}
+
+.sheet-excel .criterion-name {
+  /* 冒号紧跟名称（原表「政治素质：」），输入框按内容自适应宽度 */
+  display: block;
+  font-weight: 700;
+}
+
+.sheet-excel input.criterion-name-input {
+  width: auto; /* 覆盖 antd 的 100%，让冒号跟在名称后面而不是被推到行尾 */
+  min-width: 8em;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 700;
+  color: #000;
+}
+
+.sheet-excel textarea.criterion-desc-input {
+  font-family: inherit;
+  font-size: inherit;
+  color: #000;
+  text-indent: 2em;
+  resize: none;
+}
+
+/* 序号列 */
+.sheet-excel .cell-no {
+  text-align: center;
+}
+
+/* 表尾填写说明：加粗左对齐，保留编辑时的换行（原表富文本就是「填写说明：」换行接内容），
+   关键词富文本（原表：满分20分/0分红粗，弃权、不填粗体） */
+.sheet-excel .row-footer > td {
+  text-align: left;
+  font-weight: 700;
+  white-space: pre-wrap;
+}
+
+.sheet-excel .note-red {
+  color: #ff0000;
+}
+
+/* 空值占位提示 */
+.sheet-excel .sheet-placeholder {
+  color: rgba(0, 0, 0, 0.25);
+  font-weight: 400;
+}
+
+/* 表格内的无框输入（附件号）：className 在 input 本身，字体继承表格宋体 */
+.sheet-excel input.cell-inline-input {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: #000;
+}
+
+/* =============================================================================
    按压反馈：只给自建可点击元素用，antd 组件自带 active 态
    ============================================================================= */
 

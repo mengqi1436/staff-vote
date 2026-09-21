@@ -165,14 +165,19 @@ export interface VoteColumnDto {
   id: string;
   departmentId: string;
   name: string;
+  /** 该职务列对应的具体被评人（表头第二行的姓名），未选人为 null。 */
+  employeeId: string | null;
+  employeeName: string | null;
   sortOrder: number;
   enabled: boolean;
 }
 
-/** 打分表里的被评列视图：投票端只需要 id 与名称。 */
+/** 打分表里的被评列视图：投票端只需要 id、名称与被评人姓名。 */
 export interface VoteColumnBrief {
   id: string;
   name: string;
+  /** 该职务列对应的具体被评人姓名（表头第二行），未选人为 null。 */
+  employeeName: string | null;
 }
 
 /** 打分表用的项点视图：不含排序与启停（后端只返回启用的）。 */
@@ -471,9 +476,9 @@ export const adminApi = {
       request<VoteColumnDto[]>(
         `/admin/vote-columns${departmentId ? `?departmentId=${encodeURIComponent(departmentId)}` : ''}`,
       ),
-    create: (body: { departmentId: string; name: string; sortOrder?: number }) =>
+    create: (body: { departmentId: string; name: string; employeeId?: string | null; sortOrder?: number }) =>
       request<VoteColumnDto>('/admin/vote-columns', { method: 'POST', body }),
-    update: (id: string, body: { name?: string; sortOrder?: number; enabled?: boolean }) =>
+    update: (id: string, body: { name?: string; employeeId?: string | null; sortOrder?: number; enabled?: boolean }) =>
       request<VoteColumnDto>(`/admin/vote-columns/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/vote-columns/${id}`, { method: 'DELETE' }),
   },

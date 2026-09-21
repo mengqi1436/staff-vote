@@ -46,6 +46,8 @@ export interface CriterionView {
 export interface VoteColumnView {
   id: string;
   name: string;
+  /** 该职务列对应的具体被评人姓名（表头第二行「职务与姓名」），未选人为 null。 */
+  employeeName: string | null;
 }
 
 export interface VoteSessionResult {
@@ -159,7 +161,7 @@ export async function getVoteSheet(departmentId: string): Promise<VoteSheetResul
     prisma.voteColumn.findMany({
       where: { departmentId, enabled: true },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true },
+      select: { id: true, name: true, employee: { select: { name: true } } },
     }),
   ]);
 
@@ -170,7 +172,11 @@ export async function getVoteSheet(departmentId: string): Promise<VoteSheetResul
     title: department.title,
     footerNote: department.footerNote,
     criteria,
-    voteColumns,
+    voteColumns: voteColumns.map((column) => ({
+      id: column.id,
+      name: column.name,
+      employeeName: column.employee?.name ?? null,
+    })),
   };
 }
 

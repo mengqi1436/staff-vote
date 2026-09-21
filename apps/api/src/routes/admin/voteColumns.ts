@@ -28,11 +28,15 @@ const ListQuerySchema = z.object({
 const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
   name: z.string().trim().min(1, '列名不能为空').max(50),
+  /** 该职务列的具体被评人；null/undefined = 未选人。 */
+  employeeId: z.string().min(1).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
 });
 
 const PatchSchema = z.object({
   name: z.string().trim().min(1).max(50).optional(),
+  /** 传 null 清除已选的被评人。 */
+  employeeId: z.string().min(1).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
   enabled: z.boolean().optional(),
 });

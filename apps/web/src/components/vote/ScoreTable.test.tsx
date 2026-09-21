@@ -19,8 +19,8 @@ const CRITERIA: VoteCriterionDto[] = [
 ];
 
 const VOTE_COLUMNS: VoteColumnBrief[] = [
-  { id: 'v1', name: '主任' },
-  { id: 'v2', name: '党支部书记' },
+  { id: 'v1', name: '主任', employeeName: '张三' },
+  { id: 'v2', name: '党支部书记', employeeName: null },
 ];
 
 /** 单元格位置：[项点行, 被评列]。 */
@@ -155,9 +155,20 @@ describe('ScoreTable 渲染（参考表版式）', () => {
     expect(first[1]?.querySelector('.head-criterion')).not.toBeNull();
   });
 
-  it('车间问卷的表头是单行「序号 / 项点 / 得分」', () => {
-    const { container } = render(
-      <Harness questionnaireType="workshop" voteColumns={[{ id: 'v9', name: '得分' }]} />,
+  it('个人问卷表头第二行显示职务对应的被评人姓名（未选人为空）', () => {
+    const { container } = render(<Harness />);
+
+    const headRows = container.querySelectorAll('.score-table thead tr');
+    // 表头第二行只有被评列的姓名格（序号与斜线格跨行）；抬头行数由 harness 默认值决定，取最后一行
+    const names = [...(headRows[headRows.length - 1]?.children ?? [])].map((cell) => cell.textContent);
+    expect(names).toEqual(['张三', '']);
+  });
+
+  it('车间问卷的表头是单行「序号 / 项点 / 得分」', () => {    const { container } = render(
+      <Harness
+        questionnaireType="workshop"
+        voteColumns={[{ id: 'v9', name: '得分', employeeName: null }]}
+      />,
     );
 
     const headRows = container.querySelectorAll('.score-table thead tr');

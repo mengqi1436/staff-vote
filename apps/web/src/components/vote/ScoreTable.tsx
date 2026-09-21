@@ -282,7 +282,9 @@ export function ScoreTable({
           {twoRowHeader ? (
             <tr>
               {voteColumns.map((column) => (
-                <th key={column.id} className="num" aria-hidden="true" />
+                <th key={column.id} className="num">
+                  {column.employeeName ?? ''}
+                </th>
               ))}
             </tr>
           ) : null}

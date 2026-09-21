@@ -1027,6 +1027,54 @@ describeDb('管理端接口', () => {
     ).toBe(400);
   });
 
+  it('被评列选人：职务列绑定本部门职工，null 清除，跨部门与不存在的人被拒绝', async () => {
+    const department = await createDepartment(`${TAG}部门-选人`);
+    const other = await createDepartment(`${TAG}部门-选人其他`);
+    const employee = await createEmployee(department.id, '张三');
+    const column = await createVoteColumn(department.id, '主任');
+
+    // PATCH 绑定被评人：返回列时带上职工姓名
+    const bound = await agent
+      .patch(`/api/admin/vote-columns/${column.id}`)
+      .send({ employeeId: employee.id });
+    expect(bound.status).toBe(200);
+    expect(bound.body).toMatchObject({ employeeId: employee.id, employeeName: '张三' });
+
+    const list = await agent.get(`/api/admin/vote-columns?departmentId=${department.id}`);
+    expect(
+      (list.body as Array<{ id: string; employeeId: string | null; employeeName: string | null }>).find(
+        (row) => row.id === column.id,
+      ),
+    ).toMatchObject({ employeeId: employee.id, employeeName: '张三' });
+
+    // 传 null 清除，退回未选人
+    const cleared = await agent
+      .patch(`/api/admin/vote-columns/${column.id}`)
+      .send({ employeeId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.employeeId).toBeNull();
+
+    // 跨部门职工属于配错数据：问卷不能打出别车间的名字
+    const stranger = await createEmployee(other.id, '李四');
+    const cross = await agent
+      .patch(`/api/admin/vote-columns/${column.id}`)
+      .send({ employeeId: stranger.id });
+    expect(cross.status).toBe(400);
+
+    // 不存在的职工同样拒绝
+    const ghost = await agent
+      .patch(`/api/admin/vote-columns/${column.id}`)
+      .send({ employeeId: 'not-exist' });
+    expect(ghost.status).toBe(400);
+
+    // 创建时直接带被评人
+    const withEmployee = await agent
+      .post('/api/admin/vote-columns')
+      .send({ departmentId: department.id, name: '副主任', employeeId: employee.id });
+    expect(withEmployee.status).toBe(200);
+    expect(withEmployee.body).toMatchObject({ employeeId: employee.id, employeeName: '张三' });
+  });
+
   it('软删除部门/被评列/项点后历史评分仍然可读', async () => {
     const department = await createDepartment(`${TAG}部门-软删`);
     const column = await createVoteColumn(department.id, '主任');

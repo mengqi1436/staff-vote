@@ -134,15 +134,20 @@ model VoteColumn {
   id           String   @id @default(uuid(7))
   departmentId String   @map("department_id")
   name         String
+  /// 该职务列对应的具体被评人（表头第二行「职务与姓名」里的姓名）。可空：打印空白表时未指定。
+  employeeId   String?  @map("employee_id")
   sortOrder    Int      @default(0) @map("sort_order")
   enabled      Boolean  @default(true)
   createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
   updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
 
   department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  /// 职工被删除后列保留，只是退回「未选人」状态（SetNull）。
+  employee   Employee?   @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   scoreItems ScoreItem[]
 
   @@index([departmentId])
+  @@index([employeeId])
   @@map("vote_columns")
 }
 
@@ -159,6 +164,8 @@ model Employee {
   updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
 
   department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  /// 该职工被指为某个被评职务列的具体人选（问卷表头「职务与姓名」）。
+  voteColumns VoteColumn[]
 
   @@index([departmentId])
   @@map("employees")

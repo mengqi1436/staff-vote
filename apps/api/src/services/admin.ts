@@ -62,6 +62,9 @@ export interface VoteColumnDto {
   id: string;
   departmentId: string;
   name: string;
+  /** 该职务列对应的具体被评人（表头第二行的姓名），未选人为 null。 */
+  employeeId: string | null;
+  employeeName: string | null;
   sortOrder: number;
   enabled: boolean;
 }
@@ -995,11 +998,14 @@ export async function listVoteColumns(departmentId?: string): Promise<VoteColumn
   const rows = await prisma.voteColumn.findMany({
     where: { departmentId },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    include: { employee: { select: { name: true } } },
   });
   return rows.map((row) => ({
     id: row.id,
     departmentId: row.departmentId,
     name: row.name,
+    employeeId: row.employeeId,
+    employeeName: row.employee?.name ?? null,
     sortOrder: row.sortOrder,
     enabled: row.enabled,
   }));
@@ -1008,7 +1014,26 @@ export async function listVoteColumns(departmentId?: string): Promise<VoteColumn
 export interface VoteColumnCreateInput {
   departmentId: string;
   name: string;
+  /** 该职务列的具体被评人（可选）。 */
+  employeeId?: string | null;
   sortOrder?: number;
+}
+
+/**
+ * 校验被评人：必须存在且属于该列所在部门。
+ *
+ * 表头第二行选的是「本车间的某职工」，跨部门选人属于配错数据，
+ * 在这里拦下而不是让问卷打印出别车间的名字。
+ */
+async function resolveEmployeeId(
+  employeeId: string | null | undefined,
+  departmentId: string,
+): Promise<string | null> {
+  if (employeeId === null || employeeId === undefined) return employeeId ?? null;
+  const employee = await prisma.employee.findUnique({ where: { id: employeeId } });
+  if (!employee) throw ApiError.badRequest('被评人不存在');
+  if (employee.departmentId !== departmentId) throw ApiError.badRequest('被评人必须属于该部门');
+  return employee.id;
 }
 
 /**
@@ -1024,19 +1049,24 @@ export async function createVoteColumn(
   const name = input.name.trim();
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw ApiError.badRequest('部门不存在');
+  const employeeId = await resolveEmployeeId(input.employeeId, input.departmentId);
 
   const created = await prisma.voteColumn.create({
     data: {
       departmentId: input.departmentId,
       name,
+      employeeId,
       sortOrder: input.sortOrder ?? 0,
     },
+    include: { employee: { select: { name: true } } },
   });
   await writeAudit('vote_column.create', { name, department: department.name, operator });
   return {
     id: created.id,
     departmentId: created.departmentId,
     name: created.name,
+    employeeId: created.employeeId,
+    employeeName: created.employee?.name ?? null,
     sortOrder: created.sortOrder,
     enabled: created.enabled,
   };
@@ -1044,21 +1074,33 @@ export async function createVoteColumn(
 
 export async function updateVoteColumn(
   id: string,
-  patch: { name?: string; sortOrder?: number; enabled?: boolean },
+  patch: { name?: string; employeeId?: string | null; sortOrder?: number; enabled?: boolean },
   operator: string,
 ): Promise<VoteColumnDto> {
   const current = await prisma.voteColumn.findUnique({ where: { id } });
   if (!current) throw ApiError.notFound('被评列不存在');
+  const employeeId =
+    patch.employeeId === undefined
+      ? undefined
+      : await resolveEmployeeId(patch.employeeId, current.departmentId);
 
   const updated = await prisma.voteColumn.update({
     where: { id },
-    data: { name: patch.name?.trim(), sortOrder: patch.sortOrder, enabled: patch.enabled },
+    data: {
+      name: patch.name?.trim(),
+      employeeId,
+      sortOrder: patch.sortOrder,
+      enabled: patch.enabled,
+    },
+    include: { employee: { select: { name: true } } },
   });
   await writeAudit('vote_column.update', { name: updated.name, operator });
   return {
     id: updated.id,
     departmentId: updated.departmentId,
     name: updated.name,
+    employeeId: updated.employeeId,
+    employeeName: updated.employee?.name ?? null,
     sortOrder: updated.sortOrder,
     enabled: updated.enabled,
   };

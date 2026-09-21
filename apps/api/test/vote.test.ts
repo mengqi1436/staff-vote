@@ -277,6 +277,10 @@ afterAll(async () => {
   await prisma.voteColumn.deleteMany({
     where: { departmentId: { in: [fixture.departmentId, fixture.otherDepartmentId] } },
   });
+  // 职务列绑定的被评人要随本夹具清理，否则 employees 引用部门会挡住 department 删除
+  await prisma.employee.deleteMany({
+    where: { departmentId: { in: [fixture.departmentId, fixture.otherDepartmentId] } },
+  });
   await prisma.criterion.deleteMany({
     where: { departmentId: { in: [fixture.departmentId, fixture.otherDepartmentId] } },
   });
@@ -433,6 +437,15 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
   it('返回部门、问卷表头、启用项点（含描述与区间）与启用被评列', async () => {
     const { token } = await newToken();
 
+    // 给第一个职务列绑定被评人：表头第二行「职务与姓名」要随表回传姓名
+    const employee = await prisma.employee.create({
+      data: { departmentId: fixture.departmentId, name: '张三' },
+    });
+    await prisma.voteColumn.update({
+      where: { id: fixture.voteColumnIds[0] },
+      data: { employeeId: employee.id },
+    });
+
     const res = await getSheet(token, fixture.departmentId);
 
     expect(res.status).toBe(200);
@@ -447,10 +460,10 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
     expect(res.body.footerNote).toBe(fixture.departmentHeader.footerNote);
     // 停用项点不出现，顺序按 sortOrder；description 带描述与留空两种形态都回传。
     expect(res.body.criteria).toEqual([fixture.wide, fixture.narrow]);
-    // 列 = 被评列：停用列不出现，顺序按 sortOrder。
+    // 列 = 被评列：停用列不出现，顺序按 sortOrder；绑定了被评人的列回传姓名。
     expect(res.body.voteColumns).toEqual([
-      { id: fixture.voteColumnIds[0], name: '主任' },
-      { id: fixture.voteColumnIds[1], name: '党支部书记' },
+      { id: fixture.voteColumnIds[0], name: '主任', employeeName: '张三' },
+      { id: fixture.voteColumnIds[1], name: '党支部书记', employeeName: null },
     ]);
     // 打分维度已换成被评列，旧模型的 employees 字段必须整体消失，而不是留个空数组。
     expect(res.body).not.toHaveProperty('employees');
