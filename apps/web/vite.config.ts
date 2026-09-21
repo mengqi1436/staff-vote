@@ -40,6 +40,10 @@ export default defineConfig({
         '**/*.tmp',
         '**/*.tmpdir',
         '**/*.tmpdir/**',
+        // JetBrains 系 IDE 的 safe-write 临时文件（如 ScoreTable.test.tsx~RF48da54.TMP）：
+        // 正被 IDE 占用时 watch 到会抛 EBUSY 带崩 dev server，与上面的 .tmp 同理。
+        '**/*~RF*',
+        '**/*.TMP',
       ],
     },
   },
