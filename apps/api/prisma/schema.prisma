@@ -98,7 +98,7 @@ model RolePermission {
   @@map("role_permissions")
 }
 
-/// 部门。打分表按部门取一套项点列。
+/// 部门。打分表按部门取一套项点（行）与被评列（列）。
 model Department {
   id        String   @id @default(uuid(7))
   name      String   @unique
@@ -107,14 +107,46 @@ model Department {
   createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
   updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
 
-  employees Employee[]
-  criteria  Criterion[]
-  sheets    ScoreSheet[]
+  /// 问卷类型：person = 个人问卷（多个被评职务列），workshop = 车间问卷（单列「得分」）。
+  /// 存字符串而不是数据库 enum：问卷形态将来还可能增加，加一种形态不该要求写迁移。
+  questionnaireType String @default("person") @map("questionnaire_type")
+
+  /// 表头左上角的附件号（参考表里的「附件1-1」）。
+  headerNote String @default("附件1-1") @map("header_note")
+  /// 表标题（参考表里的「xx车间负责人评价问卷」）。
+  title String @default("") @map("title")
+  /// 表尾填写说明（参考表里合并整行的说明文字，含满分与弃权口径）。
+  footerNote String @default("") @map("footer_note")
+
+  employees   Employee[]
+  criteria    Criterion[]
+  voteColumns VoteColumn[]
+  sheets      ScoreSheet[]
 
   @@map("departments")
 }
 
-/// 被评职工，即打分表的「行」。
+/// 被评列，即打分表的「列」（主任、党支部书记、车间得分…）。
+///
+/// 与职工名单（employees）刻意分离：参考表的列是「被评职务」而不是具体职工，
+/// 个人问卷有多个职务列、车间问卷只有一个「得分」列，两者共用同一张表表达。
+model VoteColumn {
+  id           String   @id @default(uuid(7))
+  departmentId String   @map("department_id")
+  name         String
+  sortOrder    Int      @default(0) @map("sort_order")
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  scoreItems ScoreItem[]
+
+  @@index([departmentId])
+  @@map("vote_columns")
+}
+
+/// 被评职工。参考表口径下打分不再按职工，本表保留给后台名单管理与其他用途。
 model Employee {
   id           String   @id @default(uuid(7))
   departmentId String   @map("department_id")
@@ -127,17 +159,18 @@ model Employee {
   updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
 
   department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  scoreItems ScoreItem[]
 
   @@index([departmentId])
   @@map("employees")
 }
 
-/// 素质项点，即打分表的「列」。每个部门可配一套，min/max 单独设置。
+/// 素质项点，即打分表的「行」。每个部门可配一套，min/max 单独设置。
 model Criterion {
   id           String   @id @default(uuid(7))
   departmentId String   @map("department_id")
   name         String
+  /// 项点描述（参考表里项点名称下方那段长文字），可空。
+  description  String?
   minScore     Int      @default(0) @map("min_score")
   maxScore     Int      @default(100) @map("max_score")
   sortOrder    Int      @default(0) @map("sort_order")
@@ -225,18 +258,18 @@ model ScoreSheet {
 
 /// 一个打分单元格。score 为整数，区间由所属项点的 min/max 决定。
 model ScoreItem {
-  id          String @id @default(uuid(7))
-  sheetId     String @map("sheet_id")
-  employeeId  String @map("employee_id")
-  criterionId String @map("criterion_id")
-  score       Int
+  id           String @id @default(uuid(7))
+  sheetId      String @map("sheet_id")
+  voteColumnId String @map("vote_column_id")
+  criterionId  String @map("criterion_id")
+  score        Int
 
-  sheet     ScoreSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  employee  Employee   @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  criterion Criterion  @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+  sheet      ScoreSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  voteColumn VoteColumn @relation(fields: [voteColumnId], references: [id], onDelete: Restrict)
+  criterion  Criterion  @relation(fields: [criterionId], references: [id], onDelete: Restrict)
 
-  @@unique([sheetId, employeeId, criterionId])
-  @@index([employeeId, criterionId])
+  @@unique([sheetId, voteColumnId, criterionId])
+  @@index([voteColumnId, criterionId])
   @@index([criterionId])
   @@map("score_items")
 }

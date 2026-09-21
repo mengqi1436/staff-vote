@@ -42,37 +42,54 @@ interface Fixture {
   ticketTypeName: string;
   departmentId: string;
   departmentName: string;
+  /** 部门上的问卷表头四项，用于断言 /vote/sheet 原样回传（而非落回默认值） */
+  departmentHeader: {
+    questionnaireType: string;
+    headerNote: string;
+    title: string;
+    footerNote: string;
+  };
   disabledDepartmentId: string;
   otherDepartmentId: string;
-  /** 部门内两个启用职工，按 sortOrder 排列 */
-  employeeIds: readonly [string, string];
+  /** 部门内两个启用被评列（打分表的列），按 sortOrder 排列 */
+  voteColumnIds: readonly [string, string];
   /** 宽区间项点（0-100） */
   wide: CriterionFixture;
   /** 窄区间项点（10-20），用于越界测试 */
   narrow: CriterionFixture;
   disabledCriterionId: string;
-  disabledEmployeeId: string;
+  disabledVoteColumnId: string;
   otherCriterionId: string;
-  otherEmployeeId: string;
+  otherVoteColumnId: string;
 }
 
 interface CriterionFixture {
   id: string;
   name: string;
+  /** 项点描述：宽项点带描述、窄项点留空，两种形态都要能原样回传 */
+  description: string | null;
   minScore: number;
   maxScore: number;
 }
 
 /**
- * 建立本文件专用的夹具：自己的票种、部门、职工、项点。
+ * 建立本文件专用的夹具：自己的票种、部门、被评列、项点。
  * 不依赖种子数据，也就不依赖"测试库是否跑过 seed"。
  */
 async function createFixture(): Promise<Fixture> {
   const ticketType = await prisma.ticketType.create({
     data: { code: `VT${tag}`, name: `投票测试票种-${tag}`, weightPercent: 100 },
   });
+  // 表头四项显式给非默认值：用默认值断言不出"原样回传"，硬编码默认值也能蒙混过关。
   const department = await prisma.department.create({
-    data: { name: `投票测试部门-${tag}`, sortOrder: 1 },
+    data: {
+      name: `投票测试部门-${tag}`,
+      sortOrder: 1,
+      questionnaireType: 'workshop',
+      headerNote: `附件9-${tag}`,
+      title: `投票测试问卷-${tag}`,
+      footerNote: '满分 100 分，弃权、不填按 0 分计',
+    },
   });
   const otherDepartment = await prisma.department.create({
     data: { name: `投票测试他部门-${tag}`, sortOrder: 2 },
@@ -81,21 +98,28 @@ async function createFixture(): Promise<Fixture> {
     data: { name: `投票测试停用部门-${tag}`, sortOrder: 3, enabled: false },
   });
 
-  const employeeA = await prisma.employee.create({
-    data: { departmentId: department.id, name: '甲', sortOrder: 1 },
+  const columnA = await prisma.voteColumn.create({
+    data: { departmentId: department.id, name: '主任', sortOrder: 1 },
   });
-  const employeeB = await prisma.employee.create({
-    data: { departmentId: department.id, name: '乙', sortOrder: 2 },
+  const columnB = await prisma.voteColumn.create({
+    data: { departmentId: department.id, name: '党支部书记', sortOrder: 2 },
   });
-  const disabledEmployee = await prisma.employee.create({
-    data: { departmentId: department.id, name: '停用职工', sortOrder: 3, enabled: false },
+  const disabledColumn = await prisma.voteColumn.create({
+    data: { departmentId: department.id, name: '停用被评列', sortOrder: 3, enabled: false },
   });
-  const otherEmployee = await prisma.employee.create({
-    data: { departmentId: otherDepartment.id, name: '外部门职工', sortOrder: 1 },
+  const otherColumn = await prisma.voteColumn.create({
+    data: { departmentId: otherDepartment.id, name: '外部门被评列', sortOrder: 1 },
   });
 
   const wide = await prisma.criterion.create({
-    data: { departmentId: department.id, name: '德', minScore: 0, maxScore: 100, sortOrder: 1 },
+    data: {
+      departmentId: department.id,
+      name: '德',
+      description: '政治素质、职业操守与作风表现',
+      minScore: 0,
+      maxScore: 100,
+      sortOrder: 1,
+    },
   });
   const narrow = await prisma.criterion.create({
     data: { departmentId: department.id, name: '能', minScore: 10, maxScore: 20, sortOrder: 2 },
@@ -122,13 +146,31 @@ async function createFixture(): Promise<Fixture> {
     departmentName: department.name,
     disabledDepartmentId: disabledDepartment.id,
     otherDepartmentId: otherDepartment.id,
-    employeeIds: [employeeA.id, employeeB.id],
-    wide: { id: wide.id, name: wide.name, minScore: wide.minScore, maxScore: wide.maxScore },
-    narrow: { id: narrow.id, name: narrow.name, minScore: narrow.minScore, maxScore: narrow.maxScore },
+    departmentHeader: {
+      questionnaireType: department.questionnaireType,
+      headerNote: department.headerNote,
+      title: department.title,
+      footerNote: department.footerNote,
+    },
+    voteColumnIds: [columnA.id, columnB.id],
+    wide: {
+      id: wide.id,
+      name: wide.name,
+      description: wide.description,
+      minScore: wide.minScore,
+      maxScore: wide.maxScore,
+    },
+    narrow: {
+      id: narrow.id,
+      name: narrow.name,
+      description: narrow.description,
+      minScore: narrow.minScore,
+      maxScore: narrow.maxScore,
+    },
     disabledCriterionId: disabledCriterion.id,
-    disabledEmployeeId: disabledEmployee.id,
+    disabledVoteColumnId: disabledColumn.id,
     otherCriterionId: otherCriterion.id,
-    otherEmployeeId: otherEmployee.id,
+    otherVoteColumnId: otherColumn.id,
   };
 }
 
@@ -232,7 +274,7 @@ afterAll(async () => {
   await prisma.scoreSheet.deleteMany({ where: { departmentId: fixture.departmentId } });
   await prisma.ticket.deleteMany({ where: { ticketTypeId: fixture.ticketTypeId } });
   await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: fixture.ticketTypeId } });
-  await prisma.employee.deleteMany({
+  await prisma.voteColumn.deleteMany({
     where: { departmentId: { in: [fixture.departmentId, fixture.otherDepartmentId] } },
   });
   await prisma.criterion.deleteMany({
@@ -388,7 +430,7 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
 });
 
 describe('GET /api/vote/sheet —— 取打分表骨架', () => {
-  it('返回部门、启用项点（含区间）与启用职工', async () => {
+  it('返回部门、问卷表头、启用项点（含描述与区间）与启用被评列', async () => {
     const { token } = await newToken();
 
     const res = await getSheet(token, fixture.departmentId);
@@ -398,12 +440,20 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
       id: fixture.departmentId,
       name: fixture.departmentName,
     });
-    // 停用项点不出现，顺序按 sortOrder。
+    // 表头四项来自部门配置，原样回传，不落回默认值。
+    expect(res.body.questionnaireType).toBe(fixture.departmentHeader.questionnaireType);
+    expect(res.body.headerNote).toBe(fixture.departmentHeader.headerNote);
+    expect(res.body.title).toBe(fixture.departmentHeader.title);
+    expect(res.body.footerNote).toBe(fixture.departmentHeader.footerNote);
+    // 停用项点不出现，顺序按 sortOrder；description 带描述与留空两种形态都回传。
     expect(res.body.criteria).toEqual([fixture.wide, fixture.narrow]);
-    expect(res.body.employees).toEqual([
-      { id: fixture.employeeIds[0], name: '甲' },
-      { id: fixture.employeeIds[1], name: '乙' },
+    // 列 = 被评列：停用列不出现，顺序按 sortOrder。
+    expect(res.body.voteColumns).toEqual([
+      { id: fixture.voteColumnIds[0], name: '主任' },
+      { id: fixture.voteColumnIds[1], name: '党支部书记' },
     ]);
+    // 打分维度已换成被评列，旧模型的 employees 字段必须整体消失，而不是留个空数组。
+    expect(res.body).not.toHaveProperty('employees');
   });
 
   it('缺少 departmentId → 400', async () => {
@@ -473,9 +523,9 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 88 },
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.narrow.id, score: 15 },
-        { employeeId: fixture.employeeIds[1], criterionId: fixture.wide.id, score: 60 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 88 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 15 },
+        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
       ],
     });
 
@@ -493,7 +543,20 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     expect(sheets).toHaveLength(1);
     expect(sheets[0]?.ticketTypeId).toBe(fixture.ticketTypeId);
     expect(sheets[0]?.submittedAt).toBeInstanceOf(Date);
+    // 只落已提交的格子：4 个格子里故意缺 1 个，提交端点不补 0 行 ——
+    // 缺格由计分层按 0 分计入（新口径：弃权、不填视为 0 分），不在这里替它做。
+    expect(sheets[0]?.items).toHaveLength(3);
     expect(sheets[0]?.items.map((item) => item.score).sort((a, b) => a - b)).toEqual([15, 60, 88]);
+    // 分数要落在对的格子上：按 (被评列, 项点) 对齐，而不只是三个数字都对得上。
+    expect(
+      sheets[0]?.items.map((item) => `${item.voteColumnId}|${item.criterionId}`).sort(),
+    ).toEqual(
+      [
+        `${fixture.voteColumnIds[0]}|${fixture.wide.id}`,
+        `${fixture.voteColumnIds[0]}|${fixture.narrow.id}`,
+        `${fixture.voteColumnIds[1]}|${fixture.wide.id}`,
+      ].sort(),
+    );
   });
 
   it('匿名边界：score_sheets 只有 id / department_id / ticket_type_id / submitted_at 四列', async () => {
@@ -517,7 +580,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     const { token } = await newToken();
     const body = {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
     };
 
     const first = await postSubmit(token, body);
@@ -533,7 +596,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     const { token } = await newToken();
     const body = {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[1], criterionId: fixture.wide.id, score: 70 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 70 }],
     };
 
     const [first, second] = await Promise.all([postSubmit(token, body), postSubmit(token, body)]);
@@ -550,7 +613,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
     });
 
     expect(res.status).toBe(403);
@@ -563,7 +626,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
   it('缺少令牌 → 401', async () => {
     const res = await postSubmit(null, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
     });
 
     expect(res.status).toBe(401);
@@ -585,7 +648,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 88.5 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 88.5 }],
     });
 
     expect(res.status).toBe(400);
@@ -597,7 +660,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: '88' }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: '88' }],
     });
 
     expect(res.status).toBe(400);
@@ -608,7 +671,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.narrow.id, score: 21 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 21 }],
     });
 
     expect(res.status).toBe(400);
@@ -621,7 +684,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.narrow.id, score: 9 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 9 }],
     });
 
     expect(res.status).toBe(400);
@@ -634,26 +697,28 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.narrow.id, score: 10 },
-        { employeeId: fixture.employeeIds[1], criterionId: fixture.narrow.id, score: 20 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 10 },
+        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 20 },
       ],
     });
 
     expect(res.status).toBe(200);
   });
 
-  it('职工不属于该部门 → 400（防越权写）', async () => {
+  it('被评列不属于该部门 → 400（防越权写）', async () => {
     const { token } = await newToken();
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.otherEmployeeId, criterionId: fixture.wide.id, score: 90 },
+        { voteColumnId: fixture.otherVoteColumnId, criterionId: fixture.wide.id, score: 90 },
       ],
     });
 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('ITEM_OUT_OF_DEPARTMENT');
+    expect(res.body.error.message).toBe('被评列不属于该部门，或该列已停用');
+    expect(await countSheets()).toBe(0);
   });
 
   it('项点不属于该部门 → 400（防越权写）', async () => {
@@ -662,7 +727,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.otherCriterionId, score: 90 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.otherCriterionId, score: 90 },
       ],
     });
 
@@ -670,35 +735,39 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     expect(res.body.error.code).toBe('ITEM_OUT_OF_DEPARTMENT');
   });
 
-  it('已停用的职工或项点 → 400', async () => {
+  it('已停用的被评列或项点 → 400，且不留半张表', async () => {
     const { token } = await newToken();
 
-    const disabledEmployee = await postSubmit(token, {
+    const disabledColumn = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.disabledEmployeeId, criterionId: fixture.wide.id, score: 90 },
+        { voteColumnId: fixture.disabledVoteColumnId, criterionId: fixture.wide.id, score: 90 },
       ],
     });
     const disabledCriterion = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.disabledCriterionId, score: 90 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.disabledCriterionId, score: 90 },
       ],
     });
 
-    expect(disabledEmployee.status).toBe(400);
+    expect(disabledColumn.status).toBe(400);
+    expect(disabledColumn.body.error.code).toBe('ITEM_OUT_OF_DEPARTMENT');
+    expect(disabledColumn.body.error.message).toBe('被评列不属于该部门，或该列已停用');
     expect(disabledCriterion.status).toBe(400);
+    expect(disabledCriterion.body.error.code).toBe('ITEM_OUT_OF_DEPARTMENT');
+    expect(disabledCriterion.body.error.message).toBe('打分项不属于该部门，或该项点已停用');
     expect(await countSheets()).toBe(0);
   });
 
-  it('同一职工与项点重复出现 → 400', async () => {
+  it('同一被评列与项点重复出现 → 400', async () => {
     const { token } = await newToken();
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 80 },
-        { employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 90 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 80 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 },
       ],
     });
 
@@ -711,7 +780,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: MISSING_ID,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
     });
 
     expect(res.status).toBe(404);
@@ -722,7 +791,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.disabledDepartmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
     });
 
     expect(res.status).toBe(404);
@@ -733,11 +802,11 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.narrow.id, score: 999 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 999 }],
     });
     const fixed = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ employeeId: fixture.employeeIds[0], criterionId: fixture.narrow.id, score: 20 }],
+      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 20 }],
     });
 
     expect(fixed.status).toBe(200);

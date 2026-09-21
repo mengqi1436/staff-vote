@@ -36,17 +36,16 @@ body {
    颜色用 antd 标准色值，与默认主题一致。
    ============================================================================= */
 
+/* 参考表是全表黑色细实线框：collapse + 1px #000，四边都画 */
 .score-table {
-  border-collapse: separate;
-  border-spacing: 0;
+  border-collapse: collapse;
   width: 100%;
   background: #fff;
 }
 
 .score-table th,
 .score-table td {
-  border-right: 1px solid #f0f0f0;
-  border-bottom: 1px solid #f0f0f0;
+  border: 1px solid #000;
   padding: 0;
   background: #fff;
 }
@@ -55,13 +54,13 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #fafafa;
-  padding: 10px 12px;
+  /* 参考表的表头没有底色，是白底黑字 */
+  background: #fff;
+  padding: 12px;
   font-weight: 600;
   font-size: 13px;
   white-space: nowrap;
   text-align: center;
-  border-bottom: 1px solid #f0f0f0;
 }
 
 /* 左上角交叉格 */
@@ -123,6 +122,112 @@ body {
   color: rgba(0, 0, 0, 0.45);
   font-size: 12px;
   font-weight: 400;
+}
+
+/* =============================================================================
+   打分表（参考表版式）：抬头附件号 → 表标题 → 列头 → 项点行 → 填写说明。
+   两处与普通表格不同的地方，都由参考表本身决定：
+     1. 抬头两行（附件号、表标题）在表格上方，**没有框线**；
+     2. 抬头两行不参与粘性堆叠，否则滚动时三行表头会互相压住。
+   ============================================================================= */
+
+.score-table thead th.sheet-caption {
+  position: static;
+  z-index: auto;
+  border: none;
+  background: #fff;
+  padding: 4px 12px;
+  text-align: left;
+  font-weight: 400;
+  font-size: 13px;
+  white-space: normal;
+}
+
+.score-table thead th.sheet-title {
+  position: static;
+  z-index: auto;
+  border: none;
+  background: #fff;
+  padding: 6px 12px 10px;
+  text-align: center;
+  /* 参考表标题是 16pt 粗体 */
+  font-size: 21px;
+  font-weight: 700;
+  white-space: normal;
+}
+
+.score-table thead th.row-no,
+.score-table thead th.criterion-head {
+  padding: 8px 12px;
+}
+
+/* 「职务与姓名」靠右、「评价项点」靠左：参考表用两行错位代替斜线 */
+.score-table th.criterion-head .head-name {
+  display: block;
+  text-align: right;
+  padding-right: 8px;
+}
+
+.score-table th.criterion-head .head-criterion {
+  display: block;
+  text-align: left;
+}
+
+.score-table td.row-no {
+  /* 参考表的序号列很窄（34px），只放得下「序号」与一位数字 */
+  width: 40px;
+  text-align: center;
+  padding: 8px 6px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* 列宽按参考表：序号列窄、项点列最宽、各被评列等宽 */
+.score-table th.criterion-head,
+.score-table th.criterion-cell {
+  min-width: 320px;
+}
+
+.score-table thead th.num,
+.score-table td.num {
+  width: 124px;
+}
+
+/* 列头字号：个人问卷 10pt，车间问卷 12pt（参考表两张表就是这两个字号） */
+.score-table.person thead th.num {
+  font-size: 13px;
+}
+
+.score-table.workshop thead th.num {
+  font-size: 16px;
+}
+
+/* 项点单元格：参考表里是靠左、自动换行、行高较大的长文字块 */
+.score-table th.criterion-cell {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 400;
+  line-height: 1.7;
+  vertical-align: middle;
+  white-space: pre-wrap;
+}
+
+.score-table .criterion-name {
+  font-weight: 600;
+}
+
+.score-table .criterion-desc {
+  margin-top: 2px;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+
+/* 表尾填写说明：合并整行，与参考表一样是加粗的左对齐文字 */
+.score-table tfoot td.sheet-footer {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 /* =============================================================================

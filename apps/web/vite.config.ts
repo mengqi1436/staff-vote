@@ -20,6 +20,28 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    /**
+     * 忽略原子写入留下的临时文件。
+     *
+     * 起因：部分编辑工具/agent 保存文件时走「先写临时文件再改名」，会在源码目录里
+     * 建出 `<文件名>.<pid>.<uuid>.tmpdir/<文件名>.tmp`。Vite 8 改用 Node 原生
+     * fs.watch 后，若恰好监听到这个正被占用的 .tmp，FSWatcher 会抛 EBUSY；
+     * Node 里没人监听 error 事件的 FSWatcher 会直接把整个 dev server 带崩
+     * （实测同一台机器上几分钟内连崩两次，堆栈均指向 .tmpdir 下的 .tmp）。
+     *
+     * 这些目录名以「.」开头且以 .tmpdir 结尾，正常源码不可能命中，
+     * 因此忽略它们不会漏掉任何真实的文件变更。
+     * 默认忽略项一并列出，避免覆盖 Vite 内置的 node_modules / .git 忽略规则。
+     */
+    watch: {
+      ignored: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/*.tmp',
+        '**/*.tmpdir',
+        '**/*.tmpdir/**',
+      ],
+    },
   },
   build: {
     outDir: 'dist',

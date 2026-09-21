@@ -1,17 +1,23 @@
 /**
  * 计分算法。纯函数、无 I/O，便于独立测试与日后替换口径。
  *
- * 口径（见设计文档第 13 节）：
+ * 口径（参考表口径 + 设计文档第 13 节）：
  *
  * 1) 票种加权，按【实际收到票的票种】归一化：
  *
- *      某职工在某项点 d 的得分
+ *      某被评列在某项点 d 的得分
  *        = Σ_t(该票种在 d 上的均分 × 票种权重%) / Σ_t(票种权重%)
  *
  *    t 遍历在该单元格上真正有票的票种。不归一化时，某部门未收到 A 票会让
  *    那部分权重按 0 计入，把全体分数整体压低，而现实中无法保证每部门各票种都有票。
  *
- * 2) 项点间汇总：各项满分可能不同（一项 100、一项 10），原始分不能直接相加，
+ * 2) 弃权、不填视为 0 分（参考表填写说明的口径）：
+ *    某票种只要在本部门有已提交的表，它的每一格都参与平均 —— 某张表缺某一格
+ *    （项点后增、或者投票人跳过）即按 0 分计入，而不是把该格从分母里摘掉。
+ *    这与「不填就不算」的旧口径相反，是参考表明确要求的：不填等于弃权弃分。
+ *    该票种在本部门一张表都没有时仍然整票种跳过：那是没发这种票，不是弃权。
+ *
+ * 3) 项点间汇总：各项满分可能不同（一项 20、一项 100），原始分不能直接相加，
  *    否则低分制项点在总分里几乎无足轻重。所以先按各自区间归一化到百分制，
  *    再取等权平均作为综合得分。
  */
@@ -28,7 +34,7 @@ export interface ScoringTicketType {
 }
 
 export interface ScoringItem {
-  employeeId: string;
+  voteColumnId: string;
   criterionId: string;
   score: number;
 }
@@ -39,7 +45,7 @@ export interface ScoringSheet {
 }
 
 export interface ScoringInput {
-  employeeIds: string[];
+  voteColumnIds: string[];
   criteria: ScoringCriterion[];
   ticketTypes: ScoringTicketType[];
   sheets: ScoringSheet[];
@@ -55,15 +61,15 @@ export interface CriterionResult {
   participatingTicketTypeIds: string[];
 }
 
-export interface EmployeeResult {
-  employeeId: string;
+export interface VoteColumnResult {
+  voteColumnId: string;
   /** 综合得分：各项归一化分的等权平均；无任何有效评分时为 0 */
   comprehensiveScore: number;
   criteria: CriterionResult[];
 }
 
 export interface ScoringResult {
-  employees: EmployeeResult[];
+  voteColumns: VoteColumnResult[];
   /** 本次计算中真正贡献了分数的票种 */
   ticketTypesInvolved: string[];
 }
@@ -91,60 +97,56 @@ function normalizeScore(raw: number, min: number, max: number): number {
 }
 
 /**
- * 计算全部职工的成绩。
+ * 计算全部被评列的成绩。
  *
  * 复杂度 O(票种数 × 表数 × 单元格数) 的线性遍历：先把评分按
- * `票种 → (职工|项点) → 分数列表` 建索引，再逐格聚合，
- * 不做嵌套扫描。
+ * `票种 → 表 → (被评列|项点) → 分数` 建索引，再逐格聚合，不做嵌套扫描。
  *
- * @param input 职工、项点、票种与已提交的打分表
- * @returns 每位职工的各项结果与综合得分
+ * @param input 被评列、项点、票种与已提交的打分表
+ * @returns 每个被评列的各项结果与综合得分
  */
 export function computeResults(input: ScoringInput): ScoringResult {
-  const { employeeIds, criteria, ticketTypes, sheets } = input;
+  const { voteColumnIds, criteria, ticketTypes, sheets } = input;
 
-  // 票种 → 单元格键 → 分数列表
-  const cellsByTicketType = new Map<string, Map<string, number[]>>();
+  // 票种 → 该票种下每张表的「单元格 → 分数」索引。
+  // 保留“每张表”这一层，是因为弃权/不填要按 0 分进入平均：分母是该票种的表数。
+  const sheetsByTicketType = new Map<string, Array<Map<string, number>>>();
   for (const sheet of sheets) {
-    let cells = cellsByTicketType.get(sheet.ticketTypeId);
-    if (!cells) {
-      cells = new Map<string, number[]>();
-      cellsByTicketType.set(sheet.ticketTypeId, cells);
-    }
+    const cells = new Map<string, number>();
     for (const item of sheet.items) {
-      const key = `${item.employeeId}|${item.criterionId}`;
-      const existing = cells.get(key);
-      if (existing) existing.push(item.score);
-      else cells.set(key, [item.score]);
+      cells.set(`${item.voteColumnId}|${item.criterionId}`, item.score);
     }
+    const list = sheetsByTicketType.get(sheet.ticketTypeId);
+    if (list) list.push(cells);
+    else sheetsByTicketType.set(sheet.ticketTypeId, [cells]);
   }
 
   const weightByTicketType = new Map(ticketTypes.map((t) => [t.id, t.weightPercent]));
   const involved = new Set<string>();
 
-  const employees: EmployeeResult[] = employeeIds.map((employeeId) => {
+  const voteColumns: VoteColumnResult[] = voteColumnIds.map((voteColumnId) => {
     const criterionResults: CriterionResult[] = [];
 
     for (const criterion of criteria) {
-      const key = `${employeeId}|${criterion.id}`;
+      const key = `${voteColumnId}|${criterion.id}`;
 
       let weightedSum = 0;
       let weightTotal = 0;
       const participants: string[] = [];
 
-      for (const [ticketTypeId, cells] of cellsByTicketType) {
-        const scores = cells.get(key);
-        if (!scores || scores.length === 0) continue;
-
+      for (const [ticketTypeId, cellList] of sheetsByTicketType) {
         const weight = weightByTicketType.get(ticketTypeId);
         if (weight === undefined || weight <= 0) continue;
 
-        weightedSum += average(scores) * weight;
+        // 弃权、不填视为 0 分：本票种的每一张表都参与本格，缺格按 0 计入分母。
+        const cellAverage = average(cellList.map((cells) => cells.get(key) ?? 0));
+
+        weightedSum += cellAverage * weight;
         weightTotal += weight;
         participants.push(ticketTypeId);
       }
 
-      // 该单元格没有任何票：跳过。它不参与综合得分，也不会变成 0 分拉低此人。
+      // 本部门一张表都没有：整格无成绩。它不参与综合得分，也不会变成 0 分。
       if (weightTotal === 0) continue;
 
       const rawScore = weightedSum / weightTotal;
@@ -163,8 +165,8 @@ export function computeResults(input: ScoringInput): ScoringResult {
         ? 0
         : round2(average(criterionResults.map((c) => c.normalizedScore)));
 
-    return { employeeId, comprehensiveScore, criteria: criterionResults };
+    return { voteColumnId, comprehensiveScore, criteria: criterionResults };
   });
 
-  return { employees, ticketTypesInvolved: [...involved] };
+  return { voteColumns, ticketTypesInvolved: [...involved] };
 }

@@ -9,6 +9,7 @@ import { settingsRouter } from './settings.js';
 import { resultsRouter, statsRouter } from './stats.js';
 import { ticketBatchesRouter, ticketsRouter } from './tickets.js';
 import { ticketTypesRouter } from './ticketTypes.js';
+import { voteColumnsRouter } from './voteColumns.js';
 
 /**
  * 管理端路由，挂载于 `/api/admin`。
@@ -29,10 +30,14 @@ import { ticketTypesRouter } from './ticketTypes.js';
  *   /tickets/revoke-bulk POST { ticketTypeId? } → 一键作废该范围内全部未使用码；
  *                         used / revoked 不动，返回 { revoked }（tickets.revoke）
  *   /ticket-batches    GET
- *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false，写需 departments.write）
+ *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false）；
+ *                         PATCH 同时负责问卷表头配置（questionnaireType / headerNote /
+ *                         title / footerNote）（写需 departments.write）
+ *   /vote-columns      GET POST PATCH DELETE   被评列：打分表的列，与职工名单分离
+ *                         （写需 criteria.write，与项点同属问卷结构配置）
  *   /employees         GET POST PATCH DELETE   （写需 employees.write）
  *   /employees/import  POST  multipart xlsx/csv （employees.write）
- *   /criteria          GET POST PATCH DELETE   校验 max > min（criteria.write）
+ *   /criteria          GET POST PATCH DELETE   校验 max > min；含项点描述（criteria.write）
  *   /settings          GET PUT                 投票总开关、起止时间、系统标题（settings.write）
  *   /stats/overview    GET  各票种发放/已用/剩余 + 各部门提交数（后台 5 秒轮询）
  *   /results           GET ?departmentId=      排名与明细
@@ -54,6 +59,7 @@ adminRouter.use('/ticket-types', ticketTypesRouter);
 adminRouter.use('/tickets', ticketsRouter);
 adminRouter.use('/ticket-batches', ticketBatchesRouter);
 adminRouter.use('/departments', departmentsRouter);
+adminRouter.use('/vote-columns', voteColumnsRouter);
 adminRouter.use('/employees', employeesRouter);
 adminRouter.use('/criteria', criteriaRouter);
 adminRouter.use('/settings', settingsRouter);

@@ -2,6 +2,9 @@
  * 部门管理。删除为软删除（enabled = false）：部门一旦产生过评分，
  * 物理删除会连带毁掉历史成绩，外键也是 RESTRICT。
  *
+ * 除名称与排序外，本路由还负责**问卷表头配置**（问卷类型、附件号、标题、填写说明）：
+ * 参考表的抬头与表尾说明都由这里持久化，后台「问卷配置」页保存的就是这几个字段。
+ *
  * 写操作逐个挂 `requirePermission`（不是 router.use 整段挂）：读操作不设权限，
  * 没有 departments.write 的角色天然只读，GET 必须照常放行。
  */
@@ -22,7 +25,13 @@ const CreateSchema = z.object({
   enabled: z.boolean().optional(),
 });
 
-const PatchSchema = CreateSchema.partial();
+/** 问卷表头文案可以清空（表标题留空时不渲染该行），因此不设 min(1)。 */
+const PatchSchema = CreateSchema.partial().extend({
+  questionnaireType: z.enum(['person', 'workshop']).optional(),
+  headerNote: z.string().trim().max(50).optional(),
+  title: z.string().trim().max(100).optional(),
+  footerNote: z.string().trim().max(500).optional(),
+});
 
 export const departmentsRouter: Router = Router();
 

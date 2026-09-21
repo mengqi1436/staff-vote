@@ -10,8 +10,8 @@
  * 不做全表清空。因此即使被指向与别的测试文件相同的库，也不会清掉别人的夹具。
  * 票种权重是全局约束，相关用例先读取当前启用合计再构造场景，两种库上都能跑。
  *
- * 覆盖：鉴权、登录/登出、票种权重合计、发码/作废/批次、导出 xlsx、部门/职工/项点
- * CRUD 与软删除、名单导入、设置、统计口径、结果计分与多 sheet 导出。
+ * 覆盖：鉴权、登录/登出、票种权重合计、发码/作废/批次、导出 xlsx、部门/被评列/职工/项点
+ * CRUD 与软删除、部门问卷表头配置、名单导入、设置、统计口径、结果计分与多 sheet 导出。
  */
 import 'dotenv/config';
 import ExcelJS from 'exceljs';
@@ -42,6 +42,8 @@ const { CODE_ALPHABET, CODE_LENGTH } = await import('../src/lib/code.js');
 const { hashPassword } = await import('../src/lib/password.js');
 const { ADMIN_COOKIE } = await import('../src/middleware/adminAuth.js');
 const { ALL_PERMISSION_CODES } = await import('../src/lib/permissions.js');
+// 投票端打分表只认令牌签名（不查票据），因此软删除用例可以就地签发一张令牌验证列已消失
+const { signVoteToken } = await import('../src/lib/token.js');
 const { createRole } = await import('./rbac-fixtures.js');
 
 /** 没有可用测试库就整组跳过。 */
@@ -96,6 +98,8 @@ async function clearOwnFixtures(): Promise<void> {
   await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: { in: ticketTypeIds } } });
   await prisma.employee.deleteMany({ where: { departmentId: { in: departmentIds } } });
   await prisma.criterion.deleteMany({ where: { departmentId: { in: departmentIds } } });
+  // 被评列必须排在 scoreItem 之后：score_items 对 vote_columns 是 RESTRICT 外键
+  await prisma.voteColumn.deleteMany({ where: { departmentId: { in: departmentIds } } });
   await prisma.department.deleteMany({ where: { id: { in: departmentIds } } });
   await prisma.ticketType.deleteMany({ where: { id: { in: ticketTypeIds } } });
 }
@@ -160,18 +164,31 @@ async function createCriterion(
   return res.body as { id: string; name: string };
 }
 
+/** 被评列即打分表的列（个人问卷下是各职务），与职工名单无关。 */
+async function createVoteColumn(
+  departmentId: string,
+  name: string,
+  sortOrder?: number,
+): Promise<{ id: string; name: string }> {
+  const res = await agent
+    .post('/api/admin/vote-columns')
+    .send({ departmentId, name, sortOrder });
+  expect(res.status).toBe(200);
+  return res.body as { id: string; name: string };
+}
+
 /** 直接写库造一张已提交的打分表：投票端点由另一位 teammate 实现，测试不依赖它。 */
 async function submitSheet(
   departmentId: string,
   ticketTypeId: string,
-  items: Array<{ employeeId: string; criterionId: string; score: number }>,
+  items: Array<{ voteColumnId: string; criterionId: string; score: number }>,
 ): Promise<string> {
   const sheet = await prisma.scoreSheet.create({ data: { departmentId, ticketTypeId } });
   await prisma.scoreItem.createMany({ data: items.map((item) => ({ ...item, sheetId: sheet.id })) });
   return sheet.id;
 }
 
-/** 「两职工 × 两项点 + 一个票种有分」的部门，供结果与导出用例复用。 */
+/** 「两被评列 × 两项点 + 一个票种有分」的部门，供结果与导出用例复用。 */
 async function setupScoredDepartment(): Promise<{
   deptId: string;
   first: { id: string; name: string };
@@ -182,15 +199,15 @@ async function setupScoredDepartment(): Promise<{
   const department = await createDepartment(`${TAG}部门-结果`);
   const criterionA = await createCriterion(department.id, '德', 0, 100);
   const criterionB = await createCriterion(department.id, '能', 0, 50);
-  const first = await createEmployee(department.id, '张三', 'E001');
-  const second = await createEmployee(department.id, '李四', 'E002');
+  const first = await createVoteColumn(department.id, '主任', 0);
+  const second = await createVoteColumn(department.id, '党支部书记', 1);
   const ticketType = await newTicketType(100);
 
   await submitSheet(department.id, ticketType.id, [
-    { employeeId: first.id, criterionId: criterionA.id, score: 90 },
-    { employeeId: first.id, criterionId: criterionB.id, score: 45 },
-    { employeeId: second.id, criterionId: criterionA.id, score: 60 },
-    { employeeId: second.id, criterionId: criterionB.id, score: 30 },
+    { voteColumnId: first.id, criterionId: criterionA.id, score: 90 },
+    { voteColumnId: first.id, criterionId: criterionB.id, score: 45 },
+    { voteColumnId: second.id, criterionId: criterionA.id, score: 60 },
+    { voteColumnId: second.id, criterionId: criterionB.id, score: 30 },
   ]);
 
   return { deptId: department.id, first, second, criterionA, criterionB };
@@ -310,6 +327,8 @@ describeDb('管理端接口', () => {
       anonymous.get('/api/admin/employees'),
       anonymous.post('/api/admin/employees/import'),
       anonymous.get('/api/admin/criteria'),
+      anonymous.get('/api/admin/vote-columns'),
+      anonymous.post('/api/admin/vote-columns').send({ departmentId: 'x', name: '主任' }),
       anonymous.get('/api/admin/settings'),
       anonymous.put('/api/admin/settings').send({}),
       anonymous.get('/api/admin/me'),
@@ -319,7 +338,7 @@ describeDb('管理端接口', () => {
       anonymous.get('/api/admin/results/export.xlsx?departmentId=x'),
     ]);
 
-    expect(responses).toHaveLength(18);
+    expect(responses).toHaveLength(20);
     for (const res of responses) {
       expect(res.status).toBe(401);
       expect(res.body.error?.code).toBe('UNAUTHORIZED');
@@ -798,6 +817,55 @@ describeDb('管理端接口', () => {
     expect(restored.body.name).toBe(`${TAG}部门-启停`);
   });
 
+  it('部门 PATCH 保存问卷表头配置（类型/附件号/标题/填写说明）并能读回', async () => {
+    const created = await createDepartment(`${TAG}部门-问卷`);
+    const id = created.id;
+
+    // 新建部门按参考表的默认抬头：个人问卷 + 附件1-1，标题与填写说明留空
+    const initial = await agent.get('/api/admin/departments');
+    expect((initial.body as Array<{ id: string }>).find((row) => row.id === id)).toMatchObject({
+      questionnaireType: 'person',
+      headerNote: '附件1-1',
+      title: '',
+      footerNote: '',
+    });
+
+    const title = `${TAG}车间负责人评价问卷`;
+    const footerNote = '请如实填写，不填视为弃权。';
+    const saved = await agent.patch(`/api/admin/departments/${id}`).send({
+      questionnaireType: 'workshop',
+      headerNote: '附件2-1',
+      title,
+      footerNote,
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({
+      questionnaireType: 'workshop',
+      headerNote: '附件2-1',
+      title,
+      footerNote,
+    });
+
+    // 回读：问卷配置页刷新后不能退回默认值（GET 漏字段是本轮改动的典型症状）
+    const reread = await agent.get('/api/admin/departments');
+    expect((reread.body as Array<{ id: string }>).find((row) => row.id === id)).toMatchObject({
+      questionnaireType: 'workshop',
+      headerNote: '附件2-1',
+      title,
+      footerNote,
+    });
+    expect((await prisma.department.findUnique({ where: { id } }))?.questionnaireType).toBe('workshop');
+
+    // 问卷类型只接受 person / workshop：路由层 zod 先拦下（service 里另有
+    // QUESTIONNAIRE_TYPE_INVALID 分支，只有越过分区校验的调用才会走到），非法值不落库
+    const invalid = await agent
+      .patch(`/api/admin/departments/${id}`)
+      .send({ questionnaireType: 'team' });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe('VALIDATION_FAILED');
+    expect((await prisma.department.findUnique({ where: { id } }))?.questionnaireType).toBe('workshop');
+  });
+
   it('职工 CRUD：按部门过滤、工号唯一、改派与软删除', async () => {
     const department = await createDepartment(`${TAG}部门-职工`);
     const other = await createDepartment(`${TAG}部门-其他`);
@@ -881,23 +949,105 @@ describeDb('管理端接口', () => {
     expect(unknownDepartment.status).toBe(400);
   });
 
-  it('软删除部门/职工/项点后历史评分仍然可读', async () => {
+  it('被评列 CRUD：同名可重复、改名与软删除后从打分表消失', async () => {
+    const department = await createDepartment(`${TAG}部门-被评列`);
+    const other = await createDepartment(`${TAG}部门-被评列其他`);
+
+    const createdRes = await agent
+      .post('/api/admin/vote-columns')
+      .send({ departmentId: department.id, name: '副主任', sortOrder: 0 });
+    expect(createdRes.status).toBe(200);
+    expect(createdRes.body).toMatchObject({
+      departmentId: department.id,
+      name: '副主任',
+      sortOrder: 0,
+      enabled: true,
+    });
+    const created = createdRes.body as { id: string };
+
+    // 刻意不做重名校验：参考表的个人问卷里「副主任」原样出现两次（两个副主任岗位），
+    // 后台必须能照抄那张表 —— 同名可以有第二行
+    const twin = await createVoteColumn(department.id, '副主任', 1);
+    expect(twin.id).not.toBe(created.id);
+
+    // 跨部门同名同样允许
+    const sameNameElsewhere = await createVoteColumn(other.id, '副主任');
+    expect(sameNameElsewhere.id).not.toBe(created.id);
+
+    // 改名成同部门已存在的名字也允许（同一列的两行必须仍能各自独立编辑）
+    const renamed = await agent
+      .patch(`/api/admin/vote-columns/${created.id}`)
+      .send({ name: '党支部书记' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.name).toBe('党支部书记');
+
+    const filtered = await agent.get(`/api/admin/vote-columns?departmentId=${department.id}`);
+    expect(filtered.body).toHaveLength(2);
+    expect((filtered.body as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      '党支部书记',
+      '副主任',
+    ]);
+    // 两行是各自独立的记录：同名不代表同一行
+    expect(new Set((filtered.body as Array<{ id: string }>).map((row) => row.id)).size).toBe(2);
+
+    // 软删除：行还在（历史评分仍可读），但列出时 enabled=false
+    expect((await agent.delete(`/api/admin/vote-columns/${twin.id}`)).status).toBe(204);
+    const after = await agent.get(`/api/admin/vote-columns?departmentId=${department.id}`);
+    expect((after.body as Array<{ id: string }>).find((row) => row.id === twin.id)).toMatchObject({
+      enabled: false,
+    });
+    expect(await prisma.voteColumn.count({ where: { id: twin.id } })).toBe(1);
+
+    // 打分表只取启用列：停用的被评列从投票端彻底消失，而不是留成空表头
+    const sheet = await request(app)
+      .get(`/api/vote/sheet?departmentId=${department.id}`)
+      .set('Authorization', `Bearer ${signVoteToken('soft-delete-check', 'soft-delete-check')}`);
+    expect(sheet.status).toBe(200);
+    expect((sheet.body.voteColumns as Array<{ name: string }>).map((row) => row.name)).toEqual([
+      '党支部书记',
+    ]);
+
+    expect((await agent.patch('/api/admin/vote-columns/not-exist').send({ name: 'x' })).status).toBe(
+      404,
+    );
+    expect((await agent.delete('/api/admin/vote-columns/not-exist')).status).toBe(404);
+    expect(
+      (
+        await agent
+          .post('/api/admin/vote-columns')
+          .send({ departmentId: 'not-exist', name: '副主任' })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await agent
+          .post('/api/admin/vote-columns')
+          .send({ departmentId: department.id, name: '   ' })
+      ).status,
+    ).toBe(400);
+  });
+
+  it('软删除部门/被评列/项点后历史评分仍然可读', async () => {
     const department = await createDepartment(`${TAG}部门-软删`);
-    const employee = await createEmployee(department.id, '张三');
+    const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
     const ticketType = await newTicketType(100);
     await submitSheet(department.id, ticketType.id, [
-      { employeeId: employee.id, criterionId: criterion.id, score: 90 },
+      { voteColumnId: column.id, criterionId: criterion.id, score: 90 },
     ]);
 
-    await agent.delete(`/api/admin/employees/${employee.id}`);
+    await agent.delete(`/api/admin/vote-columns/${column.id}`);
     await agent.delete(`/api/admin/criteria/${criterion.id}`);
     await agent.delete(`/api/admin/departments/${department.id}`);
 
     const res = await agent.get(`/api/admin/results?departmentId=${department.id}`);
     expect(res.status).toBe(200);
     expect(res.body.rows).toHaveLength(1);
-    expect(res.body.rows[0]).toMatchObject({ comprehensiveScore: 90, enabled: false });
+    expect(res.body.rows[0]).toMatchObject({
+      voteColumnName: '主任',
+      comprehensiveScore: 90,
+      enabled: false,
+    });
     expect(res.body.criteria[0]).toMatchObject({ enabled: false });
   });
 
@@ -1041,9 +1191,11 @@ describeDb('管理端接口', () => {
 
   it('统计口径：票种计数、总量自洽、部门进度与投票窗口', async () => {
     const department = await createDepartment(`${TAG}部门-统计`);
-    const first = await createEmployee(department.id, '张三');
+    await createEmployee(department.id, '张三');
     const second = await createEmployee(department.id, '李四');
     const criterion = await createCriterion(department.id, '德', 0, 100);
+    // 职工名单只影响 employeeCount；打分表的列是被评列
+    const column = await createVoteColumn(department.id, '主任');
     const ticketType = await newTicketType(100);
 
     const generated = await agent
@@ -1063,8 +1215,7 @@ describeDb('管理端接口', () => {
     });
     await agent.post(`/api/admin/tickets/${revokedTicket.id}/revoke`);
     await submitSheet(department.id, ticketType.id, [
-      { employeeId: first.id, criterionId: criterion.id, score: 80 },
-      { employeeId: second.id, criterionId: criterion.id, score: 60 },
+      { voteColumnId: column.id, criterionId: criterion.id, score: 80 },
     ]);
 
     const res = await agent.get('/api/admin/stats/overview');
@@ -1129,17 +1280,23 @@ describeDb('管理端接口', () => {
     expect(res.body.sheetCount).toBe(1);
     expect(res.body.ticketTypesInvolved).toHaveLength(1);
 
-    const firstRow = res.body.rows.find((row: { employeeId: string }) => row.employeeId === first.id);
-    const secondRow = res.body.rows.find((row: { employeeId: string }) => row.employeeId === second.id);
-    // 张三：德 90/100 → 90，能 45/50 → 90，综合 (90+90)/2 = 90
+    const firstRow = res.body.rows.find((row: { voteColumnId: string }) => row.voteColumnId === first.id);
+    const secondRow = res.body.rows.find(
+      (row: { voteColumnId: string }) => row.voteColumnId === second.id,
+    );
+    // 主任：德 90/100 → 90，能 45/50 → 90，综合 (90+90)/2 = 90
     expect(firstRow).toMatchObject({
       rank: 1,
-      employeeName: '张三',
-      employeeNo: 'E001',
+      voteColumnName: '主任',
+      enabled: true,
       comprehensiveScore: 90,
     });
-    // 李四：德 60，能 30/50 → 60，综合 60
-    expect(secondRow).toMatchObject({ rank: 2, employeeName: '李四', comprehensiveScore: 60 });
+    // 党支部书记：德 60，能 30/50 → 60，综合 60
+    expect(secondRow).toMatchObject({
+      rank: 2,
+      voteColumnName: '党支部书记',
+      comprehensiveScore: 60,
+    });
 
     // 「能」满分只有 50：45 分归一化后是 90，而不是 45
     const normalized = firstRow.criteria.find(
@@ -1150,17 +1307,17 @@ describeDb('管理端接口', () => {
 
   it('结果按实际收到票的票种加权归一化', async () => {
     const department = await createDepartment(`${TAG}部门-加权`);
-    const employee = await createEmployee(department.id, '张三');
+    const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
     const typeA = await newTicketType(50);
     const typeB = await newTicketType(30);
 
     // A(50%) 打 80，B(30%) 打 100：(80×50 + 100×30) / 80 = 87.5
     await submitSheet(department.id, typeA.id, [
-      { employeeId: employee.id, criterionId: criterion.id, score: 80 },
+      { voteColumnId: column.id, criterionId: criterion.id, score: 80 },
     ]);
     await submitSheet(department.id, typeB.id, [
-      { employeeId: employee.id, criterionId: criterion.id, score: 100 },
+      { voteColumnId: column.id, criterionId: criterion.id, score: 100 },
     ]);
 
     const res = await agent.get(`/api/admin/results?departmentId=${department.id}`);
@@ -1174,13 +1331,13 @@ describeDb('管理端接口', () => {
 
   it('某部门某票种零票时按有票票种归一化，不按 0 分计入', async () => {
     const department = await createDepartment(`${TAG}部门-缺票种`);
-    const employee = await createEmployee(department.id, '张三');
+    const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
     const typeC = await newTicketType(20);
 
     // 只有 20% 权重的票种有票，均分 90：归一化后仍是 90，而不是 90×20/100
     await submitSheet(department.id, typeC.id, [
-      { employeeId: employee.id, criterionId: criterion.id, score: 90 },
+      { voteColumnId: column.id, criterionId: criterion.id, score: 90 },
     ]);
 
     const res = await agent.get(`/api/admin/results?departmentId=${department.id}`);
@@ -1192,33 +1349,43 @@ describeDb('管理端接口', () => {
   it('同分并列排名（1、1、3 式）', async () => {
     const department = await createDepartment(`${TAG}部门-并列`);
     const criterion = await createCriterion(department.id, '德', 0, 100);
-    const first = await createEmployee(department.id, '甲');
-    const second = await createEmployee(department.id, '乙');
-    const third = await createEmployee(department.id, '丙');
+    const first = await createVoteColumn(department.id, '甲', 0);
+    const second = await createVoteColumn(department.id, '乙', 1);
+    const third = await createVoteColumn(department.id, '丙', 2);
     const ticketType = await newTicketType(100);
 
     await submitSheet(department.id, ticketType.id, [
-      { employeeId: first.id, criterionId: criterion.id, score: 80 },
-      { employeeId: second.id, criterionId: criterion.id, score: 80 },
-      { employeeId: third.id, criterionId: criterion.id, score: 50 },
+      { voteColumnId: first.id, criterionId: criterion.id, score: 80 },
+      { voteColumnId: second.id, criterionId: criterion.id, score: 80 },
+      { voteColumnId: third.id, criterionId: criterion.id, score: 50 },
     ]);
 
     const res = await agent.get(`/api/admin/results?departmentId=${department.id}`);
-    const rankOf = (employeeId: string): number =>
-      res.body.rows.find((row: { employeeId: string }) => row.employeeId === employeeId).rank;
+    const rankOf = (voteColumnId: string): number =>
+      res.body.rows.find((row: { voteColumnId: string }) => row.voteColumnId === voteColumnId).rank;
 
     expect(rankOf(first.id)).toBe(1);
     expect(rankOf(second.id)).toBe(1);
     expect(rankOf(third.id)).toBe(3);
   });
 
-  it('没有任何评分的职工得 0 分并排在末位', async () => {
+  it('没有任何评分的被评列得 0 分并排在末位', async () => {
     const { deptId } = await setupScoredDepartment();
-    const employee = await createEmployee(deptId, '王五');
+    const column = await createVoteColumn(deptId, '副主任', 2);
     const res = await agent.get(`/api/admin/results?departmentId=${deptId}`);
 
-    const zero = res.body.rows.find((row: { employeeId: string }) => row.employeeId === employee.id);
-    expect(zero).toMatchObject({ comprehensiveScore: 0, criteria: [] });
+    const zero = res.body.rows.find(
+      (row: { voteColumnId: string }) => row.voteColumnId === column.id,
+    );
+    expect(zero).toMatchObject({ voteColumnName: '副主任', comprehensiveScore: 0 });
+    // 弃权、不填视为 0 分：本部门有表，该列就在每个项点上按 0 分参与平均，
+    // 所以它的 criteria 不是空数组，而是「每项都是 0 分」
+    expect(zero.criteria).toHaveLength(2);
+    expect(
+      (zero.criteria as Array<{ rawScore: number; normalizedScore: number }>).every(
+        (row) => row.rawScore === 0 && row.normalizedScore === 0,
+      ),
+    ).toBe(true);
     expect(zero.rank).toBe(3);
   });
 
@@ -1237,15 +1404,16 @@ describeDb('管理端接口', () => {
     const workbook = await getWorkbook(`/api/admin/results/export.xlsx?departmentId=${deptId}`);
 
     const ranking = readTable(workbook.getWorksheet('综合排名'), '排名');
-    expect(ranking.header).toEqual(['排名', '姓名', '工号', '综合得分', '计分项点数']);
+    expect(ranking.header).toEqual(['排名', '被评对象', '综合得分', '计分项点数']);
     expect(ranking.rows).toHaveLength(2);
-    expect(ranking.rows[0]?.[1]).toBe('张三');
-    expect(ranking.rows[0]?.[3]).toBe('90');
-    expect(ranking.rows[1]?.[1]).toBe('李四');
+    expect(ranking.rows[0]?.[1]).toBe('主任');
+    expect(ranking.rows[0]?.[2]).toBe('90');
+    expect(ranking.rows[0]?.[3]).toBe('2');
+    expect(ranking.rows[1]?.[1]).toBe('党支部书记');
 
-    // 明细行数 = 职工数 × 有数据的项点数
-    const details = readTable(workbook.getWorksheet('各项明细'), '姓名');
-    expect(details.header).toEqual(['姓名', '项点', '原始分', '归一化分', '参与票种']);
+    // 明细行数 = 被评列数 × 有数据的项点数
+    const details = readTable(workbook.getWorksheet('各项明细'), '被评对象');
+    expect(details.header).toEqual(['被评对象', '项点', '原始分', '归一化分', '参与票种']);
     expect(details.rows).toHaveLength(4);
     expect(details.rows.filter((row) => row[1] === criterionA.name)).toHaveLength(2);
     expect(details.rows.filter((row) => row[1] === criterionB.name)).toHaveLength(2);

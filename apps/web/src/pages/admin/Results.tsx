@@ -64,14 +64,7 @@ export function AdminResults() {
           fixed: 'left',
           render: (value: number) => <span className="tabular">{value}</span>,
         },
-        { title: '姓名', dataIndex: 'employeeName', width: 120, fixed: 'left' },
-        {
-          title: '工号',
-          dataIndex: 'employeeNo',
-          width: 108,
-          align: 'right',
-          render: (value: string | null) => value ?? EMPTY_TEXT,
-        },
+        { title: '被评对象', dataIndex: 'voteColumnName', width: 160, fixed: 'left' },
         ...data.criteria.map((criterion) => ({
           title: (
             <>
@@ -239,15 +232,19 @@ export function AdminResults() {
                   100），再取等权平均。某项点在本部门一张票都没有时，该项不参与平均，也不会按 0 分计入。
                 </li>
                 <li>
-                  参与计算的票种：某票种在本部门此项点零票时会在该格被排除；未列出的启用票种即属此情况。
+                  弃权、不填按 0 分计入：某票种在本部门只要有已提交的表，该票种在本部门的每一格都参与平均，
+                  某张表缺某一格即按 0 分计入该格。
+                </li>
+                <li>
+                  参与计算的票种：某票种在本部门一张表都没有时整票种不参与（那是没发这种票，不是弃权）；
                   权重只决定票种之间的配比，不改变项点之间的等权关系。
                 </li>
                 <li>
-                  排名按综合得分降序，同分并列（1、2、2、4 式），同分内按姓名排序；本页数字与「导出
+                  排名按综合得分降序，同分并列（1、2、2、4 式），同分内按被评对象名称排序；本页数字与「导出
                   Excel」同源。
                 </li>
                 <li>
-                  数据来源：本部门已提交的评分记录；演示环境中的姓名、工号与成绩均为合成数据，不代表真实职工。
+                  数据来源：本部门已提交的评分记录；被评对象是职务/车间（被评列），不是具体职工。
                 </li>
               </ul>
             }
@@ -260,7 +257,7 @@ export function AdminResults() {
             />
           ) : (
             <Table<ResultRowDto>
-              rowKey="employeeId"
+              rowKey="voteColumnId"
               size="small"
               loading={results.loading}
               columns={columns}
@@ -269,7 +266,7 @@ export function AdminResults() {
                 data.rows.length > 30
                   ? {
                       pageSize: 30,
-                      showTotal: (total) => `共 ${total} 人`,
+                      showTotal: (total) => `共 ${total} 项`,
                     }
                   : false
               }

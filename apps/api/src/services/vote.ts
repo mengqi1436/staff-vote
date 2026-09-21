@@ -36,11 +36,14 @@ export interface DepartmentView {
 export interface CriterionView {
   id: string;
   name: string;
+  /** 项点描述，显示在打分表项点名称下方（参考表里的长文字） */
+  description: string | null;
   minScore: number;
   maxScore: number;
 }
 
-export interface EmployeeView {
+/** 被评列：打分表的「列」。个人问卷是各被评职务，车间问卷只有一列「得分」。 */
+export interface VoteColumnView {
   id: string;
   name: string;
 }
@@ -51,15 +54,24 @@ export interface VoteSessionResult {
   departments: DepartmentView[];
 }
 
+/** 打分表：表头文案 + 项点（行）+ 被评列（列）。 */
 export interface VoteSheetResult {
   department: DepartmentView;
+  /** person = 个人问卷，workshop = 车间问卷 */
+  questionnaireType: string;
+  /** 左上角附件号，如「附件1-1」 */
+  headerNote: string;
+  /** 表标题，如「xx车间负责人评价问卷」 */
+  title: string;
+  /** 表尾填写说明 */
+  footerNote: string;
   criteria: CriterionView[];
-  employees: EmployeeView[];
+  voteColumns: VoteColumnView[];
 }
 
 /** 一个待写入的打分单元格。 */
 export interface SubmitItem {
-  employeeId: string;
+  voteColumnId: string;
   criterionId: string;
   score: number;
 }
@@ -118,30 +130,48 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
  * 取某部门的打分表骨架。
  * 停用部门与不存在的部门同样返回 404：软删除的数据对外就当不存在。
  *
+ * 表形与参考表一致：行 = 评价项点（含描述），列 = 被评列（职务 / 得分），
+ * 外加表头的附件号、标题与表尾填写说明。
+ *
  * @param departmentId 部门 ID
- * @returns 部门、项点列（含区间）与职工行，均只含启用项并按 sortOrder 升序
+ * @returns 部门、问卷表头文案、项点行与被评列，均只含启用项并按 sortOrder 升序
  */
 export async function getVoteSheet(departmentId: string): Promise<VoteSheetResult> {
   const department = await prisma.department.findFirst({
     where: { id: departmentId, enabled: true },
-    select: { id: true, name: true },
+    select: {
+      id: true,
+      name: true,
+      questionnaireType: true,
+      headerNote: true,
+      title: true,
+      footerNote: true,
+    },
   });
   if (!department) throw ApiError.notFound('部门不存在或已停用');
 
-  const [criteria, employees] = await Promise.all([
+  const [criteria, voteColumns] = await Promise.all([
     prisma.criterion.findMany({
       where: { departmentId, enabled: true },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, minScore: true, maxScore: true },
+      select: { id: true, name: true, description: true, minScore: true, maxScore: true },
     }),
-    prisma.employee.findMany({
+    prisma.voteColumn.findMany({
       where: { departmentId, enabled: true },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: { id: true, name: true },
     }),
   ]);
 
-  return { department, criteria, employees };
+  return {
+    department: { id: department.id, name: department.name },
+    questionnaireType: department.questionnaireType,
+    headerNote: department.headerNote,
+    title: department.title,
+    footerNote: department.footerNote,
+    criteria,
+    voteColumns,
+  };
 }
 
 /**
@@ -149,7 +179,7 @@ export async function getVoteSheet(departmentId: string): Promise<VoteSheetResul
  *
  * 三个不可动摇的点：
  *   1. 分数区间以数据库里的 criterion 为准，客户端传来什么区间的提示都不参与判定；
- *   2. employeeId / criterionId 必须属于该部门且处于启用状态，越权写一律拒绝；
+ *   2. voteColumnId / criterionId 必须属于该部门且处于启用状态，越权写一律拒绝；
  *   3. 核销与写表在同一事务内，核销靠 `UPDATE ... WHERE id=? AND status='unused'`
  *      的受影响行数判定，因此并发提交只可能有一张表落库。
  *
@@ -172,15 +202,15 @@ export async function submitVote(
   });
   if (!department) throw ApiError.notFound('部门不存在或已停用');
 
-  const [criteria, employees] = await Promise.all([
+  const [criteria, voteColumns] = await Promise.all([
     prisma.criterion.findMany({
       where: { departmentId, enabled: true },
       select: { id: true, name: true, minScore: true, maxScore: true },
     }),
-    prisma.employee.findMany({ where: { departmentId, enabled: true }, select: { id: true } }),
+    prisma.voteColumn.findMany({ where: { departmentId, enabled: true }, select: { id: true } }),
   ]);
   const criterionById = new Map(criteria.map((criterion) => [criterion.id, criterion]));
-  const validEmployeeIds = new Set(employees.map((employee) => employee.id));
+  const validVoteColumnIds = new Set(voteColumns.map((column) => column.id));
 
   const seenCells = new Set<string>();
   for (const item of items) {
@@ -188,8 +218,8 @@ export async function submitVote(
     if (!criterion) {
       throw ApiError.badRequest('打分项不属于该部门，或该项点已停用', 'ITEM_OUT_OF_DEPARTMENT');
     }
-    if (!validEmployeeIds.has(item.employeeId)) {
-      throw ApiError.badRequest('被评职工不属于该部门，或该职工已停用', 'ITEM_OUT_OF_DEPARTMENT');
+    if (!validVoteColumnIds.has(item.voteColumnId)) {
+      throw ApiError.badRequest('被评列不属于该部门，或该列已停用', 'ITEM_OUT_OF_DEPARTMENT');
     }
     if (item.score < criterion.minScore || item.score > criterion.maxScore) {
       throw ApiError.badRequest(
@@ -198,9 +228,9 @@ export async function submitVote(
       );
     }
     // 同一单元格重复出现会撞 score_items 的唯一约束；提前拒绝，避免变成 500。
-    const cell = `${item.employeeId}|${item.criterionId}`;
+    const cell = `${item.voteColumnId}|${item.criterionId}`;
     if (seenCells.has(cell)) {
-      throw ApiError.badRequest('同一职工与项点重复提交', 'DUPLICATE_ITEM');
+      throw ApiError.badRequest('同一被评列与项点重复提交', 'DUPLICATE_ITEM');
     }
     seenCells.add(cell);
   }
@@ -228,7 +258,7 @@ export async function submitVote(
     await tx.scoreItem.createMany({
       data: items.map((item) => ({
         sheetId: sheet.id,
-        employeeId: item.employeeId,
+        voteColumnId: item.voteColumnId,
         criterionId: item.criterionId,
         score: item.score,
       })),

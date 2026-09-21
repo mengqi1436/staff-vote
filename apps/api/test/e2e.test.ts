@@ -40,8 +40,8 @@ const ADMIN_PASSWORD = 'e2e-Password-123';
 // 跨用例共享的状态
 let admin: ReturnType<typeof request.agent>;
 let departmentId = '';
-let employeeAId = '';
-let employeeBId = '';
+let voteColumnAId = '';
+let voteColumnBId = '';
 let criterionScoreId = '';
 let criterionQualityId = '';
 let ticketTypeAId = '';
@@ -57,6 +57,8 @@ beforeAll(async () => {
   await prisma.ticketBatch.deleteMany();
   await prisma.employee.deleteMany();
   await prisma.criterion.deleteMany();
+  // 被评列必须排在 scoreItem 之后：score_items 对 vote_columns 是 RESTRICT 外键
+  await prisma.voteColumn.deleteMany();
   await prisma.department.deleteMany();
   await prisma.ticketType.deleteMany();
   await prisma.setting.deleteMany();
@@ -106,11 +108,12 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.token).toBeUndefined();
   });
 
-  it('2. 配置部门与职工名单（打分表的行）', async () => {
+  it('2. 配置部门、职工名单与被评列（打分表的列）', async () => {
     const dept = await admin.post('/api/admin/departments').send({ name: '技术部', sortOrder: 0 });
     expect(dept.status).toBe(200);
     departmentId = dept.body.id;
 
+    // 职工名单仍在后台维护（统计里的 employeeCount 用它），但不再参与打分
     const e1 = await admin
       .post('/api/admin/employees')
       .send({ departmentId, name: '张伟', employeeNo: 'T001', sortOrder: 0 });
@@ -119,11 +122,29 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({ departmentId, name: '李静', employeeNo: 'T002', sortOrder: 1 });
     expect(e1.status).toBe(200);
     expect(e2.status).toBe(200);
-    employeeAId = e1.body.id;
-    employeeBId = e2.body.id;
+
+    // 打分对象是被评列：个人问卷下就是各职务（参考表的列头）
+    const c1 = await admin
+      .post('/api/admin/vote-columns')
+      .send({ departmentId, name: '主任', sortOrder: 0 });
+    const c2 = await admin
+      .post('/api/admin/vote-columns')
+      .send({ departmentId, name: '党支部书记', sortOrder: 1 });
+    expect(c1.status).toBe(200);
+    expect(c2.status).toBe(200);
+    voteColumnAId = c1.body.id;
+    voteColumnBId = c2.body.id;
+
+    // 同名可以有第二行：参考表的个人问卷里「副主任」就原样出现了两次（两个岗位）
+    const c3 = await admin
+      .post('/api/admin/vote-columns')
+      .send({ departmentId, name: '主任', sortOrder: 2 });
+    expect(c3.status).toBe(200);
+    expect(c3.body.name).toBe('主任');
+    expect(c3.body.id).not.toBe(voteColumnAId);
   });
 
-  it('3. 配置素质项点（打分表的列），两项满分不同', async () => {
+  it('3. 配置素质项点（打分表的行），两项满分不同', async () => {
     // 故意让两项满分不同（100 与 10）——这正是「原始分不能直接相加」的场景
     const c1 = await admin
       .post('/api/admin/criteria')
@@ -212,8 +233,17 @@ describe('端到端：职工素质评议完整流程', () => {
       .set('Authorization', `Bearer ${session.body.token}`);
     expect(sheet.status).toBe(200);
     expect(sheet.body.criteria).toHaveLength(2);
-    expect(sheet.body.employees).toHaveLength(2);
     expect(sheet.body.criteria.map((c: { name: string }) => c.name)).toEqual(['工作业绩', '工作质量']);
+    // 打分表的列是被评列（含同名两行），不再有职工名单
+    expect(sheet.body.voteColumns.map((c: { name: string }) => c.name)).toEqual([
+      '主任',
+      '党支部书记',
+      '主任',
+    ]);
+    expect(sheet.body.employees).toBeUndefined();
+    // 表头文案随部门持久化：默认是个人问卷 + 附件1-1
+    expect(sheet.body.questionnaireType).toBe('person');
+    expect(sheet.body.headerNote).toBe('附件1-1');
   });
 
   it('9. 拒绝小数分与越界分', async () => {
@@ -226,7 +256,7 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({
         departmentId,
         items: [
-          { employeeId: employeeAId, criterionId: criterionScoreId, score: 88.5 },
+          { voteColumnId: voteColumnAId, criterionId: criterionScoreId, score: 88.5 },
         ],
       });
     expect(decimal.status).toBeGreaterThanOrEqual(400);
@@ -237,7 +267,7 @@ describe('端到端：职工素质评议完整流程', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({
         departmentId,
-        items: [{ employeeId: employeeAId, criterionId: criterionQualityId, score: 999 }],
+        items: [{ voteColumnId: voteColumnAId, criterionId: criterionQualityId, score: 999 }],
       });
     expect(outOfRange.status).toBeGreaterThanOrEqual(400);
     expect(outOfRange.status).toBeLessThan(500);
@@ -260,10 +290,10 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({
         departmentId,
         items: [
-          { employeeId: employeeAId, criterionId: criterionScoreId, score: 90 },
-          { employeeId: employeeAId, criterionId: criterionQualityId, score: 8 },
-          { employeeId: employeeBId, criterionId: criterionScoreId, score: 70 },
-          { employeeId: employeeBId, criterionId: criterionQualityId, score: 6 },
+          { voteColumnId: voteColumnAId, criterionId: criterionScoreId, score: 90 },
+          { voteColumnId: voteColumnAId, criterionId: criterionQualityId, score: 8 },
+          { voteColumnId: voteColumnBId, criterionId: criterionScoreId, score: 70 },
+          { voteColumnId: voteColumnBId, criterionId: criterionQualityId, score: 6 },
         ],
       });
     expect(res.status).toBe(200);
@@ -281,12 +311,12 @@ describe('端到端：职工素质评议完整流程', () => {
       .set('Authorization', `Bearer ${session.body?.token ?? 'invalid'}`)
       .send({
         departmentId,
-        items: [{ employeeId: employeeAId, criterionId: criterionScoreId, score: 10 }],
+        items: [{ voteColumnId: voteColumnAId, criterionId: criterionScoreId, score: 10 }],
       });
     expect(stale.status).toBeGreaterThanOrEqual(400);
   });
 
-  it('12. B 票提交同一批职工的不同分数', async () => {
+  it('12. B 票提交同一批被评对象的不同分数', async () => {
     const session = await request(app).post('/api/vote/session').send({ code: generatedCodes[1] });
     expect(session.status).toBe(200);
     const token = session.body.token as string;
@@ -297,10 +327,10 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({
         departmentId,
         items: [
-          { employeeId: employeeAId, criterionId: criterionScoreId, score: 70 },
-          { employeeId: employeeAId, criterionId: criterionQualityId, score: 6 },
-          { employeeId: employeeBId, criterionId: criterionScoreId, score: 50 },
-          { employeeId: employeeBId, criterionId: criterionQualityId, score: 4 },
+          { voteColumnId: voteColumnAId, criterionId: criterionScoreId, score: 70 },
+          { voteColumnId: voteColumnAId, criterionId: criterionQualityId, score: 6 },
+          { voteColumnId: voteColumnBId, criterionId: criterionScoreId, score: 50 },
+          { voteColumnId: voteColumnBId, criterionId: criterionQualityId, score: 4 },
         ],
       });
     expect(res.status).toBe(200);
@@ -330,23 +360,28 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.ticketTypesInvolved.map((t: { code: string }) => t.code).sort()).toEqual(['A', 'B']);
     expect(res.body.sheetCount).toBe(2);
 
-    const zhang = res.body.rows.find((r: { employeeName: string }) => r.employeeName === '张伟');
-    expect(zhang).toBeTruthy();
+    const director = res.body.rows.find((r: { voteColumnName: string }) => r.voteColumnName === '主任');
+    expect(director).toBeTruthy();
 
-    const score = zhang.criteria.find((c: { criterionName: string }) => c.criterionName === '工作业绩');
+    const score = director.criteria.find(
+      (c: { criterionName: string }) => c.criterionName === '工作业绩',
+    );
     // (90*50 + 70*30) / 80 = 82.5
     expect(score.rawScore).toBeCloseTo(82.5, 2);
 
-    const quality = zhang.criteria.find((c: { criterionName: string }) => c.criterionName === '工作质量');
+    const quality = director.criteria.find(
+      (c: { criterionName: string }) => c.criterionName === '工作质量',
+    );
     // (8*50 + 6*30) / 80 = 7.25，归一化到 0-100 → 72.5
     expect(quality.rawScore).toBeCloseTo(7.25, 2);
     expect(quality.normalizedScore).toBeCloseTo(72.5, 2);
 
     // 综合得分 = (82.5 + 72.5) / 2 = 77.5
     // 若把原始分直接相加再平均会得到 (82.5+7.25)/2 = 44.875，这条断言守住口径
-    expect(zhang.comprehensiveScore).toBeCloseTo(77.5, 2);
+    expect(director.comprehensiveScore).toBeCloseTo(77.5, 2);
 
     expect(res.body.rows[0].rank).toBe(1);
+    expect(res.body.rows[0].voteColumnName).toBe('主任');
   });
 
   it('15. 导出 Excel 可被解析且含真实数据', async () => {
@@ -364,7 +399,7 @@ describe('端到端：职工素质评议完整流程', () => {
     await workbook.xlsx.load(res.body as unknown as Parameters<typeof workbook.xlsx.load>[0]);
     expect(workbook.worksheets.length).toBeGreaterThanOrEqual(1);
 
-    // 汇总 sheet 里应能找到职工姓名
+    // 汇总 sheet 里应能找到被评对象与新表头
     const first = workbook.worksheets[0];
     expect(first).toBeTruthy();
     const text = first
@@ -372,7 +407,8 @@ describe('端到端：职工素质评议完整流程', () => {
       .flat()
       .filter((v): v is string => typeof v === 'string')
       .join('|');
-    expect(text).toContain('张伟');
+    expect(text).toContain('被评对象');
+    expect(text).toContain('主任');
   });
 
   it('16. 随机码清单可导出', async () => {

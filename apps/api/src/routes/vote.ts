@@ -20,9 +20,11 @@ import {
  *                                   未开放时 message = "当前未开放投票"
  *   POST /session   { code }      → { token, ticketType, departments }
  *                                   校验码存在、未使用、投票开放；限流用 voteLoginLimiter
- *   GET  /sheet?departmentId=     → { department, criteria[], employees[] }
- *                                   需投票令牌；项点含 min/max，前端据此设输入区间
- *   POST /submit    { departmentId, items[{employeeId, criterionId, score}] }
+ *   GET  /sheet?departmentId=     → { department, questionnaireType, headerNote, title, footerNote,
+ *                                    criteria[], voteColumns[] }
+ *                                   需投票令牌；项点含 description 与 min/max，
+ *                                   被评列即打分表的列（个人问卷为各职务，车间问卷为「得分」）
+ *   POST /submit    { departmentId, items[{voteColumnId, criterionId, score}] }
  *                                 → { ok: true }
  *                                   需投票令牌；提交即原子核销该码
  *
@@ -48,7 +50,7 @@ const SubmitSchema = z.object({
   items: z
     .array(
       z.object({
-        employeeId: z.string().min(1),
+        voteColumnId: z.string().min(1),
         criterionId: z.string().min(1),
         // 只收整数：小数、字符串、布尔值一律 400。前端输入框的 step=1 只是提示，不是防线。
         score: z.int(),

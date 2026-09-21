@@ -30,8 +30,26 @@ vi.mock('../../../lib/api.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('../../../lib/api.js');
 
   const departments = [
-    { id: 'd1', name: '办公室', sortOrder: 1, enabled: true },
-    { id: 'd2', name: '财务科', sortOrder: 2, enabled: false },
+    {
+      id: 'd1',
+      name: '办公室',
+      sortOrder: 1,
+      enabled: true,
+      questionnaireType: 'person',
+      headerNote: '附件1-1',
+      title: 'xx车间负责人评价问卷',
+      footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+    },
+    {
+      id: 'd2',
+      name: '财务科',
+      sortOrder: 2,
+      enabled: false,
+      questionnaireType: 'workshop',
+      headerNote: '附件1-2',
+      title: 'xx车间评价问卷',
+      footerNote: '',
+    },
   ];
 
   const ticketTypes = [
@@ -86,9 +104,9 @@ vi.mock('../../../lib/api.js', async () => {
     rows: [
       {
         rank: 1,
-        employeeId: 'e1',
-        employeeName: '张三',
-        employeeNo: '001',
+        voteColumnId: 'v1',
+        voteColumnName: '主任',
+        enabled: true,
         comprehensiveScore: 88.5,
         criteria: [
           {
@@ -173,7 +191,36 @@ vi.mock('../../../lib/api.js', async () => {
           },
         ]),
       },
-      departments: { list: vi.fn(async () => departments) },
+      departments: {
+        list: vi.fn(async () => departments),
+        update: vi.fn(async (id: string, body: Record<string, unknown>) => ({
+          ...departments[0],
+          id,
+          ...body,
+        })),
+      },
+      voteColumns: {
+        list: vi.fn(async () => [
+          { id: 'v1', departmentId: 'd1', name: '主任', sortOrder: 1, enabled: true },
+          { id: 'v2', departmentId: 'd1', name: '副主任', sortOrder: 2, enabled: true },
+        ]),
+        create: vi.fn(async (body: { departmentId: string; name: string; sortOrder?: number }) => ({
+          id: 'v3',
+          departmentId: body.departmentId,
+          name: body.name,
+          sortOrder: body.sortOrder ?? 0,
+          enabled: true,
+        })),
+        update: vi.fn(async (id: string, body: Record<string, unknown>) => ({
+          id,
+          departmentId: 'd1',
+          name: '主任',
+          sortOrder: 1,
+          enabled: true,
+          ...body,
+        })),
+        remove: vi.fn(async () => undefined),
+      },
       employees: {
         list: vi.fn(async () => [
           { id: 'e1', name: '张三', employeeNo: '001', sortOrder: 1, enabled: true },
@@ -181,7 +228,15 @@ vi.mock('../../../lib/api.js', async () => {
       },
       criteria: {
         list: vi.fn(async () => [
-          { id: 'c1', name: '政治素质', minScore: 0, maxScore: 100, sortOrder: 1, enabled: true },
+          {
+            id: 'c1',
+            name: '政治素质',
+            description: '信念坚定、对党忠诚。',
+            minScore: 0,
+            maxScore: 20,
+            sortOrder: 1,
+            enabled: true,
+          },
         ]),
       },
       settings: { get: vi.fn(async () => settings) },
@@ -202,6 +257,7 @@ const { AdminTickets } = await import('../Tickets.js');
 const { AdminDepartments } = await import('../Departments.js');
 const { AdminEmployees } = await import('../Employees.js');
 const { AdminCriteria } = await import('../Criteria.js');
+const { AdminQuestionnaire } = await import('../Questionnaire.js');
 const { AdminSettings } = await import('../Settings.js');
 const { AdminResults } = await import('../Results.js');
 const { AdminPrintSheet } = await import('../PrintSheet.js');
@@ -344,7 +400,9 @@ describe('后台页面渲染', () => {
   it('结果页渲染排名、参与票种与导出入口', async () => {
     renderPage(<AdminResults />);
 
-    expect(await screen.findByText('张三')).toBeInTheDocument();
+    // 结果是按被评列出的：被评对象是职务/车间，不是职工
+    expect(await screen.findByText('主任')).toBeInTheDocument();
+    expect(await screen.findByRole('columnheader', { name: '被评对象' })).toBeInTheDocument();
     expect(await screen.findByText(/共收到 1 张提交表/)).toBeInTheDocument();
     // Button 带 href 时渲染成 a 标签，角色是 link 而不是 button
     expect(screen.getByRole('link', { name: /导\s*出\s*Excel/ })).toBeInTheDocument();
@@ -361,7 +419,9 @@ describe('后台页面渲染', () => {
 
     expect(await screen.findByText('职工素质评议打分表')).toBeInTheDocument();
     expect(await screen.findByText('某某单位职工素质评议')).toBeInTheDocument();
-    expect(await screen.findByText('张三')).toBeInTheDocument();
+    // 表体按被评列出结果（不再有姓名与工号列）
+    expect(await screen.findByText('主任')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: '工号' })).not.toBeInTheDocument();
     expect(await screen.findByText(/考评人签字/)).toBeInTheDocument();
     // 最终交付物的打印增强必须保留：A4 横向、表头跨页重复、行不切断
     const styles = Array.from(document.querySelectorAll('style'))

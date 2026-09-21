@@ -5,7 +5,10 @@
  * 交给 `lib/scoring.ts` 的 computeResults。结果页与 Excel 导出共用同一次计算的
  * 输出，避免「页面一个数、导出另一个数」这类最难解释的差异。
  *
- * 软删除后的数据仍然参与统计：被停用的部门、职工、项点、票种都不会从结果里
+ * 维度是**被评列**（主任、党支部书记、车间得分…）而不是职工：参考表的打分对象是
+ * 职务/车间，职工名单不参与打分（见 docs/参考表.xlsx 与 0003_questionnaire 迁移）。
+ *
+ * 软删除后的数据仍然参与统计：被停用的部门、被评列、项点、票种都不会从结果里
  * 消失，只有 `enabled` 标记变 false，保证历史成绩可读（设计文档第 15 节）。
  */
 import { computeResults } from '../lib/scoring.js';
@@ -22,10 +25,9 @@ export interface ResultCriterionScore {
 
 export interface ResultRow {
   rank: number;
-  employeeId: string;
-  employeeName: string;
-  employeeNo: string | null;
-  /** 职工是否在册；停用的职工仍出现在结果里，便于解释历史成绩 */
+  voteColumnId: string;
+  voteColumnName: string;
+  /** 被评列是否启用；停用的列仍出现在结果里，便于解释历史成绩 */
   enabled: boolean;
   comprehensiveScore: number;
   criteria: ResultCriterionScore[];
@@ -54,9 +56,9 @@ export interface ResultsDto {
 /** 结果页与导出共用的一次性计算结果。 */
 export interface DepartmentResults {
   dto: ResultsDto;
-  /** 各项明细（职工 × 有成数据的项点），导出用 */
+  /** 各项明细（被评列 × 有成数据的项点），导出用 */
   details: Array<{
-    employeeName: string;
+    voteColumnName: string;
     criterionName: string;
     rawScore: number;
     normalizedScore: number;
@@ -76,8 +78,8 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
   const department = await prisma.department.findUnique({ where: { id: departmentId } });
   if (!department) throw ApiError.notFound('部门不存在');
 
-  const [employees, criteria, ticketTypes, sheets] = await Promise.all([
-    prisma.employee.findMany({
+  const [voteColumns, criteria, ticketTypes, sheets] = await Promise.all([
+    prisma.voteColumn.findMany({
       where: { departmentId },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     }),
@@ -90,7 +92,7 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
   ]);
 
   const scoring = computeResults({
-    employeeIds: employees.map((employee) => employee.id),
+    voteColumnIds: voteColumns.map((column) => column.id),
     criteria: criteria.map((criterion) => ({
       id: criterion.id,
       minScore: criterion.minScore,
@@ -100,41 +102,40 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
     sheets: sheets.map((sheet) => ({
       ticketTypeId: sheet.ticketTypeId,
       items: sheet.items.map((item) => ({
-        employeeId: item.employeeId,
+        voteColumnId: item.voteColumnId,
         criterionId: item.criterionId,
         score: item.score,
       })),
     })),
   });
 
-  const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+  const columnById = new Map(voteColumns.map((column) => [column.id, column]));
   const criterionById = new Map(criteria.map((criterion) => [criterion.id, criterion]));
   const ticketTypeById = new Map(ticketTypes.map((type) => [type.id, type]));
 
-  // 排名：综合得分降序，同分并列（1、2、2、4 式），同分内按姓名稳定排序。
-  const sorted = [...scoring.employees].sort((a, b) => {
+  // 排名：综合得分降序，同分并列（1、2、2、4 式），同分内按列名稳定排序。
+  const sorted = [...scoring.voteColumns].sort((a, b) => {
     if (b.comprehensiveScore !== a.comprehensiveScore) return b.comprehensiveScore - a.comprehensiveScore;
-    const nameA = employeeById.get(a.employeeId)?.name ?? '';
-    const nameB = employeeById.get(b.employeeId)?.name ?? '';
+    const nameA = columnById.get(a.voteColumnId)?.name ?? '';
+    const nameB = columnById.get(b.voteColumnId)?.name ?? '';
     return nameA.localeCompare(nameB, 'zh-CN');
   });
 
   let rank = 0;
   let previousScore: number | null = null;
-  const rows: ResultRow[] = sorted.map((employee, index) => {
-    if (previousScore === null || employee.comprehensiveScore !== previousScore) {
+  const rows: ResultRow[] = sorted.map((column, index) => {
+    if (previousScore === null || column.comprehensiveScore !== previousScore) {
       rank = index + 1;
-      previousScore = employee.comprehensiveScore;
+      previousScore = column.comprehensiveScore;
     }
-    const meta = employeeById.get(employee.employeeId);
+    const meta = columnById.get(column.voteColumnId);
     return {
       rank,
-      employeeId: employee.employeeId,
-      employeeName: meta?.name ?? '',
-      employeeNo: meta?.employeeNo ?? null,
+      voteColumnId: column.voteColumnId,
+      voteColumnName: meta?.name ?? '',
       enabled: meta?.enabled ?? false,
-      comprehensiveScore: employee.comprehensiveScore,
-      criteria: employee.criteria.map((criterion) => ({
+      comprehensiveScore: column.comprehensiveScore,
+      criteria: column.criteria.map((criterion) => ({
         criterionId: criterion.criterionId,
         criterionName: criterionById.get(criterion.criterionId)?.name ?? '',
         rawScore: criterion.rawScore,
@@ -149,7 +150,7 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
 
   const details = rows.flatMap((row) =>
     row.criteria.map((criterion) => ({
-      employeeName: row.employeeName,
+      voteColumnName: row.voteColumnName,
       criterionName: criterion.criterionName,
       rawScore: criterion.rawScore,
       normalizedScore: criterion.normalizedScore,

@@ -34,8 +34,33 @@ export interface TicketTypeDto {
   unusedCount?: number;
 }
 
+/**
+ * 问卷类型（与 docs/参考表.xlsx 的两张表一一对应）。
+ *   person   —— 个人问卷：行 = 项点，列 = 多个被评职务（主任、党支部书记…）
+ *   workshop —— 车间问卷：行 = 项点，只有一列「得分」
+ * 存字符串而不是数据库 enum：将来多一种问卷形态不该要求写迁移。
+ */
+export const QUESTIONNAIRE_TYPES: readonly string[] = ['person', 'workshop'];
+
 export interface DepartmentDto {
   id: string;
+  name: string;
+  sortOrder: number;
+  enabled: boolean;
+  /** 问卷类型：person = 个人问卷（多列被评职务），workshop = 车间问卷（单列得分） */
+  questionnaireType: string;
+  /** 表头左上角的附件号，如「附件1-1」 */
+  headerNote: string;
+  /** 打分表标题 */
+  title: string;
+  /** 表尾填写说明 */
+  footerNote: string;
+}
+
+/** 被评列：打分表的「列」，与职工名单分离（参考表的主任/副书记/得分等）。 */
+export interface VoteColumnDto {
+  id: string;
+  departmentId: string;
   name: string;
   sortOrder: number;
   enabled: boolean;
@@ -54,6 +79,8 @@ export interface CriterionDto {
   id: string;
   departmentId: string;
   name: string;
+  /** 项点描述，显示在打分表项点名称下方 */
+  description: string | null;
   minScore: number;
   maxScore: number;
   sortOrder: number;
@@ -507,6 +534,10 @@ export async function listDepartments(): Promise<DepartmentDto[]> {
     name: row.name,
     sortOrder: row.sortOrder,
     enabled: row.enabled,
+    questionnaireType: row.questionnaireType,
+    headerNote: row.headerNote,
+    title: row.title,
+    footerNote: row.footerNote,
   }));
 }
 
@@ -522,12 +553,33 @@ export async function createDepartment(
     data: { name, sortOrder: input.sortOrder ?? 0 },
   });
   await writeAudit('department.create', { name, operator });
-  return { id: created.id, name: created.name, sortOrder: created.sortOrder, enabled: created.enabled };
+  return {
+    id: created.id,
+    name: created.name,
+    sortOrder: created.sortOrder,
+    enabled: created.enabled,
+    questionnaireType: created.questionnaireType,
+    headerNote: created.headerNote,
+    title: created.title,
+    footerNote: created.footerNote,
+  };
 }
 
+/**
+ * 改部门。除名称/排序/启停外，还包括问卷表头配置（问卷类型、附件号、标题、填写说明）——
+ * 参考表的抬头与表尾说明都由这里配置，后台「问卷配置」页用的就是这几个字段。
+ */
 export async function updateDepartment(
   id: string,
-  patch: { name?: string; sortOrder?: number; enabled?: boolean },
+  patch: {
+    name?: string;
+    sortOrder?: number;
+    enabled?: boolean;
+    questionnaireType?: string;
+    headerNote?: string;
+    title?: string;
+    footerNote?: string;
+  },
   operator: string,
 ): Promise<DepartmentDto> {
   const current = await prisma.department.findUnique({ where: { id } });
@@ -538,10 +590,21 @@ export async function updateDepartment(
     const conflict = await prisma.department.findUnique({ where: { name } });
     if (conflict) throw ApiError.conflict(`部门「${name}」已存在`, 'DEPARTMENT_EXISTS');
   }
+  if (patch.questionnaireType !== undefined && !QUESTIONNAIRE_TYPES.includes(patch.questionnaireType)) {
+    throw ApiError.badRequest('问卷类型只能是「个人问卷」或「车间问卷」', 'QUESTIONNAIRE_TYPE_INVALID');
+  }
 
   const updated = await prisma.department.update({
     where: { id },
-    data: { name, sortOrder: patch.sortOrder, enabled: patch.enabled },
+    data: {
+      name,
+      sortOrder: patch.sortOrder,
+      enabled: patch.enabled,
+      questionnaireType: patch.questionnaireType,
+      headerNote: patch.headerNote,
+      title: patch.title,
+      footerNote: patch.footerNote,
+    },
   });
   await writeAudit('department.update', { name: updated.name, operator });
   return {
@@ -549,6 +612,10 @@ export async function updateDepartment(
     name: updated.name,
     sortOrder: updated.sortOrder,
     enabled: updated.enabled,
+    questionnaireType: updated.questionnaireType,
+    headerNote: updated.headerNote,
+    title: updated.title,
+    footerNote: updated.footerNote,
   };
 }
 
@@ -798,6 +865,13 @@ export async function importEmployees(
 // 项点
 // -----------------------------------------------------------------------------
 
+/** 描述留空即 null：空串与「没有描述」在打分表上要渲染成同一种结果。 */
+function normalizeDescription(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  const text = value.trim();
+  return text === '' ? null : text;
+}
+
 export async function listCriteria(departmentId?: string): Promise<CriterionDto[]> {
   const rows = await prisma.criterion.findMany({
     where: { departmentId },
@@ -807,6 +881,7 @@ export async function listCriteria(departmentId?: string): Promise<CriterionDto[
     id: row.id,
     departmentId: row.departmentId,
     name: row.name,
+    description: row.description,
     minScore: row.minScore,
     maxScore: row.maxScore,
     sortOrder: row.sortOrder,
@@ -817,6 +892,7 @@ export async function listCriteria(departmentId?: string): Promise<CriterionDto[
 export interface CriterionCreateInput {
   departmentId: string;
   name: string;
+  description?: string | null;
   minScore: number;
   maxScore: number;
   sortOrder?: number;
@@ -837,6 +913,7 @@ export async function createCriterion(
     data: {
       departmentId: input.departmentId,
       name: input.name.trim(),
+      description: normalizeDescription(input.description),
       minScore: input.minScore,
       maxScore: input.maxScore,
       sortOrder: input.sortOrder ?? 0,
@@ -847,6 +924,7 @@ export async function createCriterion(
     id: created.id,
     departmentId: created.departmentId,
     name: created.name,
+    description: created.description,
     minScore: created.minScore,
     maxScore: created.maxScore,
     sortOrder: created.sortOrder,
@@ -858,6 +936,7 @@ export async function updateCriterion(
   id: string,
   patch: {
     name?: string;
+    description?: string | null;
     minScore?: number;
     maxScore?: number;
     sortOrder?: number;
@@ -879,6 +958,8 @@ export async function updateCriterion(
     where: { id },
     data: {
       name: patch.name?.trim(),
+      description:
+        patch.description === undefined ? undefined : normalizeDescription(patch.description),
       minScore: patch.minScore,
       maxScore: patch.maxScore,
       sortOrder: patch.sortOrder,
@@ -890,6 +971,7 @@ export async function updateCriterion(
     id: updated.id,
     departmentId: updated.departmentId,
     name: updated.name,
+    description: updated.description,
     minScore: updated.minScore,
     maxScore: updated.maxScore,
     sortOrder: updated.sortOrder,
@@ -903,6 +985,91 @@ export async function disableCriterion(id: string, operator: string): Promise<vo
   if (!current) throw ApiError.notFound('项点不存在');
   await prisma.criterion.update({ where: { id }, data: { enabled: false } });
   await writeAudit('criterion.disable', { name: current.name, operator });
+}
+
+// -----------------------------------------------------------------------------
+// 被评列（打分表的列）
+// -----------------------------------------------------------------------------
+
+export async function listVoteColumns(departmentId?: string): Promise<VoteColumnDto[]> {
+  const rows = await prisma.voteColumn.findMany({
+    where: { departmentId },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    departmentId: row.departmentId,
+    name: row.name,
+    sortOrder: row.sortOrder,
+    enabled: row.enabled,
+  }));
+}
+
+export interface VoteColumnCreateInput {
+  departmentId: string;
+  name: string;
+  sortOrder?: number;
+}
+
+/**
+ * 新增被评列。
+ *
+ * 刻意不做重名校验：参考表的个人问卷里「副主任」就出现了两次（两个副主任岗位），
+ * 后台必须能原样照抄那张表。列名是否重复由组织者决定，系统不替他改需求。
+ */
+export async function createVoteColumn(
+  input: VoteColumnCreateInput,
+  operator: string,
+): Promise<VoteColumnDto> {
+  const name = input.name.trim();
+  const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
+  if (!department) throw ApiError.badRequest('部门不存在');
+
+  const created = await prisma.voteColumn.create({
+    data: {
+      departmentId: input.departmentId,
+      name,
+      sortOrder: input.sortOrder ?? 0,
+    },
+  });
+  await writeAudit('vote_column.create', { name, department: department.name, operator });
+  return {
+    id: created.id,
+    departmentId: created.departmentId,
+    name: created.name,
+    sortOrder: created.sortOrder,
+    enabled: created.enabled,
+  };
+}
+
+export async function updateVoteColumn(
+  id: string,
+  patch: { name?: string; sortOrder?: number; enabled?: boolean },
+  operator: string,
+): Promise<VoteColumnDto> {
+  const current = await prisma.voteColumn.findUnique({ where: { id } });
+  if (!current) throw ApiError.notFound('被评列不存在');
+
+  const updated = await prisma.voteColumn.update({
+    where: { id },
+    data: { name: patch.name?.trim(), sortOrder: patch.sortOrder, enabled: patch.enabled },
+  });
+  await writeAudit('vote_column.update', { name: updated.name, operator });
+  return {
+    id: updated.id,
+    departmentId: updated.departmentId,
+    name: updated.name,
+    sortOrder: updated.sortOrder,
+    enabled: updated.enabled,
+  };
+}
+
+/** 删除被评列 —— 软删除，历史评分里的该列仍可读。 */
+export async function disableVoteColumn(id: string, operator: string): Promise<void> {
+  const current = await prisma.voteColumn.findUnique({ where: { id } });
+  if (!current) throw ApiError.notFound('被评列不存在');
+  await prisma.voteColumn.update({ where: { id }, data: { enabled: false } });
+  await writeAudit('vote_column.disable', { name: current.name, operator });
 }
 
 // -----------------------------------------------------------------------------

@@ -26,6 +26,8 @@ const ListQuerySchema = z.object({
 const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
   name: z.string().trim().min(1, '项点名称不能为空').max(50),
+  // 项点描述即参考表里项点名称下方那段长文字；留空表示没有描述
+  description: z.string().trim().max(1000).nullable().optional(),
   minScore: z.number().int(),
   maxScore: z.number().int(),
   sortOrder: z.number().int().min(0).optional(),
@@ -33,6 +35,7 @@ const CreateSchema = z.object({
 
 const PatchSchema = z.object({
   name: z.string().trim().min(1).max(50).optional(),
+  description: z.string().trim().max(1000).nullable().optional(),
   minScore: z.number().int().optional(),
   maxScore: z.number().int().optional(),
   sortOrder: z.number().int().min(0).optional(),

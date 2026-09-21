@@ -111,6 +111,17 @@ export interface DepartmentBrief {
   name: string;
 }
 
+/** 后台部门视图：除基础字段外还带问卷表头配置（参考表的抬头与表尾说明）。 */
+export interface DepartmentAdminDto extends DepartmentBrief {
+  sortOrder: number;
+  enabled: boolean;
+  /** person = 个人问卷（多列被评职务），workshop = 车间问卷（单列得分） */
+  questionnaireType: string;
+  headerNote: string;
+  title: string;
+  footerNote: string;
+}
+
 export interface TicketTypeDto {
   id: string;
   code: string;
@@ -141,11 +152,34 @@ export interface VoteSessionResult {
 export interface CriterionDto {
   id: string;
   name: string;
+  /** 项点描述，显示在打分表项点名称下方（参考表里的那段长文字） */
+  description: string | null;
   minScore: number;
   maxScore: number;
   sortOrder: number;
   enabled: boolean;
 }
+
+/** 被评列：打分表的「列」，与职工名单分离（主任、党支部书记、得分…）。 */
+export interface VoteColumnDto {
+  id: string;
+  departmentId: string;
+  name: string;
+  sortOrder: number;
+  enabled: boolean;
+}
+
+/** 打分表里的被评列视图：投票端只需要 id 与名称。 */
+export interface VoteColumnBrief {
+  id: string;
+  name: string;
+}
+
+/** 打分表用的项点视图：不含排序与启停（后端只返回启用的）。 */
+export type VoteCriterionDto = Pick<
+  CriterionDto,
+  'id' | 'name' | 'description' | 'minScore' | 'maxScore'
+>;
 
 export interface EmployeeDto {
   id: string;
@@ -155,14 +189,20 @@ export interface EmployeeDto {
   enabled: boolean;
 }
 
+/** 打分表：表头文案 + 项点（行）+ 被评列（列），与 docs/参考表.xlsx 的结构一致。 */
 export interface VoteSheetResult {
   department: DepartmentBrief;
-  criteria: CriterionDto[];
-  employees: EmployeeDto[];
+  /** person = 个人问卷（多列被评职务），workshop = 车间问卷（单列得分） */
+  questionnaireType: string;
+  headerNote: string;
+  title: string;
+  footerNote: string;
+  criteria: VoteCriterionDto[];
+  voteColumns: VoteColumnBrief[];
 }
 
 export interface SubmitItem {
-  employeeId: string;
+  voteColumnId: string;
   criterionId: string;
   score: number;
 }
@@ -224,9 +264,11 @@ export interface CriterionScoreDto {
 
 export interface ResultRowDto {
   rank: number;
-  employeeId: string;
-  employeeName: string;
-  employeeNo: string | null;
+  voteColumnId: string;
+  /** 被评对象（被评列名：主任、党支部书记、车间得分…） */
+  voteColumnName: string;
+  /** 该被评列是否仍在启用；停用的列仍出现在结果里，便于解释历史成绩 */
+  enabled: boolean;
   comprehensiveScore: number;
   criteria: CriterionScoreDto[];
 }
@@ -404,12 +446,36 @@ export const adminApi = {
   },
 
   departments: {
-    list: () => request<Array<DepartmentBrief & { sortOrder: number; enabled: boolean }>>('/admin/departments'),
+    list: () => request<DepartmentAdminDto[]>('/admin/departments'),
     create: (body: { name: string; sortOrder?: number }) =>
-      request<DepartmentBrief>('/admin/departments', { method: 'POST', body }),
-    update: (id: string, body: { name?: string; sortOrder?: number; enabled?: boolean }) =>
-      request<DepartmentBrief>(`/admin/departments/${id}`, { method: 'PATCH', body }),
+      request<DepartmentAdminDto>('/admin/departments', { method: 'POST', body }),
+    /** 除名称/排序/启停外，PATCH 还负责问卷表头配置（问卷类型、附件号、标题、填写说明） */
+    update: (
+      id: string,
+      body: {
+        name?: string;
+        sortOrder?: number;
+        enabled?: boolean;
+        questionnaireType?: string;
+        headerNote?: string;
+        title?: string;
+        footerNote?: string;
+      },
+    ) => request<DepartmentAdminDto>(`/admin/departments/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/departments/${id}`, { method: 'DELETE' }),
+  },
+
+  /** 被评列：打分表的列，与职工名单分离（参考表的主任/副书记/得分） */
+  voteColumns: {
+    list: (departmentId?: string) =>
+      request<VoteColumnDto[]>(
+        `/admin/vote-columns${departmentId ? `?departmentId=${encodeURIComponent(departmentId)}` : ''}`,
+      ),
+    create: (body: { departmentId: string; name: string; sortOrder?: number }) =>
+      request<VoteColumnDto>('/admin/vote-columns', { method: 'POST', body }),
+    update: (id: string, body: { name?: string; sortOrder?: number; enabled?: boolean }) =>
+      request<VoteColumnDto>(`/admin/vote-columns/${id}`, { method: 'PATCH', body }),
+    remove: (id: string) => request<void>(`/admin/vote-columns/${id}`, { method: 'DELETE' }),
   },
 
   employees: {
@@ -433,8 +499,14 @@ export const adminApi = {
   criteria: {
     list: (departmentId: string) =>
       request<CriterionDto[]>(`/admin/criteria?departmentId=${encodeURIComponent(departmentId)}`),
-    create: (body: { departmentId: string; name: string; minScore: number; maxScore: number; sortOrder?: number }) =>
-      request<CriterionDto>('/admin/criteria', { method: 'POST', body }),
+    create: (body: {
+      departmentId: string;
+      name: string;
+      description?: string | null;
+      minScore: number;
+      maxScore: number;
+      sortOrder?: number;
+    }) => request<CriterionDto>('/admin/criteria', { method: 'POST', body }),
     update: (id: string, body: Partial<CriterionDto>) =>
       request<CriterionDto>(`/admin/criteria/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/criteria/${id}`, { method: 'DELETE' }),

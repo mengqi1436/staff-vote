@@ -1,26 +1,29 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useCallback, useState } from 'react';
-import type { CriterionDto, EmployeeDto } from '../../lib/api.js';
+import type { VoteColumnBrief } from '../../lib/api.js';
 import { ScoreTable, cellKey, collectScoreErrors, validateScore } from './ScoreTable.js';
 import type { CellError, ScoreValues } from './ScoreTable.js';
+import type { VoteCriterionDto } from '../../lib/api.js';
 
 /**
  * 打分表的测试。
  *
+ * 表形与 docs/参考表.xlsx 一致：行 = 评价项点，列 = 被评列。
  * 这里刻意用受控外壳（Harness）而不是直接渲染组件：打分表本身只负责渲染与即时标红，
  * 「填满且合法才能提交」是页面用 collectScoreErrors 做的门禁，两者一起才是职工真实走的路。
  */
 
-const CRITERIA: CriterionDto[] = [
-  { id: 'c1', name: '工作质量', minScore: 0, maxScore: 10, sortOrder: 1, enabled: true },
-  { id: 'c2', name: '工作效率', minScore: 5, maxScore: 20, sortOrder: 2, enabled: true },
+const CRITERIA: VoteCriterionDto[] = [
+  { id: 'c1', name: '政治素质', description: '信念坚定、对党忠诚。', minScore: 0, maxScore: 10 },
+  { id: 'c2', name: '敬业担当', description: null, minScore: 5, maxScore: 20 },
 ];
 
-const EMPLOYEES: EmployeeDto[] = [
-  { id: 'e1', name: '张三', employeeNo: 'A001', sortOrder: 1, enabled: true },
-  { id: 'e2', name: '李四', employeeNo: null, sortOrder: 2, enabled: true },
+const VOTE_COLUMNS: VoteColumnBrief[] = [
+  { id: 'v1', name: '主任' },
+  { id: 'v2', name: '党支部书记' },
 ];
 
+/** 单元格位置：[项点行, 被评列]。 */
 function cellAt(row: number, col: number): HTMLInputElement {
   const input = document.querySelector<HTMLInputElement>(`[data-row="${row}"][data-col="${col}"]`);
   if (input === null) throw new Error(`没有找到第 ${row} 行第 ${col} 列的输入框`);
@@ -36,31 +39,37 @@ function fill(row: number, col: number, value: string): void {
 }
 
 interface HarnessProps {
-  criteria?: CriterionDto[];
-  employees?: EmployeeDto[];
+  criteria?: VoteCriterionDto[];
+  voteColumns?: VoteColumnBrief[];
+  questionnaireType?: string;
+  headerNote?: string;
+  title?: string;
+  footerNote?: string;
   onSubmit?: () => void;
-  revealTarget?: { row: number; col: number } | null;
 }
 
 /** 受控外壳：值与校验结果放在父级，模拟打分表页的真实用法。 */
 function Harness({
   criteria = CRITERIA,
-  employees = EMPLOYEES,
+  voteColumns = VOTE_COLUMNS,
+  questionnaireType = 'person',
+  headerNote = '附件1-1',
+  title = 'xx车间负责人评价问卷',
+  footerNote = '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
   onSubmit = () => undefined,
-  revealTarget = null,
 }: HarnessProps) {
   const [values, setValues] = useState<ScoreValues>({});
   const [invalidCells, setInvalidCells] = useState<ReadonlySet<string>>(new Set());
   const [errors, setErrors] = useState<CellError[]>([]);
 
-  const onChange = useCallback((employeeId: string, criterionId: string, raw: string) => {
-    setValues((prev) => ({ ...prev, [employeeId]: { ...prev[employeeId], [criterionId]: raw } }));
+  const onChange = useCallback((voteColumnId: string, criterionId: string, raw: string) => {
+    setValues((prev) => ({ ...prev, [voteColumnId]: { ...prev[voteColumnId], [criterionId]: raw } }));
   }, []);
 
   const submit = () => {
-    const found = collectScoreErrors(criteria, employees, values);
+    const found = collectScoreErrors(criteria, voteColumns, values);
     setErrors(found);
-    setInvalidCells(new Set(found.map((item) => cellKey(item.employeeId, item.criterionId))));
+    setInvalidCells(new Set(found.map((item) => cellKey(item.voteColumnId, item.criterionId))));
     if (found.length === 0) onSubmit();
   };
 
@@ -68,19 +77,22 @@ function Harness({
     <div>
       <ScoreTable
         criteria={criteria}
-        employees={employees}
+        voteColumns={voteColumns}
+        questionnaireType={questionnaireType}
+        headerNote={headerNote}
+        title={title}
+        footerNote={footerNote}
         values={values}
         onChange={onChange}
         invalidCells={invalidCells}
-        revealTarget={revealTarget}
       />
       <button type="button" onClick={submit}>
         提交
       </button>
       <ul data-testid="errors">
         {errors.map((item) => (
-          <li key={cellKey(item.employeeId, item.criterionId)}>
-            第 {item.row} 行第 {item.col} 列（{item.employeeName} · {item.criterionName}）：{item.reason}
+          <li key={cellKey(item.voteColumnId, item.criterionId)}>
+            第 {item.row} 项「{item.criterionName}」的「{item.voteColumnName}」：{item.reason}
           </li>
         ))}
       </ul>
@@ -88,14 +100,87 @@ function Harness({
   );
 }
 
-describe('ScoreTable 渲染', () => {
-  it('按项点渲染列、按职工渲染行，每格带 min/max/step', () => {
+describe('ScoreTable 渲染（参考表版式）', () => {
+  it('抬头、表标题、序号列、项点行、填写说明都按参考表渲染', () => {
     render(<Harness />);
 
-    expect(screen.getByRole('columnheader', { name: /工作质量/ })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /工作效率/ })).toBeInTheDocument();
-    expect(screen.getByRole('rowheader', { name: /张三/ })).toBeInTheDocument();
-    expect(screen.getByRole('rowheader', { name: /李四/ })).toBeInTheDocument();
+    // 抬头与标题（都在表格上方，无框线）
+    expect(screen.getByText('附件1-1')).toBeInTheDocument();
+    expect(screen.getByText('xx车间负责人评价问卷')).toBeInTheDocument();
+    // 序号列 + 项点列表头（由两行文字组成）
+    expect(screen.getByRole('columnheader', { name: '序号' })).toBeInTheDocument();
+    expect(screen.getByText('职务与姓名')).toBeInTheDocument();
+    expect(screen.getByText('评价项点')).toBeInTheDocument();
+    // 被评列就是列头
+    expect(screen.getByRole('columnheader', { name: '主任' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '党支部书记' })).toBeInTheDocument();
+    // 行 = 项点（含描述）
+    expect(screen.getByRole('rowheader', { name: /政治素质/ })).toBeInTheDocument();
+    expect(screen.getByText('信念坚定、对党忠诚。')).toBeInTheDocument();
+    expect(screen.getByRole('rowheader', { name: /敬业担当/ })).toBeInTheDocument();
+    // 填写说明合并整行
+    expect(screen.getByText(/弃权、不填视为0分/)).toBeInTheDocument();
+    // 序号 1、2
+    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+  });
+
+  it('个人问卷的表头是两行：列名只占第一行，第二行留空；序号与项点跨两行', () => {
+    const { container } = render(<Harness />);
+    const headRows = container.querySelectorAll('.score-table thead tr');
+    // 附件行 + 标题行 + 表头两行
+    expect(headRows).toHaveLength(4);
+
+    const [captionRow, titleRow, firstHeadRow, secondHeadRow] = headRows;
+    expect(captionRow?.querySelector('th')?.textContent).toBe('附件1-1');
+    expect(titleRow?.querySelector('th')?.textContent).toBe('xx车间负责人评价问卷');
+
+    // 第一行：序号(rowSpan=2) + 项点(rowSpan=2) + 各被评列
+    const first = [...(firstHeadRow?.children ?? [])] as HTMLTableCellElement[];
+    expect(first.map((cell) => cell.textContent)).toEqual([
+      '序号',
+      '职务与姓名评价项点',
+      '主任',
+      '党支部书记',
+    ]);
+    expect(first[0]?.rowSpan).toBe(2);
+    expect(first[1]?.rowSpan).toBe(2);
+    expect(first[2]?.rowSpan).toBe(1);
+
+    // 第二行只有各被评列的空格，数量与列数一致
+    expect(secondHeadRow?.children).toHaveLength(2);
+
+    // 「职务与姓名」靠右、「评价项点」靠左（参考表用两行错位代替斜线）
+    expect(first[1]?.querySelector('.head-name')).not.toBeNull();
+    expect(first[1]?.querySelector('.head-criterion')).not.toBeNull();
+  });
+
+  it('车间问卷的表头是单行「序号 / 项点 / 得分」', () => {
+    const { container } = render(
+      <Harness questionnaireType="workshop" voteColumns={[{ id: 'v9', name: '得分' }]} />,
+    );
+
+    const headRows = container.querySelectorAll('.score-table thead tr');
+    expect(headRows).toHaveLength(3);
+    const headCells = [...(headRows[2]?.children ?? [])] as HTMLTableCellElement[];
+    expect(headCells.map((cell) => cell.textContent)).toEqual(['序号', '项点', '得分']);
+    expect(headCells.every((cell) => cell.rowSpan === 1)).toBe(true);
+    // 车间问卷的表格带 workshop 类（列头字号用 12pt 那一档）
+    expect(container.querySelector('.score-table')?.classList.contains('workshop')).toBe(true);
+  });
+
+  it('抬头、标题、填写说明留空时不渲染对应行', () => {
+    render(<Harness headerNote="" title="" footerNote="   " />);
+
+    expect(screen.queryByText('附件1-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('xx车间负责人评价问卷')).not.toBeInTheDocument();
+    // 表头仍然是完整的：序号 + 项点 + 被评列
+    expect(screen.getByRole('columnheader', { name: '序号' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '主任' })).toBeInTheDocument();
+  });
+
+  it('按项点渲染行、按被评列渲染列，每格带 min/max/step', () => {
+    render(<Harness />);
 
     // 2 行 × 2 列
     expect(cellInputs()).toHaveLength(4);
@@ -106,33 +191,16 @@ describe('ScoreTable 渲染', () => {
     expect(first).toHaveAttribute('min', '0');
     expect(first).toHaveAttribute('max', '10');
 
-    const second = cellAt(0, 1);
+    const second = cellAt(1, 0);
     expect(second).toHaveAttribute('min', '5');
     expect(second).toHaveAttribute('max', '20');
   });
 
-  it('超过每页行数时只渲染当前页，翻页不丢已填内容', () => {
-    const many: EmployeeDto[] = Array.from({ length: 60 }, (_, index) => ({
-      id: `e${index}`,
-      name: `职工${index + 1}`,
-      employeeNo: null,
-      sortOrder: index + 1,
-      enabled: true,
-    }));
-    render(<Harness employees={many} />);
+  it('每格的可访问名称同时点明项点与被评列', () => {
+    render(<Harness />);
 
-    // 第一页 50 行 × 2 列
-    expect(cellInputs()).toHaveLength(100);
-    expect(screen.queryByRole('rowheader', { name: /职工60/ })).not.toBeInTheDocument();
-
-    fill(0, 0, '7');
-    fireEvent.click(screen.getByRole('button', { name: /下一页/ }));
-
-    expect(screen.getByText(/第 2 \/ 2 页/)).toBeInTheDocument();
-    expect(cellInputs()).toHaveLength(20);
-
-    fireEvent.click(screen.getByRole('button', { name: /上一页/ }));
-    expect(cellAt(0, 0)).toHaveValue(7);
+    expect(cellAt(0, 0)).toHaveAttribute('aria-label', '第 1 项 政治素质 —— 主任');
+    expect(cellAt(1, 1)).toHaveAttribute('aria-label', '第 2 项 敬业担当 —— 党支部书记');
   });
 });
 
@@ -163,12 +231,12 @@ describe('ScoreTable 校验与标红', () => {
     fill(0, 0, '10');
     expect(cellAt(0, 0)).not.toHaveClass('invalid');
 
-    fill(0, 1, '4');
-    expect(cellAt(0, 1)).toHaveClass('invalid');
-    fill(0, 1, '5');
-    expect(cellAt(0, 1)).not.toHaveClass('invalid');
-    fill(0, 1, '20');
-    expect(cellAt(0, 1)).not.toHaveClass('invalid');
+    fill(1, 0, '4');
+    expect(cellAt(1, 0)).toHaveClass('invalid');
+    fill(1, 0, '5');
+    expect(cellAt(1, 0)).not.toHaveClass('invalid');
+    fill(1, 0, '20');
+    expect(cellAt(1, 0)).not.toHaveClass('invalid');
   });
 
   it('空格平时不标红，提交被拦下后才标红', () => {
@@ -179,7 +247,9 @@ describe('ScoreTable 校验与标红', () => {
 
     expect(cellAt(0, 0)).toHaveClass('invalid');
     expect(cellAt(0, 0)).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByTestId('errors').textContent).toContain('第 1 行第 1 列（张三 · 工作质量）：未填写');
+    expect(screen.getByTestId('errors').textContent).toContain(
+      '第 1 项「政治素质」的「主任」：未填写',
+    );
   });
 });
 
@@ -219,8 +289,9 @@ describe('填满且合法才能提交', () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />);
 
+    // 行是项点、列是被评列：c1 区间 0–10，c2 区间 5–20
     fill(0, 0, '8');
-    fill(0, 1, '12');
+    fill(0, 1, '10');
     fill(1, 0, '6');
     fill(1, 1, '9');
     fireEvent.click(screen.getByRole('button', { name: '提交' }));
@@ -230,7 +301,7 @@ describe('填满且合法才能提交', () => {
     expect(cellInputs().some((input) => input.classList.contains('invalid'))).toBe(false);
   });
 
-  it('有小数或越界时拦下提交并指到具体行列', () => {
+  it('有小数或越界时拦下提交并指到具体项点与被评列', () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />);
 
@@ -241,7 +312,9 @@ describe('填满且合法才能提交', () => {
     fireEvent.click(screen.getByRole('button', { name: '提交' }));
 
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByTestId('errors').textContent).toContain('第 1 行第 1 列（张三 · 工作质量）：只能填整数');
+    expect(screen.getByTestId('errors').textContent).toContain(
+      '第 1 项「政治素质」的「主任」：只能填整数',
+    );
   });
 });
 
@@ -259,17 +332,16 @@ describe('validateScore', () => {
 });
 
 describe('打分表的无障碍关联', () => {
-  it('每格有稳定的锚点 id，并用 aria-describedby 关联表头的区间说明', () => {
+  it('每格有稳定的锚点 id，并用 aria-describedby 关联该项点的区间说明', () => {
     render(<Harness />);
 
     const cell = cellAt(0, 0);
-    expect(cell).toHaveAttribute('id', 'cell-e1-c1');
+    expect(cell).toHaveAttribute('id', 'cell-v1-c1');
     expect(cell).toHaveAttribute('aria-describedby', 'range-c1');
 
     const hint = document.getElementById('range-c1');
     expect(hint).not.toBeNull();
-    expect(hint?.textContent).toBe('0–10 分');
-    expect(screen.getByRole('columnheader', { name: /工作质量/ })).toContainElement(hint);
+    expect(hint?.textContent).toBe('政治素质可填 0 到 10 的整数');
   });
 
   it('非法时把错误原因也挂进 aria-describedby，并保留格内 title 作 inline 错误', () => {
@@ -278,15 +350,15 @@ describe('打分表的无障碍关联', () => {
     fireEvent.change(cellAt(0, 0), { target: { value: '3.5' } });
 
     const cell = cellAt(0, 0);
-    expect(cell).toHaveAttribute('aria-describedby', 'range-c1 err-e1-c1');
+    expect(cell).toHaveAttribute('aria-describedby', 'range-c1 err-v1-c1');
     expect(cell).toHaveAttribute('title', '只能填整数');
-    expect(document.getElementById('err-e1-c1')?.textContent).toBe('只能填整数');
+    expect(document.getElementById('err-v1-c1')?.textContent).toBe('只能填整数');
 
     // 修好后关联退化回区间说明，标红与 title 一起撤销
     fireEvent.change(cell, { target: { value: '3' } });
     expect(cell).toHaveAttribute('aria-describedby', 'range-c1');
     expect(cell).not.toHaveAttribute('title');
-    expect(document.getElementById('err-e1-c1')).toBeNull();
+    expect(document.getElementById('err-v1-c1')).toBeNull();
   });
 });
 
@@ -314,24 +386,6 @@ describe('打分表的 blur 校验', () => {
 
     expect(cellAt(0, 0)).not.toHaveClass('invalid');
     expect(cellInputs().some((input) => input.classList.contains('invalid'))).toBe(false);
-  });
-});
-
-describe('只翻页不抢焦点', () => {
-  it('revealTarget 把目标行所在的页翻出来，但焦点留在原地', () => {
-    const many: EmployeeDto[] = Array.from({ length: 60 }, (_, index) => ({
-      id: `e${index}`,
-      name: `职工${index + 1}`,
-      employeeNo: null,
-      sortOrder: index + 1,
-      enabled: true,
-    }));
-    render(<Harness employees={many} revealTarget={{ row: 55, col: 0 }} />);
-
-    expect(screen.getByText(/第 2 \/ 2 页/)).toBeInTheDocument();
-    expect(screen.getByRole('rowheader', { name: /职工60/ })).toBeInTheDocument();
-    // 焦点归页面的 error summary，表格不许把焦点抢走
-    expect(document.activeElement).toBe(document.body);
   });
 });
 

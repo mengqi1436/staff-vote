@@ -9,6 +9,7 @@ import {
   LogoutOutlined,
   OrderedListOutlined,
   PieChartOutlined,
+  ProfileOutlined,
   QrcodeOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
@@ -35,6 +36,7 @@ import { useAuth } from '../../lib/auth.js';
 const PAGE_TITLES: Record<string, string> = {
   '/admin': '概览',
   '/admin/departments': '部门管理',
+  '/admin/questionnaire': '问卷配置',
   '/admin/employees': '职工名单',
   '/admin/criteria': '评分项点',
   '/admin/ticket-types': '票种权重',
@@ -55,6 +57,11 @@ const MENU_ITEMS: MenuProps['items'] = [
         key: '/admin/departments',
         icon: <ApartmentOutlined />,
         label: <Link to="/admin/departments">部门管理</Link>,
+      },
+      {
+        key: '/admin/questionnaire',
+        icon: <ProfileOutlined />,
+        label: <Link to="/admin/questionnaire">问卷配置</Link>,
       },
       {
         key: '/admin/employees',

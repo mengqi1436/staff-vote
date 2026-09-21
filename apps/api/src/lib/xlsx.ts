@@ -126,14 +126,13 @@ export interface ResultsExportInput {
   /** 综合排名 */
   rows: Array<{
     rank: number;
-    employeeName: string;
-    employeeNo: string | null;
+    voteColumnName: string;
     comprehensiveScore: number;
     criterionCount: number;
   }>;
-  /** 各项明细：每行一个「职工 × 项点」 */
+  /** 各项明细：每行一个「被评列 × 项点」 */
   details: Array<{
-    employeeName: string;
+    voteColumnName: string;
     criterionName: string;
     rawScore: number;
     normalizedScore: number;
@@ -161,15 +160,13 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
     info,
     [
       { header: '排名', key: 'rank', width: 8 },
-      { header: '姓名', key: 'employeeName', width: 16 },
-      { header: '工号', key: 'employeeNo', width: 16 },
+      { header: '被评对象', key: 'voteColumnName', width: 20 },
       { header: '综合得分', key: 'comprehensiveScore', width: 12 },
       { header: '计分项点数', key: 'criterionCount', width: 12 },
     ],
     input.rows.map((row) => ({
       rank: row.rank,
-      employeeName: row.employeeName,
-      employeeNo: row.employeeNo ?? '',
+      voteColumnName: row.voteColumnName,
       comprehensiveScore: row.comprehensiveScore,
       criterionCount: row.criterionCount,
     })),
@@ -179,14 +176,14 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
     workbook.addWorksheet('各项明细'),
     [],
     [
-      { header: '姓名', key: 'employeeName', width: 16 },
+      { header: '被评对象', key: 'voteColumnName', width: 20 },
       { header: '项点', key: 'criterionName', width: 24 },
       { header: '原始分', key: 'rawScore', width: 12 },
       { header: '归一化分', key: 'normalizedScore', width: 12 },
       { header: '参与票种', key: 'ticketTypes', width: 24 },
     ],
     input.details.map((row) => ({
-      employeeName: row.employeeName,
+      voteColumnName: row.voteColumnName,
       criterionName: row.criterionName,
       rawScore: row.rawScore,
       normalizedScore: row.normalizedScore,

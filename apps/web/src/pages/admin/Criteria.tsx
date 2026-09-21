@@ -32,6 +32,7 @@ import {
 
 interface CriterionForm {
   name: string;
+  description: string;
   minScore: number;
   maxScore: number;
   sortOrder: number;
@@ -54,7 +55,7 @@ const FORMULA_ROWS: FormulaRow[] = [
   {
     step: '② 综合得分',
     formula: 'Σ(各项归一化分) ÷ 参与计算的项点数',
-    note: '每项权重相同，与项点满分大小无关；没有收到票的项点不进入分母。',
+    note: '每项权重相同，与项点满分大小无关；本部门一张表都没有的项点不进入分母。',
   },
   {
     step: '③ 举例',
@@ -140,6 +141,7 @@ export function AdminCriteria() {
     form.resetFields();
     form.setFieldsValue({
       name: '',
+      description: '',
       minScore: 0,
       maxScore: 100,
       sortOrder: (data?.length ?? 0) + 1,
@@ -152,6 +154,7 @@ export function AdminCriteria() {
     setEditing(row);
     form.setFieldsValue({
       name: row.name,
+      description: row.description ?? '',
       minScore: row.minScore,
       maxScore: row.maxScore,
       sortOrder: row.sortOrder,
@@ -210,6 +213,30 @@ export function AdminCriteria() {
 
   const columns: TableColumnsType<CriterionDto> = [
     { title: '项点名称', dataIndex: 'name' },
+    {
+      title: '项点描述',
+      dataIndex: 'description',
+      // 描述是长文字，表格里截断显示、悬停看全文；留空时打分表不渲染这一行
+      render: (value: string | null) =>
+        value ? (
+          <Tooltip title={value}>
+            <span
+              style={{
+                display: 'inline-block',
+                maxWidth: 360,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                verticalAlign: 'bottom',
+              }}
+            >
+              {value}
+            </span>
+          </Tooltip>
+        ) : (
+          <span style={{ color: 'rgba(0, 0, 0, 0.45)' }}>未填写</span>
+        ),
+    },
     {
       title: '起评分',
       dataIndex: 'minScore',
@@ -358,7 +385,8 @@ export function AdminCriteria() {
             <ul style={{ margin: 0, paddingLeft: 20 }}>
               <li>单项归一化分 =（该项得分 − 起评分）÷（满分 − 起评分）× 100；超出区间时夹紧到 0～100。</li>
               <li>综合得分 = Σ(各项归一化分) ÷ 参与计算的项点数；各项满分一致时，才恰好等于算术平均。</li>
-              <li>某项点在某位职工上没有任何票时，该项不进入综合得分的分母（不按 0 分计入）。</li>
+              <li>某项点在本部门一张表都没有时，该项不进入综合得分的分母（不按 0 分计入）。</li>
+              <li>只要有表，弃权与不填的格子按 0 分计入（参考表口径）；参与计分的票种按实际有票的票种归一化，未发过的那种票不按 0 权重计入。</li>
               <li>口径由后端统一计算，结果页与导出文件同源；分值一律取整数，保留 2 位小数。</li>
             </ul>
           }
@@ -419,6 +447,19 @@ export function AdminCriteria() {
         <Form<CriterionForm> form={form} layout="vertical" requiredMark={false}>
           <Form.Item name="name" label="项点名称" rules={[{ required: true, message: '请输入项点名称' }]}>
             <Input placeholder="例如：政治素质" maxLength={50} />
+          </Form.Item>
+
+          <Form.Item
+            name="description"
+            label="项点描述"
+            extra="原样显示在打分表该行项点名称的下方（参考表里那段长文字），可留空"
+          >
+            <Input.TextArea
+              autoSize={{ minRows: 2, maxRows: 8 }}
+              maxLength={1000}
+              showCount
+              placeholder="例如：信念坚定、对党忠诚、认真贯彻落实上级党组织的指令，团结带领职工听党话、跟党走。"
+            />
           </Form.Item>
 
           <Space size={12} style={{ display: 'flex' }} align="start">

@@ -220,10 +220,7 @@ export function AdminPrintSheet() {
                 <th className="num" style={{ width: 64 }}>
                   排名
                 </th>
-                <th style={{ width: 104 }}>姓名</th>
-                <th className="num" style={{ width: 104 }}>
-                  工号
-                </th>
+                <th style={{ width: 160 }}>被评对象</th>
                 {data.criteria.map((criterion) => (
                   <th key={criterion.id} className="num">
                     {criterion.name}
@@ -239,12 +236,11 @@ export function AdminPrintSheet() {
             </thead>
             <tbody>
               {data.rows.map((row) => (
-                <tr key={row.employeeId}>
+                <tr key={row.voteColumnId}>
                   <td className="num">
                     <span className="tabular">{row.rank}</span>
                   </td>
-                  <td>{row.employeeName}</td>
-                  <td className="num">{row.employeeNo ?? EMPTY_TEXT}</td>
+                  <td>{row.voteColumnName}</td>
                   {data.criteria.map((criterion) => {
                     const cell = row.criteria.find((item) => item.criterionId === criterion.id);
                     return (
@@ -275,11 +271,15 @@ export function AdminPrintSheet() {
             分计入；各项满分一致时即为算术平均。
           </li>
           <li>
-            实际参与计算的票种：{involvedText}
-            。某票种在本部门某项点零票时会在该格被排除；未列出的启用票种即属此情况。
+            弃权、不填按 0 分计入：某票种在本部门只要有已提交的表，该票种在本部门的每一格都参与平均，
+            某张表缺某一格即按 0 分计入该格。
           </li>
           <li>
-            本表数据取自本部门已提交的评分记录，与「导出 Excel」同源；演示环境中的姓名、工号与成绩均为合成数据，不代表真实职工。
+            实际参与计算的票种：{involvedText}
+            。某票种在本部门一张表都没有时整票种不参与（那是没发这种票，不是弃权）。
+          </li>
+          <li>
+            本表数据取自本部门已提交的评分记录，与「导出 Excel」同源；被评对象是职务/车间（被评列），不是具体职工。
           </li>
         </ol>
 

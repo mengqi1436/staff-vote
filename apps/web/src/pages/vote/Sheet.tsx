@@ -13,13 +13,15 @@ import { VoteSurface } from '../../components/VoteSurface.js';
 /**
  * 打分表页（流程第 2 步：填写打分）。
  *
- * 流程：选部门（只有一个部门时直接进入）→ 拉该部门的项点列与职工行 →
- * 用类 Excel 表格录入 → 提交前全表校验（缺填、小数、越界都会被拦下并指到具体行列）。
+ * 版式与 docs/参考表.xlsx 一致：表头是附件号与表标题，列头是「序号 / 项点 / 各被评列」，
+ * 每行一个评价项点（含描述），表尾是填写说明。项点与被评列全部来自后台配置。
+ *
+ * 流程：选部门（只有一个部门时直接进入）→ 拉该部门的问卷 → 在表格上逐格录入 →
+ * 提交前全表校验（缺填、小数、越界都会被拦下并指到具体位置）。
  *
  * 三条纪律写在这里：一是不询问也不展示职工身份（职工可见文案也不出现后台术语），
- * 二是提交失败绝不清空已填内容（几百格重填一次，职工就会弃投），
- * 三是标红之外必须有可读的错误汇总 —— 键盘与读屏用户看不到「整张表红了一片」，
- * 他们需要一份能跳转的清单。
+ * 二是提交失败绝不清空已填内容，三是标红之外必须有可读的错误汇总 —— 键盘与读屏用户
+ * 看不到「整张表红了一片」，他们需要一份能跳转的清单。
  */
 
 /** 加载打分表失败的文案。 */
@@ -61,8 +63,6 @@ const ENTER_MS = 180;
  * 它存在的唯一理由是让不用眼睛的人也能找到错在哪：容器是 role="alert" 且可聚焦，
  * 标题在提交后被聚焦，每条错误都是指向那一格的链接。表内标红与格内 title 同时保留，
  * 两者不是替代关系 —— 明眼人看红格，键盘与读屏用户走这份清单。
- *
- * 颜色取 antd 标准错误色 token（与 global.css 的 .cell-input.invalid 同一套）。
  */
 function ErrorSummary({ errors, onJump }: { errors: CellError[]; onJump: (error: CellError) => void }) {
   const { token } = theme.useToken();
@@ -103,18 +103,18 @@ function ErrorSummary({ errors, onJump }: { errors: CellError[]; onJump: (error:
       </p>
       <ol style={{ margin: 0, paddingLeft: '1.6em', display: 'grid', gap: 4 }}>
         {errors.map((item) => (
-          <li key={cellKey(item.employeeId, item.criterionId)}>
+          <li key={cellKey(item.voteColumnId, item.criterionId)}>
             <a
               className="pressable"
-              href={`#${cellElementId(item.employeeId, item.criterionId)}`}
+              href={`#${cellElementId(item.voteColumnId, item.criterionId)}`}
               onClick={(event) => {
-                // 锚点照常写在 href 里（读屏可读、可复制），跳转交给表格处理，跨页也能落到那一格
+                // 锚点照常写在 href 里（读屏可读、可复制），跳转交给表格处理
                 event.preventDefault();
                 onJump(item);
               }}
               style={{ color: token.colorError }}
             >
-              第 {item.row} 行第 {item.col} 列（{item.employeeName} · {item.criterionName}）：{item.reason}
+              第 {item.row} 项「{item.criterionName}」的「{item.voteColumnName}」：{item.reason}
             </a>
           </li>
         ))}
@@ -127,9 +127,7 @@ function ErrorSummary({ errors, onJump }: { errors: CellError[]; onJump: (error:
  * 静态提示条（常驻的警示与说明）。
  *
  * 不用 antd Alert：v6 的 Alert 固定渲染 role="alert" 且无法覆盖，常驻提示带上
- * 这个 role 既会抢掉 error summary 的「唯一 alert」语义（键盘与读屏用户靠它定位
- * 提交被拦下的原因），也会让读屏把非紧急内容当紧急播报。这里用与 Alert 同一套
- * antd 标准提示色 token，外观一致、语义安静。
+ * 这个 role 既会抢掉 error summary 的「唯一 alert」语义，也会让读屏把非紧急内容当紧急播报。
  */
 function StaticNotice({ tone, title, children }: { tone: 'warning' | 'info'; title: string; children?: ReactNode }) {
   const { token } = theme.useToken();
@@ -176,11 +174,10 @@ export function VoteSheet() {
   /** 每次提交被拦下都 +1：让 error summary 重新入场并重新拿焦点。 */
   const [attempt, setAttempt] = useState(0);
   const [focusTarget, setFocusTarget] = useState<{ row: number; col: number } | null>(null);
-  const [revealTarget, setRevealTarget] = useState<{ row: number; col: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // 拉取该部门的打分表；切部门时把上一份填写内容与校验结果一起丢掉
+  // 拉取该部门的问卷；切部门时把上一份填写内容与校验结果一起丢掉
   useEffect(() => {
     if (token === null || deptId === null) return;
     let cancelled = false;
@@ -214,24 +211,41 @@ export function VoteSheet() {
     };
   }, [token, deptId, reloadSeq]);
 
-  const handleChange = useCallback((employeeId: string, criterionId: string, raw: string) => {
-    setValues((prev) => ({ ...prev, [employeeId]: { ...prev[employeeId], [criterionId]: raw } }));
+  const handleChange = useCallback((voteColumnId: string, criterionId: string, raw: string) => {
+    setValues((prev) => ({ ...prev, [voteColumnId]: { ...prev[voteColumnId], [criterionId]: raw } }));
   }, []);
 
   const stats = useMemo(() => {
     if (sheet === null) return { filled: 0, total: 0 };
     let filled = 0;
-    for (const employee of sheet.employees) {
-      const row = values[employee.id];
+    for (const column of sheet.voteColumns) {
+      const row = values[column.id];
       if (row === undefined) continue;
       for (const criterion of sheet.criteria) {
         if ((row[criterion.id] ?? '').trim() !== '') filled += 1;
       }
     }
-    return { filled, total: sheet.employees.length * sheet.criteria.length };
+    return { filled, total: sheet.voteColumns.length * sheet.criteria.length };
   }, [sheet, values]);
 
-  // 填了但没提交时挡住误刷新：令牌还在，但没人愿意把几百格重填一遍
+  /**
+   * 可填区间的说明。
+   *
+   * 参考表的区间写在填写说明里（「每一条评价项点满分 20 分」），所以表内不占版面；
+   * 但每项区间由后台单独配置，各项不一致时必须说清去哪儿看，不能让职工自己猜。
+   */
+  const rangeHint = useMemo(() => {
+    if (sheet === null || sheet.criteria.length === 0) return '';
+    const first = sheet.criteria[0]!;
+    const uniform = sheet.criteria.every(
+      (criterion) => criterion.minScore === first.minScore && criterion.maxScore === first.maxScore,
+    );
+    return uniform
+      ? `每格只能填 ${first.minScore}–${first.maxScore} 之间的整数，所有格子填完才能提交。`
+      : '每格只能填整数，允许的区间见上方各行的项点说明；所有格子填完才能提交。';
+  }, [sheet]);
+
+  // 填了但没提交时挡住误刷新：令牌还在，但没人愿意把整张表重填一遍
   const hasUnsentInput = stats.filled > 0 && !submitting;
   useEffect(() => {
     if (!hasUnsentInput) return;
@@ -247,14 +261,17 @@ export function VoteSheet() {
       event.preventDefault();
       if (sheet === null || token === null) return;
 
-      const found = collectScoreErrors(sheet.criteria, sheet.employees, values);
+      const found = collectScoreErrors(sheet.criteria, sheet.voteColumns, values);
       if (found.length > 0) {
         setErrors(found);
-        setInvalidCells(new Set(found.map((item) => cellKey(item.employeeId, item.criterionId))));
+        setInvalidCells(new Set(found.map((item) => cellKey(item.voteColumnId, item.criterionId))));
         setAttempt((current) => current + 1);
         const first = found[0]!;
-        // 表格翻到第一处错误所在页，但焦点留给顶部的 error summary（键盘用户先拿到清单）
-        setRevealTarget({ row: first.row - 1, col: first.col - 1 });
+        // 焦点留给顶部的 error summary（键盘用户先拿到清单），表格负责滚动到那一格
+        setFocusTarget(null);
+        document.getElementById(cellElementId(first.voteColumnId, first.criterionId))?.scrollIntoView({
+          block: 'center',
+        });
         setSubmitError(null);
         return;
       }
@@ -264,13 +281,13 @@ export function VoteSheet() {
       setSubmitting(true);
       try {
         const items: SubmitItem[] = [];
-        for (const employee of sheet.employees) {
-          for (const criterion of sheet.criteria) {
+        for (const criterion of sheet.criteria) {
+          for (const column of sheet.voteColumns) {
             items.push({
-              employeeId: employee.id,
+              voteColumnId: column.id,
               criterionId: criterion.id,
               // 已通过整数与范围校验，这里直接转成数字
-              score: Number(values[employee.id]?.[criterion.id]),
+              score: Number(values[column.id]?.[criterion.id]),
             });
           }
         }
@@ -331,24 +348,9 @@ export function VoteSheet() {
         <Card>
           <VoteSteps current={1} />
 
-          {/* 页头：表名在左，当前部门在右（职工不需要也看不到任何后台术语） */}
-          <Flex align="baseline" justify="space-between" wrap gap={8} style={{ marginBottom: 16 }}>
-            <Typography.Title level={3} style={{ margin: 0 }}>
-              职工素质评议打分表
-            </Typography.Title>
-            {sheet === null ? null : (
-              <Typography.Text type="secondary">部门：{sheet.department.name}</Typography.Text>
-            )}
-          </Flex>
-
-          <div style={{ marginBottom: 16 }}>
-            <StaticNotice tone="warning" title="提交后不可修改">
-              <Typography.Text type="secondary">{IRREVERSIBLE_HINT}</Typography.Text>
-            </StaticNotice>
-          </div>
-
+          {/* 选部门：只有一个部门时不显示下拉，直接进表 */}
           {sessionInfo.departments.length > 1 ? (
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginTop: 16 }}>
               <label htmlFor="vote-department" style={{ display: 'block', marginBottom: 8 }}>
                 请选择您要评议的部门
               </label>
@@ -366,82 +368,93 @@ export function VoteSheet() {
             </div>
           ) : null}
 
-          {deptId === null ? (
-            <Alert type="info" showIcon title="请先选择部门" description="选择部门后才会显示该部门的打分表。" />
-          ) : loading ? (
-            <div style={{ padding: '32px 0', textAlign: 'center' }}>
-              <Spin size="large" />
-              <p style={{ margin: '16px 0 0' }}>
-                <Typography.Text type="secondary">正在取回打分表，请稍候。</Typography.Text>
-              </p>
-            </div>
-          ) : loadError !== null ? (
-            <Alert
-              type="error"
-              showIcon
-              title="打分表加载失败"
-              description={loadError}
-              action={
-                <Button size="small" onClick={() => setReloadSeq((current) => current + 1)}>
-                  重新加载
-                </Button>
-              }
-            />
-          ) : sheet === null ? null : sheet.employees.length === 0 || sheet.criteria.length === 0 ? (
-            <Alert
-              type="info"
-              showIcon
-              title="本部门暂未配置打分表"
-              description="请联系评议组织者确认后再来。"
-            />
-          ) : (
-            <form onSubmit={(event) => void handleSubmit(event)} style={{ display: 'grid', gap: 16 }}>
-              {errors.length > 0 ? (
-                <ErrorSummary
-                  key={attempt}
-                  errors={errors}
-                  onJump={(item) => {
-                    // 精确聚焦某一格：表格会自己翻页并选中已有内容
-                    setFocusTarget({ row: item.row - 1, col: item.col - 1 });
-                  }}
-                />
-              ) : null}
-
-              {submitError === null ? null : (
-                // antd Alert 自带 role="alert"，读屏会立即播报；已填内容不会被清掉，文案里已说明
-                <Alert type="error" showIcon title="提交未成功" description={submitError} />
-              )}
-
-              <ScoreTable
-                criteria={sheet.criteria}
-                employees={sheet.employees}
-                values={values}
-                onChange={handleChange}
-                invalidCells={invalidCells}
-                focusTarget={focusTarget}
-                revealTarget={revealTarget}
+          <div style={{ marginTop: 16 }}>
+            {deptId === null ? (
+              <Alert type="info" showIcon title="请先选择部门" description="选择部门后才会显示该部门的打分表。" />
+            ) : loading ? (
+              <div style={{ padding: '32px 0', textAlign: 'center' }}>
+                <Spin size="large" />
+                <p style={{ margin: '16px 0 0' }}>
+                  <Typography.Text type="secondary">正在取回打分表，请稍候。</Typography.Text>
+                </p>
+              </div>
+            ) : loadError !== null ? (
+              <Alert
+                type="error"
+                showIcon
+                title="打分表加载失败"
+                description={loadError}
+                action={
+                  <Button size="small" onClick={() => setReloadSeq((current) => current + 1)}>
+                    重新加载
+                  </Button>
+                }
               />
+            ) : sheet === null ? null : sheet.criteria.length === 0 || sheet.voteColumns.length === 0 ? (
+              <Alert
+                type="info"
+                showIcon
+                title="本部门暂未配置打分表"
+                description="请联系评议组织者确认后再来。"
+              />
+            ) : (
+              <form onSubmit={(event) => void handleSubmit(event)} style={{ display: 'grid', gap: 16 }}>
+                <StaticNotice tone="warning" title="提交后不可修改">
+                  <Typography.Text type="secondary">{IRREVERSIBLE_HINT}</Typography.Text>
+                </StaticNotice>
 
-              {/* 填写说明：口径写在表下，不让职工去猜 */}
-              <StaticNotice tone="info" title="填写说明">
-                <ol style={{ margin: 0, paddingLeft: '1.4em' }}>
-                  <li>每格只能填整数，允许的区间写在各列表头上。</li>
-                  <li>所有格子填完才能提交；离开格子时就发现的问题会和提交时发现的一样被指出。</li>
-                  <li>本页只汇总分数，不记录您的姓名与身份。</li>
-                </ol>
-              </StaticNotice>
+                {errors.length > 0 ? (
+                  <ErrorSummary
+                    key={attempt}
+                    errors={errors}
+                    onJump={(item) => {
+                      // 精确聚焦某一格：表格自己会把焦点与选区放到那一格
+                      const row = sheet.criteria.findIndex((c) => c.id === item.criterionId);
+                      const col = sheet.voteColumns.findIndex((c) => c.id === item.voteColumnId);
+                      if (row >= 0 && col >= 0) setFocusTarget({ row, col });
+                    }}
+                  />
+                ) : null}
 
-              <Flex className="no-print" align="center" gap={16} wrap>
-                <Button type="primary" htmlType="submit" loading={submitting}>
-                  提交评分（提交后不可修改）
-                </Button>
-                <Typography.Text type="secondary">
-                  已填写 {stats.filled} / {stats.total} 项
-                  {errors.length > 0 ? `，还有 ${errors.length} 处需要修正` : ''}
-                </Typography.Text>
-              </Flex>
-            </form>
-          )}
+                {submitError === null ? null : (
+                  // antd Alert 自带 role="alert"，读屏会立即播报；已填内容不会被清掉，文案里已说明
+                  <Alert type="error" showIcon title="提交未成功" description={submitError} />
+                )}
+
+                <ScoreTable
+                  criteria={sheet.criteria}
+                  voteColumns={sheet.voteColumns}
+                  questionnaireType={sheet.questionnaireType}
+                  headerNote={sheet.headerNote}
+                  title={sheet.title}
+                  footerNote={sheet.footerNote}
+                  values={values}
+                  onChange={handleChange}
+                  invalidCells={invalidCells}
+                  focusTarget={focusTarget}
+                />
+
+                {/* 填写说明：口径写在表下，不让职工去猜 */}
+                <StaticNotice tone="info" title="填写说明">
+                  <ol style={{ margin: 0, paddingLeft: '1.4em' }}>
+                    <li>{rangeHint}</li>
+                    <li>离开格子时就发现的问题会和提交时发现的一样被指出。</li>
+                    <li>本页只汇总分数，不记录您的姓名与身份；弃权、不填的格子按 0 分计入。</li>
+                  </ol>
+                </StaticNotice>
+
+                <Flex className="no-print" align="center" gap={16} wrap>
+                  <Button type="primary" htmlType="submit" loading={submitting}>
+                    提交评分（提交后不可修改）
+                  </Button>
+                  <Typography.Text type="secondary">
+                    已填写 {stats.filled} / {stats.total} 项
+                    {errors.length > 0 ? `，还有 ${errors.length} 处需要修正` : ''}
+                  </Typography.Text>
+                </Flex>
+              </form>
+            )}
+          </div>
         </Card>
       </div>
     </VoteSurface>

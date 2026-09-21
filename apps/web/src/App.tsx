@@ -8,6 +8,7 @@ import { AdminDepartments } from './pages/admin/Departments.js';
 import { AdminEmployees } from './pages/admin/Employees.js';
 import { AdminLogin } from './pages/admin/Login.js';
 import { AdminPrintSheet } from './pages/admin/PrintSheet.js';
+import { AdminQuestionnaire } from './pages/admin/Questionnaire.js';
 import { AdminResults } from './pages/admin/Results.js';
 import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminTicketTypes } from './pages/admin/TicketTypes.js';
@@ -49,6 +50,7 @@ export function App() {
           <Route path="ticket-types" element={<AdminTicketTypes />} />
           <Route path="tickets" element={<AdminTickets />} />
           <Route path="departments" element={<AdminDepartments />} />
+          <Route path="questionnaire" element={<AdminQuestionnaire />} />
           <Route path="employees" element={<AdminEmployees />} />
           <Route path="criteria" element={<AdminCriteria />} />
           <Route path="settings" element={<AdminSettings />} />

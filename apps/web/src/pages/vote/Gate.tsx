@@ -110,6 +110,12 @@ export function VoteGate() {
       setFormError(null);
       try {
         const result = await voteApi.session(code);
+        // 服务端还没有启用任何部门时，打分页无表可填、只能把人弹回入口。
+        // 空部门是合法响应而不是错误，所以在这里说清原因，不存令牌也不跳转。
+        if (result.departments.length === 0) {
+          setFormError('当前还没有可评议的部门，请联系评议组织者。');
+          return;
+        }
         saveVoteToken(result.token);
         saveVoteSessionInfo({ ticketType: result.ticketType, departments: result.departments });
         // replace：不回退到一个已经核销过的入口页

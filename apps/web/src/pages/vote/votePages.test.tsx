@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { VOTE_TOKEN_KEY } from '../../lib/api.js';
-import type { CriterionDto, EmployeeDto, TicketTypeDto } from '../../lib/api.js';
+import type { TicketTypeDto, VoteColumnBrief, VoteCriterionDto } from '../../lib/api.js';
 import { saveVoteSessionInfo } from '../../components/vote/voteSession.js';
 import { VoteDone } from './Done.js';
 import { VoteGate } from './Gate.js';
@@ -26,13 +26,25 @@ const TICKET_TYPE: TicketTypeDto = {
 
 const DEPARTMENT = { id: 'd1', name: '生产部' };
 
-const CRITERIA: CriterionDto[] = [
-  { id: 'c1', name: '工作质量', minScore: 0, maxScore: 10, sortOrder: 1, enabled: true },
+const CRITERIA: VoteCriterionDto[] = [
+  { id: 'c1', name: '政治素质', description: '信念坚定、对党忠诚。', minScore: 0, maxScore: 20 },
 ];
 
-const EMPLOYEES: EmployeeDto[] = [
-  { id: 'e1', name: '张三', employeeNo: 'A001', sortOrder: 1, enabled: true },
-];
+const VOTE_COLUMNS: VoteColumnBrief[] = [{ id: 'v1', name: '主任' }];
+
+/** 打分表响应体：与 GET /api/vote/sheet 的契约一致（表头文案 + 项点行 + 被评列）。 */
+function sheetBody(overrides: Record<string, unknown> = {}) {
+  return {
+    department: DEPARTMENT,
+    questionnaireType: 'person',
+    headerNote: '附件1-1',
+    title: 'xx车间负责人评价问卷',
+    footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+    criteria: CRITERIA,
+    voteColumns: VOTE_COLUMNS,
+    ...overrides,
+  };
+}
 
 const fetchMock = vi.fn();
 
@@ -55,6 +67,24 @@ function renderGate(path: string) {
       <Routes>
         <Route path="/" element={<VoteGate />} />
         <Route path="/vote/sheet" element={<div>已进入打分表页</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+/** Gate 与真实打分页同挂：验证「登录成功 → 进入打分页」这条真实链路，而不是被 stub 掩盖。 */
+function renderGateToSheet(session: unknown) {
+  fetchMock.mockImplementation((url: string) => {
+    if (url.endsWith('/api/vote/status')) return Promise.resolve(reply(200, statusBody(true)));
+    if (url.endsWith('/api/vote/session')) return Promise.resolve(reply(200, session));
+    return Promise.resolve(reply(404, { error: { code: 'NOT_FOUND', message: '未预期的请求' } }));
+  });
+  return render(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route path="/" element={<VoteGate />} />
+        <Route path="/vote/sheet" element={<VoteSheet />} />
+        <Route path="/vote/done" element={<div>已进入成功页</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -140,6 +170,17 @@ describe('投票入口（Gate）', () => {
 
     expect(await screen.findByText(/尝试过于频繁/)).toBeInTheDocument();
   });
+
+  it('没有任何可评议部门时留在入口并说明原因，不静默弹回', async () => {
+    renderGateToSheet({ token: 'tok-1', ticketType: TICKET_TYPE, departments: [] });
+
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
+    fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
+
+    // 空部门是服务端的合法状态，必须说清楚「为什么进不去」，而不是把职工弹回一个没变化的页面
+    expect(await screen.findByText(/还没有可评议的部门/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
 });
 
 describe('打分表页（Sheet）', () => {
@@ -150,16 +191,18 @@ describe('打分表页（Sheet）', () => {
     expect(await screen.findByText('已回到投票入口')).toBeInTheDocument();
   });
 
-  it('有令牌与缓存时显示部门与打分表，不出现后台术语，请求带上投票令牌', async () => {
+  it('有令牌与缓存时显示参考表版式的打分表，不出现后台术语，请求带上投票令牌', async () => {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
-    fetchMock.mockResolvedValueOnce(
-      reply(200, { department: DEPARTMENT, criteria: CRITERIA, employees: EMPLOYEES }),
-    );
+    fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
     const { container } = renderSheet('/vote/sheet');
 
-    expect(await screen.findByRole('rowheader', { name: /张三/ })).toBeInTheDocument();
-    expect(screen.getByText(/部门：生产部/)).toBeInTheDocument();
+    // 行 = 项点，列 = 被评列；抬头与表尾说明来自后台配置
+    expect(await screen.findByRole('rowheader', { name: /政治素质/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '主任' })).toBeInTheDocument();
+    expect(screen.getByText('附件1-1')).toBeInTheDocument();
+    expect(screen.getByText('xx车间负责人评价问卷')).toBeInTheDocument();
+    expect(screen.getByText(/弃权、不填视为0分/)).toBeInTheDocument();
     expect(screen.getByText('提交后不可修改')).toBeInTheDocument();
     // 「票种」是后台术语，职工可见文案里不许出现
     expect(screen.queryByText(/票种/)).not.toBeInTheDocument();
@@ -219,20 +262,18 @@ describe('未开放时的区分（Gate）', () => {
 });
 
 describe('打分表页的错误汇总与失败保留', () => {
-  /** 进入打分表页：令牌 + 会话缓存 + 一份只有 1 行 1 列的打分表。 */
+  /** 进入打分表页：令牌 + 会话缓存 + 一份只有 1 个项点、1 个被评列的打分表。 */
   function enterSheet() {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
-    fetchMock.mockResolvedValueOnce(
-      reply(200, { department: DEPARTMENT, criteria: CRITERIA, employees: EMPLOYEES }),
-    );
+    fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
     return renderSheet('/vote/sheet');
   }
 
   it('提交失败时给出可聚焦的错误汇总，链接指向那一格，inline 标红同时保留', async () => {
     enterSheet();
 
-    const cell = await screen.findByRole('spinbutton', { name: /张三/ });
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
     expect(cell).not.toHaveClass('invalid');
 
     fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
@@ -243,9 +284,9 @@ describe('打分表页的错误汇总与失败保留', () => {
     expect(screen.getByRole('heading', { name: '有 1 处需要修正，尚未提交' })).toHaveFocus();
 
     // 每条错误都是指向该格的链接
-    const link = screen.getByRole('link', { name: /第 1 行第 1 列（张三 · 工作质量）：未填写/ });
-    expect(link).toHaveAttribute('href', '#cell-e1-c1');
-    expect(document.getElementById('cell-e1-c1')).toBe(cell);
+    const link = screen.getByRole('link', { name: /第 1 项「政治素质」的「主任」：未填写/ });
+    expect(link).toHaveAttribute('href', '#cell-v1-c1');
+    expect(document.getElementById('cell-v1-c1')).toBe(cell);
 
     // inline 错误没有被 summary 替代
     expect(cell).toHaveClass('invalid');
@@ -256,10 +297,10 @@ describe('打分表页的错误汇总与失败保留', () => {
   it('点汇总里的链接，焦点落到对应的那一格', async () => {
     enterSheet();
 
-    const cell = await screen.findByRole('spinbutton', { name: /张三/ });
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
     fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
 
-    fireEvent.click(await screen.findByRole('link', { name: /张三 · 工作质量/ }));
+    fireEvent.click(await screen.findByRole('link', { name: /政治素质.*主任/ }));
 
     await waitFor(() => expect(cell).toHaveFocus());
   });
@@ -267,13 +308,11 @@ describe('打分表页的错误汇总与失败保留', () => {
   it('服务端拒绝提交时保留已填内容，也保留打分表本身', async () => {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
-    fetchMock.mockResolvedValueOnce(
-      reply(200, { department: DEPARTMENT, criteria: CRITERIA, employees: EMPLOYEES }),
-    );
+    fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
     fetchMock.mockResolvedValueOnce(reply(403, { error: { code: 'VOTE_CLOSED', message: '未开放' } }));
     renderSheet('/vote/sheet');
 
-    const cell = await screen.findByRole('spinbutton', { name: /张三/ });
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
     fireEvent.change(cell, { target: { value: '8' } });
     fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
 
@@ -286,13 +325,11 @@ describe('打分表页的错误汇总与失败保留', () => {
   it('随机码已核销时进入终态并清掉本地令牌，不再渲染打分表', async () => {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
-    fetchMock.mockResolvedValueOnce(
-      reply(200, { department: DEPARTMENT, criteria: CRITERIA, employees: EMPLOYEES }),
-    );
+    fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
     fetchMock.mockResolvedValueOnce(reply(409, { error: { code: 'TICKET_USED', message: '已使用' } }));
     renderSheet('/vote/sheet');
 
-    const cell = await screen.findByRole('spinbutton', { name: /张三/ });
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
     fireEvent.change(cell, { target: { value: '8' } });
     fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
 
