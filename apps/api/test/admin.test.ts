@@ -45,6 +45,7 @@ const { ALL_PERMISSION_CODES } = await import('../src/lib/permissions.js');
 // 投票端打分表只认令牌签名（不查票据），因此软删除用例可以就地签发一张令牌验证列已消失
 const { signVoteToken } = await import('../src/lib/token.js');
 const { createRole } = await import('./rbac-fixtures.js');
+const { ensureDefaultSession } = await import('./session-fixtures.js');
 
 /** 没有可用测试库就整组跳过。 */
 const describeDb = suiteEnabled ? describe : describe.skip;
@@ -124,7 +125,13 @@ async function newTicketType(
 ): Promise<{ id: string; code: string }> {
   const code = nextCode();
   const created = await prisma.ticketType.create({
-    data: { code, name: `${TAG}票种-${code}`, weightPercent, enabled },
+    data: {
+      sessionId: await ensureDefaultSession(prisma),
+      code,
+      name: `${TAG}票种-${code}`,
+      weightPercent,
+      enabled,
+    },
   });
   return { id: created.id, code: created.code };
 }
@@ -183,7 +190,13 @@ async function submitSheet(
   ticketTypeId: string,
   items: Array<{ voteColumnId: string; criterionId: string; score: number }>,
 ): Promise<string> {
-  const sheet = await prisma.scoreSheet.create({ data: { departmentId, ticketTypeId } });
+  const department = await prisma.department.findUniqueOrThrow({
+    where: { id: departmentId },
+    select: { sessionId: true },
+  });
+  const sheet = await prisma.scoreSheet.create({
+    data: { departmentId, ticketTypeId, sessionId: department.sessionId },
+  });
   await prisma.scoreItem.createMany({ data: items.map((item) => ({ ...item, sheetId: sheet.id })) });
   return sheet.id;
 }
@@ -287,6 +300,8 @@ describeDb('管理端接口', () => {
 
     await clearOwnFixtures();
     await clearOwnAdmin();
+    // 业务表挂 session_id 后，夹具与接口的场次自动解析都依赖库里恰有默认场次。
+    await ensureDefaultSession(prisma);
     // 账号必须带角色：本轮起管理端写接口都要求权限码，无角色账号等价只读
     const roleId = await createRole(`${TAG}role-super`, '测试-超级管理员', ALL_PERMISSION_CODES);
     const admin = await prisma.adminUser.create({
@@ -1138,7 +1153,7 @@ describeDb('管理端接口', () => {
       .post('/api/admin/employees/import')
       .attach('file', Buffer.from(`部门,姓名,工号\n${departmentB},张三,${TAG}I001`, 'utf8'), 'move.csv');
     expect(moved.body).toMatchObject({ created: 0, updated: 1 });
-    const departmentBRow = await prisma.department.findUniqueOrThrow({ where: { name: departmentB } });
+    const departmentBRow = await prisma.department.findFirstOrThrow({ where: { name: departmentB } });
     expect(await prisma.employee.count({ where: { departmentId: departmentBRow.id } })).toBe(2);
   });
 

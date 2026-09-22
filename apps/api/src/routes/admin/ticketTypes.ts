@@ -14,12 +14,14 @@ import {
   createTicketType,
   disableTicketType,
   listTicketTypes,
+  resolveSessionId,
   updateTicketType,
 } from '../../services/admin.js';
 import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
 
 const CreateSchema = z.object({
+  sessionId: z.string().min(1).optional(),
   code: z.string().trim().min(1, '票种编码不能为空').max(20),
   name: z.string().trim().min(1, '票种名称不能为空').max(100),
   weightPercent: z.number().int().min(0).max(100),
@@ -29,10 +31,16 @@ const CreateSchema = z.object({
 
 const PatchSchema = CreateSchema.partial();
 
+/** 列表类接口的场次过滤：?sessionId= 可选，未带时单场自动解析、多场 400。 */
+const ListQuerySchema = z.object({
+  sessionId: z.string().min(1).optional(),
+});
+
 export const ticketTypesRouter: Router = Router();
 
-ticketTypesRouter.get('/', async (_req, res) => {
-  res.json(await listTicketTypes());
+ticketTypesRouter.get('/', async (req, res) => {
+  const { sessionId } = ListQuerySchema.parse(req.query);
+  res.json(await listTicketTypes(await resolveSessionId(sessionId)));
 });
 
 ticketTypesRouter.post('/', requirePermission('ticketTypes.write'), async (req, res) => {

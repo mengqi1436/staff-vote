@@ -167,12 +167,16 @@ export function evaluateVoteWindow(
 /**
  * 统一提取错误文案：后端 zod 字段明细拼在消息后面，
  * 让管理员一眼知道是哪个字段不合法，而不是只看「请求失败」。
+ * SESSION_REQUIRED（多场时未选场次）单独给指引文案，落到「请先选择场次」这一个动作上。
  */
 export function describeError(caught: unknown, fallback = '操作失败，请重试'): string {
   if (!(caught instanceof Error)) return fallback;
-  if (caught instanceof ApiError && caught.fields?.length) {
-    const detail = caught.fields.map((field) => `${field.path}: ${field.message}`).join('；');
-    return `${caught.message}（${detail}）`;
+  if (caught instanceof ApiError) {
+    if (caught.code === 'SESSION_REQUIRED') return '请先选择场次';
+    if (caught.fields?.length) {
+      const detail = caught.fields.map((field) => `${field.path}: ${field.message}`).join('；');
+      return `${caught.message}（${detail}）`;
+    }
   }
   return caught.message || fallback;
 }

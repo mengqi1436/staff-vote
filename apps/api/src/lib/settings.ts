@@ -47,17 +47,28 @@ function parseTime(value: string | undefined): Date | null {
 }
 
 /**
+ * 参与投票开放判定的场次状态切片。
+ * 只关心 status 一个字段，调用方直接传 VoteSession 行或其投影。
+ */
+export interface VoteWindowSession {
+  status: string;
+}
+
+/**
  * 判定当前是否处于投票开放期。
  *
- * 三层条件全部满足才算开放：总开关打开、当前时间不早于起始、不晚于结束。
+ * 四层条件全部满足才算开放：总开关打开、当前时间不早于起始、不晚于结束，
+ * 且传入场次的 status 为 voting（未传场次时只看前三层——票未登录或库中无场次）。
  * 起始/结束留空表示该侧不限制。
  *
  * @param settings 设置键值对
+ * @param session 票所属场次（含 status）；不传或 null 表示场次不参与判定
  * @param now 判定时刻，可注入以便测试
  * @returns 开放状态与对职工显示的文案
  */
 export function evaluateVoteWindow(
   settings: Map<string, string>,
+  session?: VoteWindowSession | null,
   now: Date = new Date(),
 ): VoteWindowState {
   const openFlag = settings.get(SETTING_KEYS.voteOpen) === 'true';
@@ -66,7 +77,9 @@ export function evaluateVoteWindow(
 
   const beforeStart = startAt !== null && now.getTime() < startAt.getTime();
   const afterEnd = endAt !== null && now.getTime() > endAt.getTime();
-  const open = openFlag && !beforeStart && !afterEnd;
+  // 场次未开始（draft）、暂停（paused）或已结束（ended）都与全局关闭同一文案。
+  const sessionOpen = session ? session.status === 'voting' : true;
+  const open = openFlag && !beforeStart && !afterEnd && sessionOpen;
 
   return {
     open,

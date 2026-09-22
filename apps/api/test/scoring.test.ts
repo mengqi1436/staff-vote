@@ -240,6 +240,97 @@ describe('computeResults —— 项点间汇总', () => {
   });
 });
 
+describe('computeResults —— perTicketType 票别口径（票别×被评列×项点 / 票别×被评列）', () => {
+  it('每票别对每格输出平均分，票别对列输出均分', () => {
+    // tA 对 v1·c1 打 90；tB 两张表打 60 / 90 → 75。
+    const result = computeResults(
+      input({
+        voteColumnIds: ['v1'],
+        criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
+        ticketTypes: [
+          { id: 'tA', weightPercent: 50 },
+          { id: 'tB', weightPercent: 50 },
+        ],
+        sheets: [
+          { ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 90 }] },
+          { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 60 }] },
+          { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 90 }] },
+        ],
+      }),
+    );
+
+    const byType = new Map(result.perTicketType.map((row) => [row.ticketTypeId, row]));
+    expect(byType.get('tA')?.voteColumns[0]?.criteria[0]?.avg).toBe(90);
+    expect(byType.get('tA')?.voteColumns[0]?.average).toBe(90);
+    expect(byType.get('tB')?.voteColumns[0]?.criteria[0]?.avg).toBe(75);
+    expect(byType.get('tB')?.voteColumns[0]?.average).toBe(75);
+  });
+
+  it('缺格计 0 进入平均，多列多格相互独立', () => {
+    // tB 两张表：一张填 v1·c1=80，另一张全缺 → c1 均分 40。
+    // v2 没有任何票填过 → 两格都是 0，列均分 0。
+    const result = computeResults(
+      input({
+        voteColumnIds: ['v1', 'v2'],
+        criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
+        ticketTypes: [{ id: 'tB', weightPercent: 100 }],
+        sheets: [
+          { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 80 }] },
+          { ticketTypeId: 'tB', items: [] },
+        ],
+      }),
+    );
+
+    const column = result.perTicketType[0]?.voteColumns;
+    expect(column?.find((c) => c.voteColumnId === 'v1')?.criteria[0]?.avg).toBe(40);
+    expect(column?.find((c) => c.voteColumnId === 'v1')?.average).toBe(40);
+    expect(column?.find((c) => c.voteColumnId === 'v2')?.criteria[0]?.avg).toBe(0);
+    expect(column?.find((c) => c.voteColumnId === 'v2')?.average).toBe(0);
+  });
+
+  it('列内均分是各格平均分的等权平均（round2 一致）', () => {
+    // v1 上 c1 均分 80、c2 均分 75 → 列均分 77.5
+    const result = computeResults(
+      input({
+        voteColumnIds: ['v1'],
+        criteria: [
+          { id: 'c1', minScore: 0, maxScore: 100 },
+          { id: 'c2', minScore: 0, maxScore: 100 },
+        ],
+        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
+        sheets: [
+          {
+            ticketTypeId: 'tA',
+            items: [
+              { voteColumnId: 'v1', criterionId: 'c1', score: 80 },
+              { voteColumnId: 'v1', criterionId: 'c2', score: 75 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const column = result.perTicketType[0]?.voteColumns[0];
+    expect(column?.average).toBe(77.5);
+  });
+
+  it('零票种排除：一张表都没有的票种不出现在 perTicketType', () => {
+    const result = computeResults(
+      input({
+        voteColumnIds: ['v1'],
+        criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
+        ticketTypes: [
+          { id: 'tA', weightPercent: 50 },
+          { id: 'tB', weightPercent: 50 },
+        ],
+        sheets: [{ ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 70 }] }],
+      }),
+    );
+
+    expect(result.perTicketType.map((row) => row.ticketTypeId)).toEqual(['tB']);
+  });
+});
+
 describe('computeResults —— 多被评列隔离', () => {
   it('不同被评列的分数互不串扰', () => {
     const result = computeResults(

@@ -21,6 +21,7 @@ import { ApiError } from '../../lib/api.js';
  *
  * 401 单独处理：会话过期后每个页面都会 401，直接把管理员送回登录页，
  * 比让他逐页看到「请求失败（401）」要好。仅体验层，权限在后端。
+ * SESSION_REQUIRED 单独处理：多场评议下未选场次，引导到右上角选择器（或场次管理页）。
  */
 export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   const navigate = useNavigate();
@@ -34,6 +35,21 @@ export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => v
         extra={
           <Button type="primary" onClick={() => void navigate('/admin/login', { replace: true })}>
             重新登录
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (error instanceof ApiError && error.code === 'SESSION_REQUIRED') {
+    return (
+      <Result
+        status="info"
+        title="请先选择场次"
+        subTitle="多场评议下数据按场次隔离：请在页面右上角选择当前场次后再查看数据。"
+        extra={
+          <Button type="primary" onClick={() => void navigate('/admin/sessions')}>
+            去场次管理
           </Button>
         }
       />

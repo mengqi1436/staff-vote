@@ -14,12 +14,19 @@ import {
   createDepartment,
   disableDepartment,
   listDepartments,
+  resolveSessionId,
   updateDepartment,
 } from '../../services/admin.js';
 import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
 
+/** 列表类接口的场次过滤：?sessionId= 可选，未带时单场自动解析、多场 400。 */
+const ListQuerySchema = z.object({
+  sessionId: z.string().min(1).optional(),
+});
+
 const CreateSchema = z.object({
+  sessionId: z.string().min(1).optional(),
   name: z.string().trim().min(1, '部门名称不能为空').max(100),
   sortOrder: z.number().int().min(0).optional(),
   enabled: z.boolean().optional(),
@@ -35,8 +42,10 @@ const PatchSchema = CreateSchema.partial().extend({
 
 export const departmentsRouter: Router = Router();
 
-departmentsRouter.get('/', async (_req, res) => {
-  res.json(await listDepartments());
+departmentsRouter.get('/', async (req, res) => {
+  const { sessionId } = ListQuerySchema.parse(req.query);
+  // 未带 sessionId：单场自动解析，多场 400 SESSION_REQUIRED（契约统一规则）。
+  res.json(await listDepartments(await resolveSessionId(sessionId)));
 });
 
 departmentsRouter.post('/', requirePermission('departments.write'), async (req, res) => {

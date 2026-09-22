@@ -179,7 +179,8 @@ describe('一键作废未使用码', () => {
     await userEvent.click(confirm);
 
     expect(await screen.findByText('已作废 2 张')).toBeInTheDocument();
-    expect(revokeBulkMock).toHaveBeenCalledWith(undefined);
+    // 多场评议后作废请求带上当前场次过滤（未选场次时为 undefined）
+    expect(revokeBulkMock).toHaveBeenCalledWith(undefined, undefined);
     // 作废后必须重新拉列表与未使用数量，界面不能停留在旧数据
     await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(listCallsBefore));
   }, 15_000);

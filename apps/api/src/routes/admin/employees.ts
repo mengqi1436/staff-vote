@@ -18,6 +18,7 @@ import {
   disableEmployee,
   importEmployees,
   listEmployees,
+  resolveSessionId,
   updateEmployee,
 } from '../../services/admin.js';
 import { parseRosterFile } from '../../lib/xlsx.js';
@@ -30,10 +31,12 @@ const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 const ListQuerySchema = z.object({
   departmentId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
 });
 
 const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
+  sessionId: z.string().min(1).optional(),
   name: z.string().trim().min(1, '姓名不能为空').max(50),
   employeeNo: z.string().trim().max(50).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
@@ -121,12 +124,16 @@ function extractUpload(
 export const employeesRouter: Router = Router();
 
 employeesRouter.get('/', async (req, res) => {
-  const { departmentId } = ListQuerySchema.parse(req.query);
-  res.json(await listEmployees(departmentId));
+  const { departmentId, sessionId } = ListQuerySchema.parse(req.query);
+  res.json(await listEmployees(departmentId, await resolveSessionId(sessionId)));
 });
 
 /** 导入名单（xlsx / csv，列：部门,姓名,工号）。 */
 employeesRouter.post('/import', requirePermission('employees.write'), async (req, res) => {
+  const sessionId =
+    typeof req.query.sessionId === 'string' && req.query.sessionId.trim() !== ''
+      ? req.query.sessionId.trim()
+      : undefined;
   const boundary = boundaryOf(req);
   const upload = extractUpload(await readRawBody(req), boundary);
   if (!upload) throw ApiError.badRequest('未找到上传文件，请用字段名 file 提交 xlsx 或 csv');
@@ -134,7 +141,7 @@ employeesRouter.post('/import', requirePermission('employees.write'), async (req
   const roster = await parseRosterFile(upload.content, upload.filename);
   if (roster.length === 0) throw ApiError.badRequest('文件里没有可导入的行');
 
-  res.json(await importEmployees(roster, operatorOf(req)));
+  res.json(await importEmployees(roster, operatorOf(req), sessionId));
 });
 
 employeesRouter.post('/', requirePermission('employees.write'), async (req, res) => {

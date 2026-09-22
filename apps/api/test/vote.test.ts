@@ -27,6 +27,7 @@ const { createApp } = await import('../src/app.js');
 const { createPrismaClient, prisma: appPrisma } = await import('../src/db.js');
 const { SETTING_KEYS, VOTE_CLOSED_MESSAGE } = await import('../src/lib/settings.js');
 const { signAdminToken, verifyVoteToken } = await import('../src/lib/token.js');
+const { createTestSession } = await import('./session-fixtures.js');
 
 const app = createApp();
 /** 测试自己的连接：建夹具、查落库结果。同时证明 app 与测试确实在同一个库上。 */
@@ -37,6 +38,10 @@ const WINDOW_KEYS = [SETTING_KEYS.voteOpen, SETTING_KEYS.voteStartAt, SETTING_KE
 const MISSING_ID = '00000000-0000-7000-8000-000000000000';
 
 interface Fixture {
+  /** 本夹具专用场次（voting）：所有业务数据都挂在它下面，登录/提交的场次校验因此可用 */
+  sessionId: string;
+  /** 额外占位场次：保证库中 ≥2 场，「/status 未带 sessionId 时 session=null」的断言不随库状态漂移 */
+  placeholderSessionId: string;
   ticketTypeId: string;
   ticketTypeCode: string;
   ticketTypeName: string;
@@ -77,12 +82,17 @@ interface CriterionFixture {
  * 不依赖种子数据，也就不依赖"测试库是否跑过 seed"。
  */
 async function createFixture(): Promise<Fixture> {
+  // 场次直接置为 voting：登录与提交都要求「票所属场次 = voting」。
+  const sessionId = await createTestSession(prisma, `投票测试场次-${tag}`, 'voting');
+  // 占位一场（draft）：让「库里 ≥2 场」成为本文件的稳定前提。
+  const placeholderSessionId = await createTestSession(prisma, `投票测试占位场次-${tag}`, 'draft');
   const ticketType = await prisma.ticketType.create({
-    data: { code: `VT${tag}`, name: `投票测试票种-${tag}`, weightPercent: 100 },
+    data: { sessionId, code: `VT${tag}`, name: `投票测试票种-${tag}`, weightPercent: 100 },
   });
   // 表头四项显式给非默认值：用默认值断言不出"原样回传"，硬编码默认值也能蒙混过关。
   const department = await prisma.department.create({
     data: {
+      sessionId,
       name: `投票测试部门-${tag}`,
       sortOrder: 1,
       questionnaireType: 'workshop',
@@ -92,28 +102,29 @@ async function createFixture(): Promise<Fixture> {
     },
   });
   const otherDepartment = await prisma.department.create({
-    data: { name: `投票测试他部门-${tag}`, sortOrder: 2 },
+    data: { sessionId, name: `投票测试他部门-${tag}`, sortOrder: 2 },
   });
   const disabledDepartment = await prisma.department.create({
-    data: { name: `投票测试停用部门-${tag}`, sortOrder: 3, enabled: false },
+    data: { sessionId, name: `投票测试停用部门-${tag}`, sortOrder: 3, enabled: false },
   });
 
   const columnA = await prisma.voteColumn.create({
-    data: { departmentId: department.id, name: '主任', sortOrder: 1 },
+    data: { departmentId: department.id, sessionId, name: '主任', sortOrder: 1 },
   });
   const columnB = await prisma.voteColumn.create({
-    data: { departmentId: department.id, name: '党支部书记', sortOrder: 2 },
+    data: { departmentId: department.id, sessionId, name: '党支部书记', sortOrder: 2 },
   });
   const disabledColumn = await prisma.voteColumn.create({
-    data: { departmentId: department.id, name: '停用被评列', sortOrder: 3, enabled: false },
+    data: { departmentId: department.id, sessionId, name: '停用被评列', sortOrder: 3, enabled: false },
   });
   const otherColumn = await prisma.voteColumn.create({
-    data: { departmentId: otherDepartment.id, name: '外部门被评列', sortOrder: 1 },
+    data: { departmentId: otherDepartment.id, sessionId, name: '外部门被评列', sortOrder: 1 },
   });
 
   const wide = await prisma.criterion.create({
     data: {
       departmentId: department.id,
+      sessionId,
       name: '德',
       description: '政治素质、职业操守与作风表现',
       minScore: 0,
@@ -122,11 +133,12 @@ async function createFixture(): Promise<Fixture> {
     },
   });
   const narrow = await prisma.criterion.create({
-    data: { departmentId: department.id, name: '能', minScore: 10, maxScore: 20, sortOrder: 2 },
+    data: { departmentId: department.id, sessionId, name: '能', minScore: 10, maxScore: 20, sortOrder: 2 },
   });
   const disabledCriterion = await prisma.criterion.create({
     data: {
       departmentId: department.id,
+      sessionId,
       name: '停用项点',
       minScore: 0,
       maxScore: 100,
@@ -135,10 +147,12 @@ async function createFixture(): Promise<Fixture> {
     },
   });
   const otherCriterion = await prisma.criterion.create({
-    data: { departmentId: otherDepartment.id, name: '外部门项点', minScore: 0, maxScore: 100 },
+    data: { departmentId: otherDepartment.id, sessionId, name: '外部门项点', minScore: 0, maxScore: 100 },
   });
 
   return {
+    sessionId,
+    placeholderSessionId,
     ticketTypeId: ticketType.id,
     ticketTypeCode: ticketType.code,
     ticketTypeName: ticketType.name,
@@ -202,13 +216,19 @@ async function setVoteWindow(
 async function createTicket(status: 'unused' | 'used' | 'revoked' = 'unused') {
   ticketSeq += 1;
   const batch = await prisma.ticketBatch.create({
-    data: { ticketTypeId: fixture.ticketTypeId, count: 1, operator: 'vote.test' },
+    data: {
+      ticketTypeId: fixture.ticketTypeId,
+      sessionId: fixture.sessionId,
+      count: 1,
+      operator: 'vote.test',
+    },
   });
   return prisma.ticket.create({
     data: {
       code: `${tag}${ticketSeq}`,
       ticketTypeId: fixture.ticketTypeId,
       batchId: batch.id,
+      sessionId: fixture.sessionId,
       status,
       usedAt: status === 'unused' ? null : new Date(),
     },
@@ -292,6 +312,10 @@ afterAll(async () => {
     },
   });
   await prisma.ticketType.delete({ where: { id: fixture.ticketTypeId } });
+  // 场次最后删：RESTRICT 外键要求先清空挂靠的业务数据。
+  await prisma.voteSession.deleteMany({
+    where: { id: { in: [fixture.sessionId, fixture.placeholderSessionId] } },
+  });
 
   for (const key of WINDOW_KEYS) {
     const original = savedWindowSettings.find((row) => row.key === key);
@@ -317,7 +341,51 @@ describe('GET /api/vote/status', () => {
     const res = await request(app).get('/api/vote/status');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ open: true, message: '', startAt: null, endAt: null });
+    expect(res.body.open).toBe(true);
+    expect(res.body.message).toBe('');
+    // 本夹具场次存在 → 库中 ≥2 场，未带 sessionId 时只按全局窗口判定，session 为 null。
+    expect(res.body.session).toBeNull();
+  });
+
+  it('带 sessionId 时按该场次判定并回传场次信息', async () => {
+    await setVoteWindow(true);
+
+    const res = await request(app).get('/api/vote/status').query({ sessionId: fixture.sessionId });
+
+    expect(res.status).toBe(200);
+    expect(res.body.open).toBe(true);
+    expect(res.body.session).toEqual({
+      id: fixture.sessionId,
+      name: `投票测试场次-${tag}`,
+      status: 'voting',
+    });
+  });
+
+  it('场次不存在 → 400 SESSION_NOT_FOUND', async () => {
+    const res = await request(app).get('/api/vote/status').query({ sessionId: MISSING_ID });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('SESSION_NOT_FOUND');
+  });
+
+  it('场次暂停时即使全局开放也判定为关闭', async () => {
+    await setVoteWindow(true);
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'paused' },
+    });
+
+    const res = await request(app).get('/api/vote/status').query({ sessionId: fixture.sessionId });
+
+    expect(res.body.open).toBe(false);
+    expect(res.body.message).toBe(VOTE_CLOSED_MESSAGE);
+    expect(res.body.session.status).toBe('paused');
+
+    // 恢复 voting，避免影响后续用例
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'voting' },
+    });
   });
 
   it('关闭时返回统一文案「当前未开放投票」', async () => {
@@ -360,6 +428,12 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
       code: fixture.ticketTypeCode,
       name: fixture.ticketTypeName,
       weightPercent: 100,
+    });
+    // 响应带票所属场次（投票端按它展示与判定开放状态）。
+    expect(res.body.session).toEqual({
+      id: fixture.sessionId,
+      name: `投票测试场次-${tag}`,
+      status: 'voting',
     });
 
     // 部门只含启用项、按 sortOrder：夹具两个部门 sortOrder 1 / 2，停用部门不出现。
@@ -417,6 +491,36 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
     expect(after?.status).toBe('unused');
   });
 
+  it('全局开放但场次暂停/结束 → 403，票据不被消耗', async () => {
+    await setVoteWindow(true);
+    const ticket = await createTicket();
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'paused' },
+    });
+
+    const paused = await login(ticket.code);
+    expect(paused.status).toBe(403);
+    expect(paused.body.error.code).toBe('VOTE_CLOSED');
+
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'ended' },
+    });
+    const ended = await login(ticket.code);
+    expect(ended.status).toBe(403);
+    expect(ended.body.error.code).toBe('VOTE_CLOSED');
+
+    const after = await prisma.ticket.findUnique({ where: { id: ticket.id } });
+    expect(after?.status).toBe('unused');
+
+    // 恢复 voting，避免影响后续用例
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'voting' },
+    });
+  });
+
   it('未开放时优先按码判定：无效码仍然是 401 而不是 403', async () => {
     await setVoteWindow(false);
 
@@ -439,7 +543,7 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
 
     // 给第一个职务列绑定被评人：表头第二行「职务与姓名」要随表回传姓名
     const employee = await prisma.employee.create({
-      data: { departmentId: fixture.departmentId, name: '张三' },
+      data: { departmentId: fixture.departmentId, sessionId: fixture.sessionId, name: '张三' },
     });
     await prisma.voteColumn.update({
       where: { id: fixture.voteColumnIds[0] },
@@ -528,6 +632,19 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
 });
 
 describe('POST /api/vote/submit —— 提交与核销', () => {
+  /**
+   * 本部门启用被评列（2）× 启用项点（2）= 4 格的完整提交内容。
+   * 提交完整性校验要求全部格子都填，多数用例从它出发。
+   */
+  function fullItems(): Array<{ voteColumnId: string; criterionId: string; score: number }> {
+    return [
+      { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 88 },
+      { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 15 },
+      { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
+      { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 12 },
+    ];
+  }
+
   it('正常提交：返回 ok、只落一张匿名评分表、票据被核销', async () => {
     const ticket = await createTicket();
     const loginRes = await login(ticket.code);
@@ -535,11 +652,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 88 },
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 15 },
-        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
-      ],
+      items: fullItems(),
     });
 
     expect(res.status).toBe(200);
@@ -555,12 +668,12 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     });
     expect(sheets).toHaveLength(1);
     expect(sheets[0]?.ticketTypeId).toBe(fixture.ticketTypeId);
+    expect(sheets[0]?.sessionId).toBe(fixture.sessionId);
     expect(sheets[0]?.submittedAt).toBeInstanceOf(Date);
-    // 只落已提交的格子：4 个格子里故意缺 1 个，提交端点不补 0 行 ——
-    // 缺格由计分层按 0 分计入（新口径：弃权、不填视为 0 分），不在这里替它做。
-    expect(sheets[0]?.items).toHaveLength(3);
-    expect(sheets[0]?.items.map((item) => item.score).sort((a, b) => a - b)).toEqual([15, 60, 88]);
-    // 分数要落在对的格子上：按 (被评列, 项点) 对齐，而不只是三个数字都对得上。
+    // 全部 4 格必须都落库：完整性校验强制填满，缺格在提交前就被拒绝。
+    expect(sheets[0]?.items).toHaveLength(4);
+    expect(sheets[0]?.items.map((item) => item.score).sort((a, b) => a - b)).toEqual([12, 15, 60, 88]);
+    // 分数要落在对的格子上：按 (被评列, 项点) 对齐，而不只是四个数字都对得上。
     expect(
       sheets[0]?.items.map((item) => `${item.voteColumnId}|${item.criterionId}`).sort(),
     ).toEqual(
@@ -568,11 +681,43 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
         `${fixture.voteColumnIds[0]}|${fixture.wide.id}`,
         `${fixture.voteColumnIds[0]}|${fixture.narrow.id}`,
         `${fixture.voteColumnIds[1]}|${fixture.wide.id}`,
+        `${fixture.voteColumnIds[1]}|${fixture.narrow.id}`,
       ].sort(),
     );
   });
 
-  it('匿名边界：score_sheets 只有 id / department_id / ticket_type_id / submitted_at 四列', async () => {
+  it('只提交部分格子 → 400 INCOMPLETE_SHEET，票据不被消耗', async () => {
+    const { token, ticketId } = await newToken();
+
+    const res = await postSubmit(token, {
+      departmentId: fixture.departmentId,
+      // 4 格只交 3 格：缺 1 格
+      items: fullItems().slice(0, 3),
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INCOMPLETE_SHEET');
+    expect(res.body.error.message).toBe('还有 1 个项点未完成打分');
+    const after = await prisma.ticket.findUnique({ where: { id: ticketId } });
+    expect(after?.status).toBe('unused');
+    expect(await countSheets()).toBe(0);
+  });
+
+  it('一格都不交（空 items 在路由层已被拒）与交重复格都被前置校验拦下', async () => {
+    const { token } = await newToken();
+
+    const duplicated = await postSubmit(token, {
+      departmentId: fixture.departmentId,
+      items: [
+        ...fullItems(),
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 10 },
+      ],
+    });
+    expect(duplicated.status).toBe(400);
+    expect(duplicated.body.error.code).toBe('DUPLICATE_ITEM');
+  });
+
+  it('匿名边界：score_sheets 只有 id / department_id / ticket_type_id / session_id / submitted_at 五列', async () => {
     const columns = await prisma.$queryRaw<Array<{ column_name: string }>>`
       SELECT column_name
       FROM information_schema.columns
@@ -581,11 +726,13 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     `;
 
     // 没有 ticket_id、没有 IP、没有 user_agent —— 匿名性靠字段不存在来保证，而不是靠"记得别写"。
+    // session_id 只标记场次归属（多场次隔离必需），同样无法定位到投票人。
     expect(columns.map((column) => column.column_name)).toEqual([
       'id',
       'department_id',
       'ticket_type_id',
       'submitted_at',
+      'session_id',
     ]);
   });
 
@@ -593,7 +740,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     const { token } = await newToken();
     const body = {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: fullItems(),
     };
 
     const first = await postSubmit(token, body);
@@ -609,13 +756,40 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     const { token } = await newToken();
     const body = {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 70 }],
+      items: fullItems(),
     };
 
     const [first, second] = await Promise.all([postSubmit(token, body), postSubmit(token, body)]);
 
     expect([first.status, second.status].sort((a, b) => a - b)).toEqual([200, 409]);
     expect(await countSheets()).toBe(1);
+  });
+
+  it('提交中途场次被暂停 → 403，票据保持未使用', async () => {
+    const ticket = await createTicket();
+    const loginRes = await login(ticket.code);
+    const token = loginRes.body.token as string;
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'paused' },
+    });
+
+    const res = await postSubmit(token, {
+      departmentId: fixture.departmentId,
+      items: fullItems(),
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('VOTE_CLOSED');
+    const after = await prisma.ticket.findUnique({ where: { id: ticket.id } });
+    expect(after?.status).toBe('unused');
+    expect(await countSheets()).toBe(0);
+
+    // 恢复 voting，避免影响后续用例
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { status: 'voting' },
+    });
   });
 
   it('投票中途关闭后提交被拒（403），票据保持未使用', async () => {
@@ -712,6 +886,8 @@ describe('POST /api/vote/submit —— 入参校验', () => {
       items: [
         { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 10 },
         { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 20 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 50 },
+        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
       ],
     });
 
@@ -819,7 +995,12 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     });
     const fixed = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 20 }],
+      items: [
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 20 },
+        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 50 },
+        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 15 },
+        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
+      ],
     });
 
     expect(fixed.status).toBe(200);

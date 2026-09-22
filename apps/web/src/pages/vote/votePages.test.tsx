@@ -214,6 +214,103 @@ describe('打分表页（Sheet）', () => {
   });
 });
 
+describe('多场评议（Gate 容错）', () => {
+  it('状态接口场次非 voting 时整页拦截并说明场次名', async () => {
+    fetchMock.mockResolvedValueOnce(
+      reply(200, { ...statusBody(true), session: { id: 's1', name: '安顺车站', status: 'paused' } }),
+    );
+    renderGate('/');
+
+    expect(await screen.findByText('当前场次未开放投票')).toBeInTheDocument();
+    expect(screen.getByText(/安顺车站/)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('状态接口无 session 字段（旧后端）时按原逻辑放行', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(true)));
+    renderGate('/');
+
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('登录接口返回场次非 voting 时拦截并提示，不存令牌不进打分页', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/api/vote/status')) return Promise.resolve(reply(200, statusBody(true)));
+      if (url.endsWith('/api/vote/session')) {
+        return Promise.resolve(
+          reply(200, {
+            token: 'tok-1',
+            ticketType: TICKET_TYPE,
+            departments: [DEPARTMENT],
+            session: { id: 's1', name: '贵阳西车站', status: 'ended' },
+          }),
+        );
+      }
+      return Promise.resolve(reply(404, { error: { code: 'NOT_FOUND', message: '未预期的请求' } }));
+    });
+    renderGate('/');
+
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
+    fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
+
+    expect(await screen.findByText(/当前场次未开放投票/)).toBeInTheDocument();
+    expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBeNull();
+    expect(screen.queryByText('已进入打分表页')).not.toBeInTheDocument();
+  });
+
+  it('登录成功且场次开放时，场次信息随会话一起进缓存', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/api/vote/status')) return Promise.resolve(reply(200, statusBody(true)));
+      if (url.endsWith('/api/vote/session')) {
+        return Promise.resolve(
+          reply(200, {
+            token: 'tok-1',
+            ticketType: TICKET_TYPE,
+            departments: [DEPARTMENT],
+            session: { id: 's1', name: '内设机构', status: 'voting' },
+          }),
+        );
+      }
+      if (url.includes('/api/vote/sheet')) return Promise.resolve(reply(200, sheetBody()));
+      return Promise.resolve(reply(404, { error: { code: 'NOT_FOUND', message: '未预期的请求' } }));
+    });
+    renderGate('/');
+
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
+    fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
+
+    expect(await screen.findByText('已进入打分表页')).toBeInTheDocument();
+    // 打分页凭这份缓存显示场次名
+    const cached = JSON.parse(sessionStorage.getItem('staff_vote_session_info') ?? '{}') as {
+      session?: { name?: string };
+    };
+    expect(cached.session?.name).toBe('内设机构');
+  });
+
+  it('打分页缓存带 session 字段时显示本轮评议场次名', async () => {
+    sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
+    saveVoteSessionInfo({
+      ticketType: TICKET_TYPE,
+      departments: [DEPARTMENT],
+      session: { id: 's1', name: '安顺车站', status: 'voting' },
+    });
+    fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
+    renderSheet('/vote/sheet');
+
+    expect(await screen.findByText(/本轮评议：安顺车站/)).toBeInTheDocument();
+  });
+
+  it('打分页缓存无 session 字段时不显示场次名也不报错', async () => {
+    sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
+    saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
+    fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
+    renderSheet('/vote/sheet');
+
+    expect(await screen.findByText('提交后不可修改')).toBeInTheDocument();
+    expect(screen.queryByText(/本轮评议/)).not.toBeInTheDocument();
+  });
+});
+
 describe('成功页（Done）', () => {
   it('明确告知已提交且不可修改，不留可回退的入口', () => {
     const { container } = render(

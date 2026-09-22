@@ -110,6 +110,11 @@ export function VoteGate() {
       setFormError(null);
       try {
         const result = await voteApi.session(code);
+        // 多场评议：场次已暂停/结束时后端可能仍然发码成功，前端在这里拦下并说明原因
+        if (result.session !== undefined && result.session.status !== 'voting') {
+          setFormError('当前场次未开放投票，请稍后再试或联系发码人。');
+          return;
+        }
         // 服务端还没有启用任何部门时，打分页无表可填、只能把人弹回入口。
         // 空部门是合法响应而不是错误，所以在这里说清原因，不存令牌也不跳转。
         if (result.departments.length === 0) {
@@ -117,7 +122,12 @@ export function VoteGate() {
           return;
         }
         saveVoteToken(result.token);
-        saveVoteSessionInfo({ ticketType: result.ticketType, departments: result.departments });
+        saveVoteSessionInfo({
+          ticketType: result.ticketType,
+          departments: result.departments,
+          // 场次信息旧后端没有：undefined 原样交给缓存，读取端容错
+          session: result.session,
+        });
         // replace：不回退到一个已经核销过的入口页
         void navigate('/vote/sheet', { replace: true });
       } catch (error: unknown) {
@@ -169,6 +179,17 @@ export function VoteGate() {
       <VoteSurface>
         <GateCard>
           <Result status="info" title="当前未开放投票" subTitle={closedHint(status)} />
+        </GateCard>
+      </VoteSurface>
+    );
+  }
+
+  // 多场评议：所在场次已暂停或已结束（旧后端没有 session 字段，undefined 时不拦截）
+  if (status.session !== undefined && status.session.status !== 'voting') {
+    return (
+      <VoteSurface>
+        <GateCard>
+          <Result status="info" title="当前场次未开放投票" subTitle={`「${status.session.name}」暂未开放投票，请在通知的投票时间内再来。`} />
         </GateCard>
       </VoteSurface>
     );

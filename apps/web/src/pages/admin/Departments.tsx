@@ -17,6 +17,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
 import { ApiError, adminApi, type DepartmentBrief } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { describeError } from './lib.js';
 import {
@@ -44,7 +45,8 @@ interface DepartmentForm {
  * 结果页仍可导出，可随时再启用。口径用 Alert 写在表格上方（产品原则 4）。
  */
 export function AdminDepartments() {
-  const load = useCallback(() => adminApi.departments.list(), []);
+  const { sessionId } = useAdminSession();
+  const load = useCallback(() => adminApi.departments.list({ sessionId }), [sessionId]);
   const { data, error, loading, refresh } = usePolling(load, 0);
   const notify = useNotify();
   const { can } = useAuth();
@@ -93,7 +95,7 @@ export function AdminDepartments() {
     setSaving(true);
     try {
       if (editing) await adminApi.departments.update(editing.id, values);
-      else await adminApi.departments.create(values);
+      else await adminApi.departments.create(values, sessionId);
       notify.success(editing ? '部门已更新' : '部门已创建');
       setModalOpen(false);
       refresh();

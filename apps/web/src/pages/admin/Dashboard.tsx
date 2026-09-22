@@ -5,7 +5,8 @@ import type { TableColumnsType } from 'antd';
 import { Link } from 'react-router';
 import { adminApi, type StatsOverview } from '../../lib/api.js';
 import { usePolling } from '../../lib/usePolling.js';
-import { formatDateTime } from './lib.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
+import { formatDateTime, EMPTY_TEXT } from './lib.js';
 import {
   ErrorState,
   LoadingState,
@@ -39,7 +40,9 @@ function StepNo({ n }: { n: number }) {
  * 只在上方提示条里告知「可能不是最新」，不会把屏幕清空。
  */
 export function AdminDashboard() {
-  const fetchOverview = useCallback(() => adminApi.stats.overview(), []);
+  const { sessionId } = useAdminSession();
+  // 当前场次变化时 fetchOverview 换新，usePolling 会按新场次重新拉取
+  const fetchOverview = useCallback(() => adminApi.stats.overview({ sessionId }), [sessionId]);
   const { data, error, loading, refresh } = usePolling(fetchOverview, 5000);
 
   if (loading && !data) return <LoadingState rows={6} />;
@@ -65,6 +68,16 @@ export function AdminDashboard() {
       render: (value: number) => `${value}%`,
     },
     { title: '已发放', dataIndex: 'issued', width: 96, align: 'right', className: 'tabular' },
+    {
+      title: '已领码',
+      dataIndex: 'assignedCount',
+      width: 96,
+      align: 'right',
+      className: 'tabular',
+      // 未做选配的票种不返回该字段：显示「-」而不是误导性的 0
+      render: (value: number | undefined) =>
+        value === undefined ? EMPTY_TEXT : <span className="tabular">{value}</span>,
+    },
     { title: '已使用', dataIndex: 'used', width: 96, align: 'right', className: 'tabular' },
     { title: '剩余可用', dataIndex: 'unused', width: 100, align: 'right', className: 'tabular' },
     { title: '已作废', dataIndex: 'revoked', width: 96, align: 'right', className: 'tabular' },
@@ -183,6 +196,17 @@ export function AdminDashboard() {
           dataSource={data.ticketTypes}
           pagination={false}
           scroll={{ x: 'max-content' }}
+          expandable={{
+            // 按票别选配人员发码后，后端返回 usedByAssignee：展开看该票种已投票的领码人名单
+            rowExpandable: (row) => (row.usedByAssignee?.length ?? 0) > 0,
+            expandedRowRender: (row) => (
+              <Typography.Text type="secondary">
+                {`已投票人员（${row.usedByAssignee?.length ?? 0} 人）：${
+                  row.usedByAssignee?.map((item) => item.employeeName).join('、') ?? EMPTY_TEXT
+                }`}
+              </Typography.Text>
+            ),
+          }}
           locale={{ emptyText: emptyRows('尚未配置票种，请先到「票种权重」页配置') }}
         />
       </Card>

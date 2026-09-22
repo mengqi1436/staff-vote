@@ -112,14 +112,29 @@ async function seedRoles(permissionIdByCode: Map<string, string>): Promise<Map<s
   return idByCode;
 }
 
-async function seedTicketTypes(): Promise<void> {
+/** 迁移写入的默认场次 ID：存量数据与 seed 票种都归属它（与 0005 迁移一致）。 */
+const DEFAULT_SESSION_ID = '00000000-0000-7000-8000-000000000001';
+
+/**
+ * 确保默认场次存在（迁移已建则跳过），返回其 ID。
+ * 多场次时代码不在这里建新场次——那是管理员的操作。
+ */
+async function ensureDefaultSession(): Promise<string> {
+  const existing = await prisma.voteSession.findUnique({ where: { id: DEFAULT_SESSION_ID } });
+  if (existing) return existing.id;
+  const created = await prisma.voteSession.create({ data: { id: DEFAULT_SESSION_ID, name: '默认场次' } });
+  console.log('[seed] 已创建默认场次');
+  return created.id;
+}
+
+async function seedTicketTypes(sessionId: string): Promise<void> {
   for (const item of DEFAULT_TICKET_TYPES) {
     const existing = await prisma.ticketType.findUnique({ where: { code: item.code } });
     if (existing) {
       console.log(`[seed] 票种 ${item.code} 已存在，跳过`);
       continue;
     }
-    await prisma.ticketType.create({ data: item });
+    await prisma.ticketType.create({ data: { ...item, sessionId } });
     console.log(`[seed] 已创建票种 ${item.code}（权重 ${item.weightPercent}%）`);
   }
 }
@@ -136,10 +151,11 @@ async function seedSettings(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const sessionId = await ensureDefaultSession();
   const permissionIdByCode = await seedPermissions();
   const roleIdByCode = await seedRoles(permissionIdByCode);
   await seedAdmin(roleIdByCode.get('super_admin') ?? null);
-  await seedTicketTypes();
+  await seedTicketTypes(sessionId);
   await seedSettings();
 
   const weights = await prisma.ticketType.findMany({

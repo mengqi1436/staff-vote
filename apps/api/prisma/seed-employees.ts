@@ -46,6 +46,7 @@ async function main(): Promise<void> {
     const count = 8 + (deptIndex % 5); // 8–12 人
     const rows = Array.from({ length: count }, (_, i) => ({
       departmentId: dept.id,
+      sessionId: dept.sessionId,
       name: NAME_POOL[(deptIndex * 7 + i) % NAME_POOL.length] as string,
       // 工号全局唯一：两位部门序号 + 三位部门内序号
       employeeNo: `${String(deptIndex + 1).padStart(2, '0')}${String(i + 1).padStart(3, '0')}`,

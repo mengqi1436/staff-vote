@@ -14,6 +14,7 @@ import {
   createCriterion,
   disableCriterion,
   listCriteria,
+  resolveSessionId,
   updateCriterion,
 } from '../../services/admin.js';
 import { requirePermission } from '../../middleware/permission.js';
@@ -21,10 +22,12 @@ import { IdParamSchema, operatorOf } from './helpers.js';
 
 const ListQuerySchema = z.object({
   departmentId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
 });
 
 const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
+  sessionId: z.string().min(1).optional(),
   name: z.string().trim().min(1, '项点名称不能为空').max(50),
   // 项点描述即参考表里项点名称下方那段长文字；留空表示没有描述
   description: z.string().trim().max(1000).nullable().optional(),
@@ -45,8 +48,8 @@ const PatchSchema = z.object({
 export const criteriaRouter: Router = Router();
 
 criteriaRouter.get('/', async (req, res) => {
-  const { departmentId } = ListQuerySchema.parse(req.query);
-  res.json(await listCriteria(departmentId));
+  const { departmentId, sessionId } = ListQuerySchema.parse(req.query);
+  res.json(await listCriteria(departmentId, await resolveSessionId(sessionId)));
 });
 
 criteriaRouter.post('/', requirePermission('criteria.write'), async (req, res) => {

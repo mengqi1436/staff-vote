@@ -30,6 +30,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
 const { cleanupRbac, createAdmin, createRole } = await import('./rbac-fixtures.js');
+const { ensureDefaultSession } = await import('./session-fixtures.js');
 
 /** 没有可用测试库就整组跳过。 */
 const describeDb = suiteEnabled ? describe : describe.skip;
@@ -93,6 +94,8 @@ describeDb('管理端写端点的权限门控', () => {
 
     await cleanupRbac(TAG);
     await clearOwnFixtures();
+    // 业务表挂 session_id 后，接口的场次自动解析依赖库里恰有默认场次。
+    await ensureDefaultSession(prisma);
 
     // 只读角色不授任何权限：这正是「没有写权限的角色天然只读」的场景
     const viewerRoleId = await createRole(`${TAG}viewer`, '测试只读角色', []);
@@ -107,23 +110,37 @@ describeDb('管理端写端点的权限门控', () => {
   beforeEach(async () => {
     await clearOwnFixtures();
 
+    const sessionId = await ensureDefaultSession(prisma);
     const department = await prisma.department.create({
-      data: { name: `${TAG}部门-夹具`, sortOrder: 1 },
+      data: { sessionId, name: `${TAG}部门-夹具`, sortOrder: 1 },
     });
     departmentId = department.id;
 
     const employee = await prisma.employee.create({
-      data: { departmentId, name: `${TAG}职工-夹具`, sortOrder: 1 },
+      data: { departmentId, sessionId, name: `${TAG}职工-夹具`, sortOrder: 1 },
     });
     employeeId = employee.id;
 
     const criterion = await prisma.criterion.create({
-      data: { departmentId, name: `${TAG}项点-夹具`, minScore: 0, maxScore: 100, sortOrder: 1 },
+      data: {
+        departmentId,
+        sessionId,
+        name: `${TAG}项点-夹具`,
+        minScore: 0,
+        maxScore: 100,
+        sortOrder: 1,
+      },
     });
     criterionId = criterion.id;
 
     const ticketType = await prisma.ticketType.create({
-      data: { code: `${TAG}TT-BASE`, name: `${TAG}票种-夹具`, weightPercent: 0, enabled: false },
+      data: {
+        sessionId,
+        code: `${TAG}TT-BASE`,
+        name: `${TAG}票种-夹具`,
+        weightPercent: 0,
+        enabled: false,
+      },
     });
     ticketTypeId = ticketType.id;
   });

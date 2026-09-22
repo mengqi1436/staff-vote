@@ -29,6 +29,10 @@ const { prisma } = await import('../src/db.js');
 const { hashPassword } = await import('../src/lib/password.js');
 const { ALL_PERMISSION_CODES } = await import('../src/lib/permissions.js');
 const { createRole } = await import('./rbac-fixtures.js');
+const {
+  createTestSession,
+  ensureDefaultSession,
+} = await import('./session-fixtures.js');
 
 const app = createApp();
 
@@ -39,9 +43,15 @@ const ADMIN_PASSWORD = 'e2e-Password-123';
 
 // 跨用例共享的状态
 let admin: ReturnType<typeof request.agent>;
+/** 主场次：用例 1b 通过接口创建并 start，全部既有用例在它之上跑。 */
+let sessionId = '';
+/** 多场次流程用例的场次 B。 */
+let sessionBId = '';
 let departmentId = '';
 let voteColumnAId = '';
 let voteColumnBId = '';
+/** 同名第二行「主任」：完整格子数是 3 列 × 2 项点 = 6 格。 */
+let voteColumnCId = '';
 let criterionScoreId = '';
 let criterionQualityId = '';
 let ticketTypeAId = '';
@@ -62,10 +72,10 @@ beforeAll(async () => {
   await prisma.department.deleteMany();
   await prisma.ticketType.deleteMany();
   await prisma.setting.deleteMany();
-  // 刻意【不】清空 audit_logs：审计表是只增的，本文件的用例也不读它，
-  // 却会连带清掉同库其他测试文件刚写入的审计行（并发跑整套时表现为
-  // 「别的套件断言审计条数突然变成 2」）。业务表清空已足够让 e2e 从干净状态开始。
   await prisma.adminUser.deleteMany();
+  // 场次最后删（业务表全部清空后外键已无引用），保证本文件从「零场次」开始，
+  // 之后建的场次是库里唯一一场，各创建类接口不带 sessionId 也能自动解析。
+  await prisma.voteSession.deleteMany();
 
   // 账号必须带角色：管理端写接口（发码、配置）都要求权限码，无角色账号等价只读。
   // createRole 是幂等的，重复跑不会撞唯一约束。
@@ -78,14 +88,17 @@ beforeAll(async () => {
     },
   });
 
+  // 主场次由用例 1b 经接口创建并 start；这里只建它前面的场次名占位（draft）。
+  sessionId = await createTestSession(prisma, 'e2e-主场次', 'draft');
+
   // 票种由本文件自行建立，不依赖 seed：端到端测试跑在独立的测试库上，
   // 而 seed 只写开发库。权重仍为 50/30/20（合计 100），
   // 这样用例 14 的加权归一化断言才有确定的分母。
   await prisma.ticketType.createMany({
     data: [
-      { code: 'A', name: 'A 票（领导评议）', weightPercent: 50, sortOrder: 0 },
-      { code: 'B', name: 'B 票（部门互评）', weightPercent: 30, sortOrder: 1 },
-      { code: 'C', name: 'C 票（职工评议）', weightPercent: 20, sortOrder: 2 },
+      { sessionId, code: 'A', name: 'A 票（领导评议）', weightPercent: 50, sortOrder: 0 },
+      { sessionId, code: 'B', name: 'B 票（部门互评）', weightPercent: 30, sortOrder: 1 },
+      { sessionId, code: 'C', name: 'C 票（职工评议）', weightPercent: 20, sortOrder: 2 },
     ],
   });
 
@@ -93,6 +106,23 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // 无论用例是否失败，都按外键依赖把业务表清空再删场次：用例 18 中途断言失败时
+  // 第二场次及其业务数据还在库里，直接删场次会被 RESTRICT 挡住并中断清理。
+  await prisma.scoreItem.deleteMany();
+  await prisma.scoreSheet.deleteMany();
+  await prisma.ticket.deleteMany();
+  await prisma.ticketBatch.deleteMany();
+  await prisma.employee.deleteMany();
+  await prisma.criterion.deleteMany();
+  await prisma.voteColumn.deleteMany();
+  await prisma.department.deleteMany();
+  await prisma.ticketType.deleteMany();
+  await prisma.setting.deleteMany();
+  await prisma.adminUser.deleteMany();
+  // 清掉本文件建的场次并补回默认场次：后续文件（permission-gate 等）依赖
+  // 「库里恰有一场」才能自动解析 sessionId。
+  await prisma.voteSession.deleteMany();
+  await ensureDefaultSession(prisma);
   await prisma.$disconnect();
 });
 
@@ -106,6 +136,24 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.username).toBe(ADMIN_USERNAME);
     // 会话在 httpOnly Cookie 里，响应体不应回传令牌
     expect(res.body.token).toBeUndefined();
+  });
+
+  it('1b. 创建场次并启动（draft → voting），非法流转被拒', async () => {
+    const started = await admin.post(`/api/admin/sessions/${sessionId}/start`);
+    expect(started.status).toBe(200);
+    expect(started.body.status).toBe('voting');
+    expect(started.body.startAt).toBeTruthy();
+    expect(started.body.endedAt).toBeNull();
+
+    // voting → start 不是合法流转（已是 voting）
+    const again = await admin.post(`/api/admin/sessions/${sessionId}/start`);
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe('INVALID_SESSION_TRANSITION');
+
+    const list = await admin.get('/api/admin/sessions');
+    expect(list.status).toBe(200);
+    const row = list.body.sessions.find((s: { id: string }) => s.id === sessionId);
+    expect(row?.status).toBe('voting');
   });
 
   it('2. 配置部门、职工名单与被评列（打分表的列）', async () => {
@@ -142,6 +190,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(c3.status).toBe(200);
     expect(c3.body.name).toBe('主任');
     expect(c3.body.id).not.toBe(voteColumnAId);
+    voteColumnCId = c3.body.id;
   });
 
   it('3. 配置素质项点（打分表的行），两项满分不同', async () => {
@@ -222,6 +271,12 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(session.status).toBe(200);
     expect(session.body.ticketType.code).toBe('A');
     expect(session.body.token).toBeTruthy();
+    // 响应带票所属场次（场次的 start 让登录成为可能）
+    expect(session.body.session).toEqual({
+      id: sessionId,
+      name: 'e2e-主场次',
+      status: 'voting',
+    });
     // 令牌不得携带码明文
     expect(JSON.stringify(session.body)).not.toContain(generatedCodes[0] as string);
 
@@ -280,7 +335,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(empty.status).toBeLessThan(500);
   });
 
-  it('10. A 票提交完整打分（4 格）', async () => {
+  it('10. A 票提交完整打分（3 列 × 2 项点 = 6 格）', async () => {
     const session = await request(app).post('/api/vote/session').send({ code: generatedCodes[0] });
     const token = session.body.token as string;
 
@@ -294,6 +349,8 @@ describe('端到端：职工素质评议完整流程', () => {
           { voteColumnId: voteColumnAId, criterionId: criterionQualityId, score: 8 },
           { voteColumnId: voteColumnBId, criterionId: criterionScoreId, score: 70 },
           { voteColumnId: voteColumnBId, criterionId: criterionQualityId, score: 6 },
+          { voteColumnId: voteColumnCId, criterionId: criterionScoreId, score: 80 },
+          { voteColumnId: voteColumnCId, criterionId: criterionQualityId, score: 7 },
         ],
       });
     expect(res.status).toBe(200);
@@ -331,6 +388,8 @@ describe('端到端：职工素质评议完整流程', () => {
           { voteColumnId: voteColumnAId, criterionId: criterionQualityId, score: 6 },
           { voteColumnId: voteColumnBId, criterionId: criterionScoreId, score: 50 },
           { voteColumnId: voteColumnBId, criterionId: criterionQualityId, score: 4 },
+          { voteColumnId: voteColumnCId, criterionId: criterionScoreId, score: 60 },
+          { voteColumnId: voteColumnCId, criterionId: criterionQualityId, score: 5 },
         ],
       });
     expect(res.status).toBe(200);
@@ -409,6 +468,19 @@ describe('端到端：职工素质评议完整流程', () => {
       .join('|');
     expect(text).toContain('被评对象');
     expect(text).toContain('主任');
+
+    // 统计四口径：票别单项明细 / 票别合计明细 两个新 sheet
+    const sheetNames = workbook.worksheets.map((sheet) => sheet.name);
+    expect(sheetNames).toContain('票别单项明细');
+    expect(sheetNames).toContain('票别合计明细');
+    const detailText = workbook.worksheets
+      .find((sheet) => sheet.name === '票别单项明细')
+      ?.getSheetValues()
+      .flat()
+      .filter((v): v is string => typeof v === 'string')
+      .join('|');
+    expect(detailText).toContain('票种');
+    expect(detailText).toContain('工作业绩');
   });
 
   it('16. 随机码清单可导出', async () => {
@@ -437,5 +509,134 @@ describe('端到端：职工素质评议完整流程', () => {
     const status = await request(app).get('/api/vote/status');
     expect(status.body.open).toBe(false);
     expect(status.body.message).toBe('当前未开放投票');
+
+    // 恢复全局开关：多场次流程用例需要全局窗口开放。
+    await admin.put('/api/admin/settings').send({ 'vote.open': 'true' });
+  });
+
+  it('18. 多场次流程：建场 → start → 发码（留痕）→ 完整提交 → pause 拒登录 → end 终态', async () => {
+    // 建第二场次并启动
+    const created = await admin.post('/api/admin/sessions').send({ name: 'e2e-第二场次' });
+    expect(created.status).toBe(200);
+    sessionBId = created.body.session.id;
+    expect(created.body.session.status).toBe('draft');
+    const started = await admin.post(`/api/admin/sessions/${sessionBId}/start`);
+    expect(started.status).toBe(200);
+
+    // 第二场次自己的一套配置（数据与主场次隔离）
+    const deptB = await admin
+      .post('/api/admin/departments')
+      .send({ sessionId: sessionBId, name: '第二场次车间' });
+    expect(deptB.status).toBe(200);
+    const colB = await admin
+      .post('/api/admin/vote-columns')
+      .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '车间主任' });
+    const criterionB = await admin
+      .post('/api/admin/criteria')
+      .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '安全', minScore: 0, maxScore: 100 });
+    expect(colB.status).toBe(200);
+    expect(criterionB.status).toBe(200);
+
+    // 第二场次的职工与领码留痕：发码时把码指定给职工
+    const empB = await admin
+      .post('/api/admin/employees')
+      .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '王五' });
+    expect(empB.status).toBe(200);
+
+    // 票种 code 全局唯一（主场次已占 A/B/C），第二场次用独立编码；
+    // 权重校验按场次内启用票种合计，本场次从 0 起算，100 合法。
+    const typeBCreated = await admin
+      .post('/api/admin/ticket-types')
+      .send({ sessionId: sessionBId, code: 'D', name: 'D 票（第二场次）', weightPercent: 100 });
+    expect(typeBCreated.status).toBe(200);
+    const typeBRow = typeBCreated.body;
+
+    const gen = await admin.post('/api/admin/tickets/generate').send({
+      sessionId: sessionBId,
+      ticketTypeId: typeBRow.id,
+      count: 2,
+      // 两张码都指定给王五：一张用于提交核销，一张留给 pause 后的登录拒绝用例
+      assignments: [{ ticketTypeId: typeBRow.id, employeeIds: [empB.body.id, empB.body.id] }],
+    });
+    expect(gen.status).toBe(200);
+    const generatedTicket = await prisma.ticket.findUniqueOrThrow({
+      where: { code: gen.body.codes[0] },
+      include: { assignee: { select: { name: true } } },
+    });
+    expect(generatedTicket.assignee?.name).toBe('王五');
+
+    // 登录：全局开 + 场次 voting
+    const loginB = await request(app).post('/api/vote/session').send({ code: gen.body.codes[0] });
+    expect(loginB.status).toBe(200);
+    expect(loginB.body.session.id).toBe(sessionBId);
+    // 第二场次的部门列表只含自己的部门
+    expect((loginB.body.departments as Array<{ id: string }>).map((d) => d.id)).toEqual([
+      deptB.body.id,
+    ]);
+
+    // 完整提交（1 列 × 1 项点 = 1 格）
+    const submitB = await request(app)
+      .post('/api/vote/submit')
+      .set('Authorization', `Bearer ${loginB.body.token}`)
+      .send({
+        departmentId: deptB.body.id,
+        items: [{ voteColumnId: colB.body.id, criterionId: criterionB.body.id, score: 85 }],
+      });
+    expect(submitB.status).toBe(200);
+
+    // 统计：留痕口径可见领码人姓名，评分数据仍匿名
+    const overview = await admin.get(`/api/admin/stats/overview?sessionId=${sessionBId}`);
+    expect(overview.status).toBe(200);
+    const ticketRow = overview.body.tickets.find(
+      (t: { ticketTypeId: string }) => t.ticketTypeId === typeBRow.id,
+    );
+    expect(ticketRow.assignedCount).toBe(2);
+    expect(ticketRow.usedByAssignee).toEqual([
+      { employeeId: empB.body.id, employeeName: '王五', count: 1 },
+    ]);
+
+    // pause 后：新登录被拒（用一张未使用的码，避免"码已核销"抢在场次校验前面）
+    const paused = await admin.post(`/api/admin/sessions/${sessionBId}/pause`);
+    expect(paused.status).toBe(200);
+    expect(paused.body.status).toBe('paused');
+    const deniedLogin = await request(app)
+      .post('/api/vote/session')
+      .send({ code: gen.body.codes[1] });
+    expect(deniedLogin.status).toBe(403);
+    expect(deniedLogin.body.error.code).toBe('VOTE_CLOSED');
+
+    // end：paused → ended；ended 终态，再 start / pause 都 409
+    const ended = await admin.post(`/api/admin/sessions/${sessionBId}/end`);
+    expect(ended.status).toBe(200);
+    expect(ended.body.status).toBe('ended');
+    expect(ended.body.endedAt).toBeTruthy();
+    const restart = await admin.post(`/api/admin/sessions/${sessionBId}/start`);
+    expect(restart.status).toBe(409);
+    expect(restart.body.error.code).toBe('INVALID_SESSION_TRANSITION');
+
+    // 第二场次的结果导出包含票别明细 sheet（本场次只有一张表也要能导出）
+    const exportB = await admin
+      .get(`/api/admin/results/export.xlsx?departmentId=${deptB.body.id}`)
+      .responseType('blob');
+    expect(exportB.status).toBe(200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(exportB.body as unknown as Parameters<typeof wb.xlsx.load>[0]);
+    expect(wb.worksheets.map((sheet) => sheet.name)).toContain('票别单项明细');
+    expect(wb.worksheets.map((sheet) => sheet.name)).toContain('票别合计明细');
+
+    // 清理第二场次：先清它的业务数据（外键 RESTRICT）
+    const deptIds = [deptB.body.id];
+    await prisma.scoreItem.deleteMany({
+      where: { sheet: { departmentId: { in: deptIds } } },
+    });
+    await prisma.scoreSheet.deleteMany({ where: { departmentId: { in: deptIds } } });
+    await prisma.ticket.deleteMany({ where: { ticketTypeId: typeBRow.id } });
+    await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: typeBRow.id } });
+    await prisma.employee.deleteMany({ where: { departmentId: { in: deptIds } } });
+    await prisma.criterion.deleteMany({ where: { departmentId: { in: deptIds } } });
+    await prisma.voteColumn.deleteMany({ where: { departmentId: { in: deptIds } } });
+    await prisma.department.deleteMany({ where: { id: { in: deptIds } } });
+    await prisma.ticketType.delete({ where: { id: typeBRow.id } });
+    await prisma.voteSession.delete({ where: { id: sessionBId } });
   });
 });

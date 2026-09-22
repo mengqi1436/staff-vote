@@ -20,12 +20,14 @@ import { DownloadOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-desi
 import type { TableColumnsType } from 'antd';
 import {
   adminApi,
+  type TicketAssignment,
   type TicketBatchDto,
   type TicketDto,
   type TicketTypeDto,
 } from '../../lib/api.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { useAuth } from '../../lib/auth.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
 import { describeError, formatDateTime, splitByWeight } from './lib.js';
 import {
   ErrorState,
@@ -39,6 +41,8 @@ import {
 interface GenerateForm {
   ticketTypeId: string;
   count: number;
+  /** 选配领码人（可选）：只对表单里选中的票种生效 */
+  assignees?: string[];
 }
 
 /** 状态不靠颜色单独表意：文字才是表意手段，Tag 颜色只是辅助。 */
@@ -68,8 +72,9 @@ type CodePairRow = {
  */
 export function AdminTickets() {
   const { token } = theme.useToken();
+  const { sessionId } = useAdminSession();
 
-  const loadTicketTypes = useCallback(() => adminApi.ticketTypes.list(), []);
+  const loadTicketTypes = useCallback(() => adminApi.ticketTypes.list({ sessionId }), [sessionId]);
   const ticketTypes = usePolling(loadTicketTypes, 0);
   const enabledTypes = (ticketTypes.data ?? []).filter((type) => type.enabled);
 
@@ -85,8 +90,9 @@ export function AdminTickets() {
         pageSize,
         status: status || undefined,
         ticketTypeId: typeFilter || undefined,
+        sessionId: sessionId ?? undefined,
       }),
-    [page, pageSize, status, typeFilter],
+    [page, pageSize, status, typeFilter, sessionId],
   );
   const tickets = usePolling(loadTickets, 0);
 
@@ -96,13 +102,29 @@ export function AdminTickets() {
    */
   const loadUnusedTotal = useCallback(
     () =>
-      adminApi.tickets.list({ status: 'unused', ticketTypeId: typeFilter || undefined, pageSize: 1 }),
-    [typeFilter],
+      adminApi.tickets.list({
+        status: 'unused',
+        ticketTypeId: typeFilter || undefined,
+        pageSize: 1,
+        sessionId: sessionId ?? undefined,
+      }),
+    [typeFilter, sessionId],
   );
   const unusedTotal = usePolling(loadUnusedTotal, 0);
 
-  const loadBatches = useCallback(() => adminApi.batches.list(), []);
+  const loadBatches = useCallback(() => adminApi.batches.list({ sessionId }), [sessionId]);
   const batches = usePolling(loadBatches, 0);
+
+  // 该场次职工名单：选配领码人的候选池（列表不按部门过滤——发码人自己按姓名找）
+  const loadEmployees = useCallback(
+    () => adminApi.employees.list(undefined, sessionId ?? undefined),
+    [sessionId],
+  );
+  const employees = usePolling(loadEmployees, 0);
+  const employeeOptions = (employees.data ?? []).map((item) => ({
+    value: item.id,
+    label: item.employeeNo ? `${item.name}（${item.employeeNo}）` : item.name,
+  }));
 
   const notify = useNotify();
   const { can } = useAuth();
@@ -113,6 +135,8 @@ export function AdminTickets() {
   const unusedKnown = unusedTotal.data !== null;
   const unusedCount = unusedTotal.data?.total ?? 0;
   const [form] = Form.useForm<GenerateForm>();
+  // 选配领码人只对表单里选中的票种生效：没选票种前先禁用多选框
+  const watchedTypeId = Form.useWatch('ticketTypeId', form);
   const [generating, setGenerating] = useState(false);
   const [generatedCodes, setGeneratedCodes] = useState<string[] | null>(null);
   /** 本批码表块的一次性浅底标记：挂载时亮起，下一帧熄灭，由 400ms 过渡淡出。 */
@@ -170,7 +194,15 @@ export function AdminTickets() {
     }
     setGenerating(true);
     try {
-      const result = await adminApi.tickets.generate(values.ticketTypeId, values.count);
+      // 选配了领码人时按契约带 assignments：生成时绑定领码人（仅对本次选中的票种生效）
+      const assignments: TicketAssignment[] | undefined =
+        values.assignees && values.assignees.length > 0
+          ? [{ ticketTypeId: values.ticketTypeId, employeeIds: values.assignees }]
+          : undefined;
+      const result = await adminApi.tickets.generate(values.ticketTypeId, values.count, {
+        sessionId: sessionId ?? undefined,
+        assignments,
+      });
       setGeneratedCodes(result.codes);
       notify.success(`已生成 ${result.count} 个随机码`);
       tickets.refresh();
@@ -192,7 +224,9 @@ export function AdminTickets() {
     const made: string[] = [];
     try {
       for (const row of rows) {
-        const result = await adminApi.tickets.generate(row.id, row.count);
+        const result = await adminApi.tickets.generate(row.id, row.count, {
+          sessionId: sessionId ?? undefined,
+        });
         made.push(...result.codes);
       }
       setGeneratedCodes(made);
@@ -243,6 +277,7 @@ export function AdminTickets() {
         status: 'unused',
         ticketTypeId: typeFilter || undefined,
         pageSize: 1,
+        sessionId: sessionId ?? undefined,
       });
       setBulkCount(page.total);
       setBulkOpen(true);
@@ -256,7 +291,7 @@ export function AdminTickets() {
   const handleRevokeBulk = async (): Promise<void> => {
     setBulkRevoking(true);
     try {
-      const result = await adminApi.tickets.revokeBulk(typeFilter || undefined);
+      const result = await adminApi.tickets.revokeBulk(typeFilter || undefined, sessionId ?? undefined);
       setBulkOpen(false);
       notify.success(`已作废 ${result.revoked} 张`);
       // 码列表、未使用数量、票种统计都变了，一起刷新
@@ -431,6 +466,7 @@ export function AdminTickets() {
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               <li>单票种单次最多发放 2000 个，超过请分多次发放，或改用「按权重一键发码」按权重拆分。</li>
+              <li>可选「选配领码人」：按票别勾选本场次职工后，生成的随机码绑定领码人，概览页可见已投票人员名单。</li>
               <li>生成的码即刻生效，可在下方随机码明细中按状态核对；请及时导出或打印发放给投票人。</li>
               <li>一码一票：一个码只能登录一次、只评一个部门，提交即核销，不可修改。</li>
             </ul>
@@ -441,6 +477,7 @@ export function AdminTickets() {
             <Select
               style={{ width: 300 }}
               placeholder="选择票种"
+              aria-label="选择票种"
               options={enabledTypeOptions}
               loading={ticketTypes.loading}
             />
@@ -448,6 +485,25 @@ export function AdminTickets() {
           <Form.Item name="count" rules={[{ required: true, message: '请输入数量' }]} initialValue={100}>
             <InputNumber min={1} max={2000} precision={0} placeholder="数量" style={{ width: 140 }} />
           </Form.Item>
+          {canGenerate ? (
+            <Form.Item
+              name="assignees"
+              label="选配领码人"
+              extra="可选。按票别勾选本场次职工后，生成的随机码将绑定领码人；不勾选即匿名发码。"
+            >
+              <Select
+                mode="multiple"
+                style={{ minWidth: 320 }}
+                placeholder="按票别选配职工（可选）"
+                aria-label="选配领码人"
+                options={employeeOptions}
+                disabled={!watchedTypeId}
+                loading={employees.loading}
+                maxTagCount="responsive"
+                allowClear
+              />
+            </Form.Item>
+          ) : null}
           {canGenerate ? (
             <>
               <Form.Item>
@@ -503,6 +559,7 @@ export function AdminTickets() {
               href={adminApi.tickets.exportUrl({
                 status: status || undefined,
                 ticketTypeId: typeFilter || undefined,
+                sessionId: sessionId ?? undefined,
               })}
             >
               导出当前筛选

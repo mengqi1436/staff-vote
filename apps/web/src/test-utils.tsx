@@ -12,6 +12,7 @@ import { render } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import type { AdminMe } from './lib/api.js';
 import { AuthContext } from './lib/auth.js';
+import { SessionContext } from './lib/sessionContext.js';
 
 /** 全部权限码，与后端 src/lib/permissions.ts 的目录保持一致。 */
 export const ALL_PERMISSIONS: string[] = [
@@ -41,26 +42,46 @@ export function adminWith(permissions: string[] = ALL_PERMISSIONS): AdminMe {
   };
 }
 
+/** 测试用的场次上下文缺省值：未选择场次、无场次列表。 */
+const DEFAULT_SESSION_STATE = {
+  sessionId: null as string | null,
+  setSessionId: () => {},
+  sessions: [],
+  loading: false,
+  reload: () => {},
+};
+
 /**
  * 渲染组件并注入权限上下文。
  *
  * @param ui 被测组件
  * @param permissions 授予的权限码；默认全部。传 `[]` 即为只读账号
+ * @param sessionId 注入的当前场次 id；默认 null（未选择场次）。传 id 时也注入
+ *   对应的单场次列表，供页面断言「带 sessionId 的请求参数」
  * @returns testing-library 的 render 结果
  */
-export function renderWithAuth(ui: ReactElement, permissions: string[] = ALL_PERMISSIONS) {
+export function renderWithAuth(ui: ReactElement, permissions: string[] = ALL_PERMISSIONS, sessionId: string | null = null) {
   const admin = adminWith(permissions);
+  const sessionState = {
+    ...DEFAULT_SESSION_STATE,
+    sessionId,
+    sessions: sessionId
+      ? [{ id: sessionId, name: '测试场次', status: 'draft' as const, startAt: null, endedAt: null, createdAt: '' }]
+      : [],
+  };
   return render(
-    <AuthContext.Provider
-      value={{
-        admin,
-        loading: false,
-        error: null,
-        can: (code: string) => permissions.includes(code),
-        reload: async () => {},
-      }}
-    >
-      {ui}
-    </AuthContext.Provider>,
+    <SessionContext.Provider value={sessionState}>
+      <AuthContext.Provider
+        value={{
+          admin,
+          loading: false,
+          error: null,
+          can: (code: string) => permissions.includes(code),
+          reload: async () => {},
+        }}
+      >
+        {ui}
+      </AuthContext.Provider>
+    </SessionContext.Provider>,
   );
 }

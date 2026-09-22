@@ -347,6 +347,15 @@ export function VoteSheet() {
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 16px 48px' }}>
         <Card>
           <VoteSteps current={1} />
+          {/* 多场评议：所在场次名（旧后端没有 session 字段时不显示，不影响流程） */}
+          {sessionInfo.session ? (
+            <Typography.Text
+              type="secondary"
+              style={{ display: 'block', textAlign: 'center', marginTop: 8 }}
+            >
+              本轮评议：{sessionInfo.session.name}
+            </Typography.Text>
+          ) : null}
 
           {/* 选部门：只有一个部门时不显示下拉，直接进表 */}
           {sessionInfo.departments.length > 1 ? (

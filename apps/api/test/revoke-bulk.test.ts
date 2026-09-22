@@ -37,6 +37,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
 const { cleanupRbac, createAdmin, createRole } = await import('./rbac-fixtures.js');
+const { ensureDefaultSession } = await import('./session-fixtures.js');
 
 /** 没有可用测试库就整组跳过。 */
 const describeDb = suiteEnabled ? describe : describe.skip;
@@ -77,7 +78,13 @@ async function makeTickets(
 ): Promise<MadeTickets> {
   const code = `${TAG}${label}${nextSeq()}`;
   const type = await prisma.ticketType.create({
-    data: { code, name: `${TAG}票种-${label}`, weightPercent: 0, enabled: false },
+    data: {
+      sessionId: await ensureDefaultSession(prisma),
+      code,
+      name: `${TAG}票种-${label}`,
+      weightPercent: 0,
+      enabled: false,
+    },
   });
 
   const rows: Array<{
@@ -104,11 +111,16 @@ async function makeTickets(
   for (let i = 1; i <= (plan.revoked ?? 0); i += 1) push('revoked', i);
 
   const batch = await prisma.ticketBatch.create({
-    data: { ticketTypeId: type.id, count: rows.length, operator: TAG },
+    data: {
+      ticketTypeId: type.id,
+      sessionId: await ensureDefaultSession(prisma),
+      count: rows.length,
+      operator: TAG,
+    },
   });
   if (rows.length > 0) {
     await prisma.ticket.createMany({
-      data: rows.map((row) => ({ ...row, batchId: batch.id })),
+      data: rows.map((row) => ({ ...row, batchId: batch.id, sessionId: batch.sessionId })),
     });
   }
 
@@ -340,6 +352,7 @@ describeDb('一键作废随机码', () => {
     const type = await makeTickets('端点门控', { unused: 1 });
     const enabled = await prisma.ticketType.create({
       data: {
+        sessionId: await ensureDefaultSession(prisma),
         code: `${TAG}启用票种${nextSeq()}`,
         name: `${TAG}票种-可发码`,
         weightPercent: 0,

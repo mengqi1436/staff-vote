@@ -15,6 +15,7 @@ import {
   listTicketBatches,
   listTickets,
   listTicketsForExport,
+  resolveSessionId,
   revokeTicket,
   revokeTicketsBulk,
   type TicketStatusValue,
@@ -32,16 +33,28 @@ const ListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).default(20),
   status: z.enum(TICKET_STATUSES).optional(),
   ticketTypeId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
 });
 
 const ExportQuerySchema = z.object({
   status: z.enum(TICKET_STATUSES).optional(),
   ticketTypeId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
 });
 
 const GenerateSchema = z.object({
+  sessionId: z.string().min(1).optional(),
   ticketTypeId: z.string().min(1),
   count: z.number().int().min(1).max(2000),
+  /** 可选的领码人指定：按序写入 assigneeId（发放留痕）。 */
+  assignments: z
+    .array(
+      z.object({
+        ticketTypeId: z.string().min(1),
+        employeeIds: z.array(z.string().min(1)).min(1),
+      }),
+    )
+    .optional(),
 });
 
 /** 一键作废的范围：不带 body 或不带 ticketTypeId 都是「全部票种」。 */
@@ -49,17 +62,25 @@ const RevokeBulkSchema = z.object({
   ticketTypeId: z.string().min(1).optional(),
 });
 
+/** 批次列表的场次过滤。 */
+const BatchesQuerySchema = z.object({
+  sessionId: z.string().min(1).optional(),
+});
+
 export const ticketsRouter: Router = Router();
 
 ticketsRouter.get('/', async (req, res) => {
   const query = ListQuerySchema.parse(req.query);
-  res.json(await listTickets(query));
+  res.json(await listTickets({ ...query, sessionId: await resolveSessionId(query.sessionId) }));
 });
 
 /** 导出随机码清单（列：随机码、票种、状态、核销时间、批次、创建时间）。 */
 ticketsRouter.get('/export', async (req, res) => {
   const filter = ExportQuerySchema.parse(req.query);
-  const rows = await listTicketsForExport(filter);
+  const rows = await listTicketsForExport({
+    ...filter,
+    sessionId: await resolveSessionId(filter.sessionId),
+  });
   // 状态用中文，导出件是给人看的，不是给程序解析的。
   const workbook = buildTicketsWorkbook(
     rows.map((row) => ({
@@ -75,8 +96,11 @@ ticketsRouter.get('/export', async (req, res) => {
 });
 
 ticketsRouter.post('/generate', requirePermission('tickets.generate'), async (req, res) => {
-  const { ticketTypeId, count } = GenerateSchema.parse(req.body);
-  const result = await generateTickets(ticketTypeId, count, operatorOf(req));
+  const { ticketTypeId, count, sessionId, assignments } = GenerateSchema.parse(req.body);
+  const result = await generateTickets(ticketTypeId, count, operatorOf(req), {
+    sessionId,
+    assignments,
+  });
   res.json(result);
 });
 
@@ -97,6 +121,7 @@ ticketsRouter.post('/:id/revoke', requirePermission('tickets.revoke'), async (re
 
 export const ticketBatchesRouter: Router = Router();
 
-ticketBatchesRouter.get('/', async (_req, res) => {
-  res.json(await listTicketBatches());
+ticketBatchesRouter.get('/', async (req, res) => {
+  const { sessionId } = BatchesQuerySchema.parse(req.query);
+  res.json(await listTicketBatches(await resolveSessionId(sessionId)));
 });

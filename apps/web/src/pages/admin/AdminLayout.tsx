@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Button, Layout, Menu, Spin, theme } from 'antd';
+import { Button, Layout, Menu, Select, Spin, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   ApartmentOutlined,
@@ -8,6 +8,7 @@ import {
   FieldTimeOutlined,
   LogoutOutlined,
   OrderedListOutlined,
+  PartitionOutlined,
   PieChartOutlined,
   ProfileOutlined,
   QrcodeOutlined,
@@ -17,6 +18,7 @@ import {
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { adminApi } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
+import { AdminSessionProvider, useAdminSession } from '../../lib/sessionContext.js';
 
 /**
  * 后台外壳：登录态守卫 + 按评议工作流分组的侧边导航 + 退出登录。
@@ -35,6 +37,7 @@ import { useAuth } from '../../lib/auth.js';
 /** 各路由的页面标题：页头展示当前页，与菜单文案一致。 */
 const PAGE_TITLES: Record<string, string> = {
   '/admin': '概览',
+  '/admin/sessions': '场次管理',
   '/admin/departments': '部门管理',
   '/admin/questionnaire': '问卷配置',
   '/admin/employees': '职工名单',
@@ -53,6 +56,11 @@ const MENU_ITEMS: MenuProps['items'] = [
     type: 'group',
     label: '评议准备',
     children: [
+      {
+        key: '/admin/sessions',
+        icon: <PartitionOutlined />,
+        label: <Link to="/admin/sessions">场次管理</Link>,
+      },
       {
         key: '/admin/departments',
         icon: <ApartmentOutlined />,
@@ -126,12 +134,35 @@ const MENU_ITEMS: MenuProps['items'] = [
   },
 ];
 
+/**
+ * 头部「当前场次」选择器。
+ *
+ * 切换后当前场次 id 存入 SessionContext（并持久化到 localStorage），
+ * 各管理端页面的取数函数依赖 sessionId，会自动按新场次重新拉取。
+ * 场次接口不可用或还没有任何场次时选择器不出现（单场行为，不需要选择）。
+ */
+function SessionPicker() {
+  const { sessionId, setSessionId, sessions, loading } = useAdminSession();
+  if (!loading && sessions.length === 0) return null;
+  return (
+    <Select
+      style={{ width: 200 }}
+      aria-label="当前场次"
+      placeholder="选择场次"
+      loading={loading}
+      value={sessionId ?? undefined}
+      onChange={(value: string) => setSessionId(value)}
+      options={sessions.map((item) => ({ value: item.id, label: item.name }))}
+      notFoundContent="暂无场次"
+    />
+  );
+}
+
 export function AdminLayout() {
   const { admin, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = theme.useToken();
-
   useEffect(() => {
     // 身份由 AuthProvider 拉取：未登录（401）或会话失效时送管理员回登录页
     if (!loading && !admin) void navigate('/admin/login', { replace: true });
@@ -176,58 +207,63 @@ export function AdminLayout() {
   };
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Layout.Sider width={220} theme="dark">
-        <div
-          style={{
-            height: 64,
-            display: 'flex',
-            alignItems: 'center',
-            padding: '0 24px',
-            color: token.colorTextLightSolid,
-            fontSize: 16,
-            fontWeight: 600,
-          }}
-        >
-          职工素质评议 · 后台
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={MENU_ITEMS}
-          style={{ borderInlineEnd: 'none' }}
-        />
-      </Layout.Sider>
-
-      <Layout>
-        <Layout.Header
-          style={{
-            background: token.colorBgContainer,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16,
-            padding: '0 24px',
-          }}
-        >
-          <span style={{ fontSize: 16, fontWeight: 600 }}>
-            {PAGE_TITLES[selectedKey] ?? '后台管理'}
-          </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: token.colorTextSecondary }}>
-              管理员 <span className="tabular">{admin.username}</span>
-            </span>
-            <Button size="small" icon={<LogoutOutlined />} onClick={() => void handleLogout()}>
-              退出登录
-            </Button>
+    <AdminSessionProvider>
+      <Layout style={{ minHeight: '100vh' }}>
+        <Layout.Sider width={220} theme="dark">
+          <div
+            style={{
+              height: 64,
+              display: 'flex',
+              alignItems: 'center',
+              padding: '0 24px',
+              color: token.colorTextLightSolid,
+              fontSize: 16,
+              fontWeight: 600,
+            }}
+          >
+            职工素质评议 · 后台
           </div>
-        </Layout.Header>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={MENU_ITEMS}
+            style={{ borderInlineEnd: 'none' }}
+          />
+        </Layout.Sider>
 
-        <Layout.Content style={{ padding: 24 }}>
-          <Outlet />
-        </Layout.Content>
+        <Layout>
+          <Layout.Header
+            style={{
+              background: token.colorBgContainer,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 16,
+              padding: '0 24px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>
+                {PAGE_TITLES[selectedKey] ?? '后台管理'}
+              </span>
+              <SessionPicker />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ color: token.colorTextSecondary }}>
+                管理员 <span className="tabular">{admin.username}</span>
+              </span>
+              <Button size="small" icon={<LogoutOutlined />} onClick={() => void handleLogout()}>
+                退出登录
+              </Button>
+            </div>
+          </Layout.Header>
+
+          <Layout.Content style={{ padding: 24 }}>
+            <Outlet />
+          </Layout.Content>
+        </Layout>
       </Layout>
-    </Layout>
+    </AdminSessionProvider>
   );
 }

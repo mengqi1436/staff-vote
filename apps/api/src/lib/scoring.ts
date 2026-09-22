@@ -68,10 +68,32 @@ export interface VoteColumnResult {
   criteria: CriterionResult[];
 }
 
+/** 单票别对单个项点格的平均分（缺格/弃权计 0，分母为该票种的表数）。 */
+export interface TicketTypeCriterionAvg {
+  criterionId: string;
+  avg: number;
+}
+
+/** 单票别对单个被评列的结果：每格平均分 + 列内均分。 */
+export interface TicketTypeColumnResult {
+  voteColumnId: string;
+  criteria: TicketTypeCriterionAvg[];
+  /** 该票种对该被评列的均分：各格平均分的等权平均 */
+  average: number;
+}
+
+/** 单票别的全部口径（统计四口径里的「票别 × 被评列 × 项点」与「票别 × 被评列」）。 */
+export interface TicketTypeResult {
+  ticketTypeId: string;
+  voteColumns: TicketTypeColumnResult[];
+}
+
 export interface ScoringResult {
   voteColumns: VoteColumnResult[];
   /** 本次计算中真正贡献了分数的票种 */
   ticketTypesInvolved: string[];
+  /** 每个有票票种的独立口径（零票种排除：一张表都没有的票种不出现） */
+  perTicketType: TicketTypeResult[];
 }
 
 function average(values: number[]): number {
@@ -168,5 +190,26 @@ export function computeResults(input: ScoringInput): ScoringResult {
     return { voteColumnId, comprehensiveScore, criteria: criterionResults };
   });
 
-  return { voteColumns, ticketTypesInvolved: [...involved] };
+  // 票别口径：与加权结果相互独立。遍历 sheetsByTicketType 天然排除零票种
+  // （一张表都没有的票种不建键）；权重为 0 但有票的票种仍参与本口径 ——
+  // 「票别均分」回答的是该票别打了多少分，与加权无关。
+  const perTicketType: TicketTypeResult[] = [...sheetsByTicketType.entries()].map(
+    ([ticketTypeId, cellList]) => ({
+      ticketTypeId,
+      voteColumns: voteColumnIds.map((voteColumnId) => {
+        const criteriaAvg = criteria.map((criterion) => ({
+          criterionId: criterion.id,
+          // 与加权口径同一规则：该票种的每一张表都参与本格，缺格按 0 计入分母。
+          avg: round2(average(cellList.map((cells) => cells.get(`${voteColumnId}|${criterion.id}`) ?? 0))),
+        }));
+        return {
+          voteColumnId,
+          criteria: criteriaAvg,
+          average: criteriaAvg.length === 0 ? 0 : round2(average(criteriaAvg.map((c) => c.avg))),
+        };
+      }),
+    }),
+  );
+
+  return { voteColumns, ticketTypesInvolved: [...involved], perTicketType };
 }

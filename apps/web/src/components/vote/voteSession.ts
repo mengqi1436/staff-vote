@@ -10,10 +10,12 @@ import type { DepartmentBrief, VoteTicketTypeDto } from '../../lib/api.js';
 
 const KEY = 'staff_vote_session_info';
 
-/** 缓存内容：票种与部门列表。 */
+/** 缓存内容：票种、部门列表与所在场次（场次为多场评议新增，旧后端没有，恒可缺省）。 */
 export interface CachedVoteSession {
   ticketType: VoteTicketTypeDto;
   departments: DepartmentBrief[];
+  /** 所在场次；旧后端不返回该字段，恒为 undefined */
+  session?: { id: string; name: string; status: string };
 }
 
 /** 写入缓存（入口页拿到会话后调用）。 */
@@ -33,7 +35,12 @@ export function readVoteSessionInfo(): CachedVoteSession | null {
     if (parsed === null || parsed === undefined) return null;
     if (!Array.isArray(parsed.departments) || parsed.departments.length === 0) return null;
     if (parsed.ticketType === undefined) return null;
-    return { ticketType: parsed.ticketType, departments: parsed.departments };
+    return {
+      ticketType: parsed.ticketType,
+      departments: parsed.departments,
+      // 场次是可选字段：旧缓存/旧后端没有就不带，调用方必须容错
+      session: parsed.session,
+    };
   } catch {
     // 缓存损坏（手改、旧格式）时当作没有：退回入口重来比带着坏数据渲染安全
     return null;

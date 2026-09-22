@@ -66,6 +66,16 @@ export interface DepartmentResults {
   }>;
   /** 全部票种 + 是否真正参与计分，导出「参与票种口径」sheet 用 */
   ticketTypes: Array<{ code: string; name: string; weightPercent: number; involved: boolean }>;
+  /** 票别口径明细（名称已填好），导出「票别单项明细 / 票别合计明细」sheet 用 */
+  perTicketType: {
+    criteriaRows: Array<{
+      ticketTypeCode: string;
+      voteColumnName: string;
+      criterionName: string;
+      avg: number;
+    }>;
+    columnRows: Array<{ ticketTypeCode: string; voteColumnName: string; average: number }>;
+  };
 }
 
 /**
@@ -87,7 +97,11 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
       where: { departmentId },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     }),
-    prisma.ticketType.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
+    // 票种按部门所属场次过滤：多场次下别的场次的票种与本部门结果无关。
+    prisma.ticketType.findMany({
+      where: { sessionId: department.sessionId },
+      orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+    }),
     prisma.scoreSheet.findMany({ where: { departmentId }, include: { items: true } }),
   ]);
 
@@ -159,6 +173,28 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
   );
 
   const involved = new Set(scoring.ticketTypesInvolved);
+
+  // 票别口径展开成带名称的行：单项（票种×被评对象×项点）与合计（票种×被评对象）。
+  const perTicketType = {
+    criteriaRows: scoring.perTicketType.flatMap((ticketType) =>
+      ticketType.voteColumns.flatMap((column) =>
+        column.criteria.map((criterion) => ({
+          ticketTypeCode: codeOf(ticketType.ticketTypeId),
+          voteColumnName: columnById.get(column.voteColumnId)?.name ?? '',
+          criterionName: criterionById.get(criterion.criterionId)?.name ?? '',
+          avg: criterion.avg,
+        })),
+      ),
+    ),
+    columnRows: scoring.perTicketType.flatMap((ticketType) =>
+      ticketType.voteColumns.map((column) => ({
+        ticketTypeCode: codeOf(ticketType.ticketTypeId),
+        voteColumnName: columnById.get(column.voteColumnId)?.name ?? '',
+        average: column.average,
+      })),
+    ),
+  };
+
   return {
     dto: {
       department: { id: department.id, name: department.name },
@@ -188,5 +224,6 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
       weightPercent: type.weightPercent,
       involved: involved.has(type.id),
     })),
+    perTicketType,
   };
 }

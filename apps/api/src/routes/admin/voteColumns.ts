@@ -16,6 +16,7 @@ import {
   createVoteColumn,
   disableVoteColumn,
   listVoteColumns,
+  resolveSessionId,
   updateVoteColumn,
 } from '../../services/admin.js';
 import { requirePermission } from '../../middleware/permission.js';
@@ -23,10 +24,12 @@ import { IdParamSchema, operatorOf } from './helpers.js';
 
 const ListQuerySchema = z.object({
   departmentId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
 });
 
 const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
+  sessionId: z.string().min(1).optional(),
   name: z.string().trim().min(1, '列名不能为空').max(50),
   /** 该职务列的具体被评人；null/undefined = 未选人。 */
   employeeId: z.string().min(1).nullable().optional(),
@@ -44,8 +47,8 @@ const PatchSchema = z.object({
 export const voteColumnsRouter: Router = Router();
 
 voteColumnsRouter.get('/', async (req, res) => {
-  const { departmentId } = ListQuerySchema.parse(req.query);
-  res.json(await listVoteColumns(departmentId));
+  const { departmentId, sessionId } = ListQuerySchema.parse(req.query);
+  res.json(await listVoteColumns(departmentId, await resolveSessionId(sessionId)));
 });
 
 voteColumnsRouter.post('/', requirePermission('criteria.write'), async (req, res) => {

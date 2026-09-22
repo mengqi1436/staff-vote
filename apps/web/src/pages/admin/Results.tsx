@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import type { TableColumnsType } from 'antd';
 import { adminApi, type ResultRowDto, type ResultsDto } from '../../lib/api.js';
 import { usePolling } from '../../lib/usePolling.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
 import { EMPTY_TEXT, formatDateTime } from './lib.js';
 import {
   ErrorState,
@@ -28,7 +29,8 @@ import {
  */
 export function AdminResults() {
   const [departmentId, setDepartmentId] = useState('');
-  const loadDepartments = useCallback(() => adminApi.departments.list(), []);
+  const { sessionId } = useAdminSession();
+  const loadDepartments = useCallback(() => adminApi.departments.list({ sessionId }), [sessionId]);
   const departments = usePolling(loadDepartments, 0);
 
   useEffect(() => {
@@ -38,8 +40,11 @@ export function AdminResults() {
   }, [departments.data, departmentId]);
 
   const loadResults = useCallback(
-    () => (departmentId ? adminApi.results.list(departmentId) : Promise.resolve<ResultsDto | null>(null)),
-    [departmentId],
+    () =>
+      departmentId
+        ? adminApi.results.list(departmentId, sessionId)
+        : Promise.resolve<ResultsDto | null>(null),
+    [departmentId, sessionId],
   );
   const results = usePolling(loadResults, 0);
   const data = results.data;
@@ -140,7 +145,7 @@ export function AdminResults() {
             <Button
               type="primary"
               icon={<DownloadOutlined />}
-              href={hasDepartment ? adminApi.results.exportUrl(departmentId) : undefined}
+              href={hasDepartment ? adminApi.results.exportUrl(departmentId, sessionId) : undefined}
               disabled={!hasDepartment}
             >
               导出 Excel

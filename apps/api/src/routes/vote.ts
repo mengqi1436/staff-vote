@@ -8,6 +8,7 @@ import {
   createVoteSession,
   getVoteSheet,
   getVoteStatus,
+  resolveStatusSession,
   submitVote,
 } from '../services/vote.js';
 
@@ -82,9 +83,17 @@ function voteAuth(req: Request, _res: Response, next: NextFunction): void {
 
 export const voteRouter: Router = Router();
 
-/** 投票开放状态。投票页据此渲染「当前未开放投票」遮罩。 */
-voteRouter.get('/status', async (_req, res) => {
-  res.json(await getVoteStatus());
+/** 投票开放状态。投票页据此渲染「当前未开放投票」遮罩。
+ *
+ * `?sessionId=` 可选：带了就按该场次判定（open 还需场次为 voting）；
+ * 未带且库中恰有一场时自动取那一场，零场或多场时只按全局窗口判定。
+ * 响应的 session 字段回传参与判定的场次（含 status），无则为 null。
+ */
+voteRouter.get('/status', async (req, res) => {
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
+  const session = await resolveStatusSession(sessionId || undefined);
+  const window = await getVoteStatus(session);
+  res.json({ ...window, session });
 });
 
 /** 凭随机码换取投票令牌。 */

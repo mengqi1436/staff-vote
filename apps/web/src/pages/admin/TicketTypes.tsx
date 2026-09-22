@@ -17,6 +17,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
 import { adminApi, type TicketTypeDto } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { describeError, summarizeWeights } from './lib.js';
 import {
@@ -44,7 +45,8 @@ interface TicketTypeForm {
  * 让管理员在提交前就看到还差多少；后端拒绝时的差额错误仍经 message 原文回显。
  */
 export function AdminTicketTypes() {
-  const load = useCallback(() => adminApi.ticketTypes.list(), []);
+  const { sessionId } = useAdminSession();
+  const load = useCallback(() => adminApi.ticketTypes.list({ sessionId }), [sessionId]);
   const { data, error, loading, refresh } = usePolling(load, 0);
   const notify = useNotify();
   const { can } = useAuth();
@@ -166,7 +168,7 @@ export function AdminTicketTypes() {
     setSaving(true);
     try {
       if (editing) await adminApi.ticketTypes.update(editing.id, values);
-      else await adminApi.ticketTypes.create(values);
+      else await adminApi.ticketTypes.create(values, sessionId);
       notify.success(editing ? '票种已更新' : '票种已创建');
       setModalOpen(false);
       refresh();

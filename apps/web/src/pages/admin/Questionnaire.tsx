@@ -24,6 +24,7 @@ import {
   type VoteColumnDto,
 } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { describeError } from './lib.js';
 import {
@@ -140,8 +141,9 @@ function InlineInput({
 }
 
 export function AdminQuestionnaire() {
+  const { sessionId } = useAdminSession();
   const departments = usePolling(
-    useCallback(() => adminApi.departments.list(), []),
+    useCallback(() => adminApi.departments.list({ sessionId }), [sessionId]),
     0,
   );
 
@@ -176,18 +178,18 @@ export function AdminQuestionnaire() {
   const loadColumns = useCallback(
     () =>
       departmentId
-        ? adminApi.voteColumns.list(departmentId)
+        ? adminApi.voteColumns.list(departmentId, sessionId)
         : Promise.resolve<VoteColumnDto[]>([]),
-    [departmentId],
+    [departmentId, sessionId],
   );
   const columns = usePolling(loadColumns, 0);
 
   const loadCriteria = useCallback(
     () =>
       departmentId
-        ? adminApi.criteria.list(departmentId)
+        ? adminApi.criteria.list(departmentId, sessionId)
         : Promise.resolve<CriterionDto[]>([]),
-    [departmentId],
+    [departmentId, sessionId],
   );
   const criteria = usePolling(loadCriteria, 0);
 
@@ -195,9 +197,9 @@ export function AdminQuestionnaire() {
   const loadEmployees = useCallback(
     () =>
       departmentId
-        ? adminApi.employees.list(departmentId)
+        ? adminApi.employees.list(departmentId, sessionId)
         : Promise.resolve<EmployeeDto[]>([]),
-    [departmentId],
+    [departmentId, sessionId],
   );
   const employees = usePolling(loadEmployees, 0);
 
@@ -325,7 +327,7 @@ export function AdminQuestionnaire() {
       return;
     }
     try {
-      await adminApi.voteColumns.create({ departmentId, ...values });
+      await adminApi.voteColumns.create({ departmentId, ...values }, sessionId);
       notify.success(`被评列「${values.name}」已创建`);
       setModalOpen(false);
       columns.refresh();

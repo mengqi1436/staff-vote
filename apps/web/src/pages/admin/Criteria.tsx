@@ -19,6 +19,7 @@ import type { ReactNode } from 'react';
 import type { TableColumnsType } from 'antd';
 import { ApiError, adminApi, type CriterionDto } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
+import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { describeError } from './lib.js';
 import {
@@ -92,7 +93,8 @@ const FORMULA_COLUMNS: TableColumnsType<FormulaRow> = [
  */
 export function AdminCriteria() {
   const [departmentId, setDepartmentId] = useState('');
-  const loadDepartments = useCallback(() => adminApi.departments.list(), []);
+  const { sessionId } = useAdminSession();
+  const loadDepartments = useCallback(() => adminApi.departments.list({ sessionId }), [sessionId]);
   const departments = usePolling(loadDepartments, 0);
 
   // 部门列表到货后默认选中第一个，避免管理员每次都要手点
@@ -103,8 +105,11 @@ export function AdminCriteria() {
   }, [departments.data, departmentId]);
 
   const loadCriteria = useCallback(
-    () => (departmentId ? adminApi.criteria.list(departmentId) : Promise.resolve<CriterionDto[]>([])),
-    [departmentId],
+    () =>
+      departmentId
+        ? adminApi.criteria.list(departmentId, sessionId)
+        : Promise.resolve<CriterionDto[]>([]),
+    [departmentId, sessionId],
   );
   const { data, error, loading, refresh } = usePolling(loadCriteria, 0);
 
@@ -177,7 +182,7 @@ export function AdminCriteria() {
     setSaving(true);
     try {
       if (editing) await adminApi.criteria.update(editing.id, values);
-      else await adminApi.criteria.create({ departmentId, ...values });
+      else await adminApi.criteria.create({ departmentId, ...values }, sessionId);
       notify.success(editing ? '项点已更新' : '项点已创建');
       setModalOpen(false);
       refresh();

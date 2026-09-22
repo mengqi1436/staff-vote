@@ -104,6 +104,29 @@ export interface VoteStatus {
   message: string;
   startAt: string | null;
   endAt: string | null;
+  /** 所在场次（多场评议）；旧后端不返回该字段，恒为 undefined，调用方必须容错 */
+  session?: { id: string; name: string; status: string };
+}
+
+/** 场次（多场评议的顶层组织单位）。状态机：draft → voting → paused ⇄ voting → ended（终态）。 */
+export interface AdminSessionDto {
+  id: string;
+  name: string;
+  status: 'draft' | 'voting' | 'paused' | 'ended';
+  startAt: string | null;
+  endedAt: string | null;
+  createdAt: string;
+}
+
+/** 发码选配：按票别指定领码职工，生成随机码时绑定领码人。 */
+export interface TicketAssignment {
+  ticketTypeId: string;
+  employeeIds: string[];
+}
+
+/** 拼接 `?sessionId=` 查询串；未选场次时不带参数（后端单场数据兼容）。 */
+function sessionIdQuery(sessionId?: string | null): string {
+  return sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
 }
 
 export interface DepartmentBrief {
@@ -147,6 +170,8 @@ export interface VoteSessionResult {
   token: string;
   ticketType: VoteTicketTypeDto;
   departments: DepartmentBrief[];
+  /** 所在场次；旧后端不返回该字段，恒为 undefined，调用方必须容错 */
+  session?: { id: string; name: string; status: string };
 }
 
 export interface CriterionDto {
@@ -252,6 +277,10 @@ export interface StatsOverview {
     used: number;
     unused: number;
     revoked: number;
+    /** 选配领码人数量（按票别选配人员发码时返回）；未选配时不返回，恒为 undefined */
+    assignedCount?: number;
+    /** 已投票的领码人名单（仅姓名）；未按场次统计时不返回，恒为 undefined */
+    usedByAssignee?: Array<{ employeeId: string; employeeName: string; count: number }>;
   }>;
   totals: { issued: number; used: number; unused: number; revoked: number; sheets: number };
   departments: Array<{ id: string; name: string; enabled: boolean; employeeCount: number; sheetCount: number }>;
@@ -377,6 +406,23 @@ export const adminApi = {
 
   me: () => request<AdminMe>('/admin/me'),
 
+  /**
+   * 场次管理。状态机：draft → voting → paused ⇄ voting → ended（终态）。
+   * 非法流转后端返回 409 INVALID_SESSION_TRANSITION，调用方按普通 ApiError 提示即可。
+   * paused → voting 也走 start（「继续投票」）。
+   */
+  sessions: {
+    list: () => request<{ sessions: AdminSessionDto[] }>('/admin/sessions'),
+    create: (name: string) =>
+      request<{ session: AdminSessionDto }>('/admin/sessions', { method: 'POST', body: { name } }),
+    start: (id: string) =>
+      request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/start`, { method: 'POST' }),
+    pause: (id: string) =>
+      request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/pause`, { method: 'POST' }),
+    end: (id: string) =>
+      request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/end`, { method: 'POST' }),
+  },
+
   /** 权限目录：角色勾选框按 groupName 分组渲染 */
   permissions: {
     list: () => request<PermissionDto[]>('/admin/permissions'),
@@ -404,56 +450,84 @@ export const adminApi = {
   },
 
   ticketTypes: {
-    list: () => request<TicketTypeDto[]>('/admin/ticket-types'),
-    create: (body: Partial<TicketTypeDto>) =>
-      request<TicketTypeDto>('/admin/ticket-types', { method: 'POST', body }),
+    list: (options: { sessionId?: string | null } = {}) =>
+      request<TicketTypeDto[]>(`/admin/ticket-types${sessionIdQuery(options.sessionId)}`),
+    create: (body: Partial<TicketTypeDto>, sessionId?: string | null) =>
+      request<TicketTypeDto>('/admin/ticket-types', { method: 'POST', body: sessionId ? { ...body, sessionId } : body }),
     update: (id: string, body: Partial<TicketTypeDto>) =>
       request<TicketTypeDto>(`/admin/ticket-types/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/ticket-types/${id}`, { method: 'DELETE' }),
   },
 
   tickets: {
-    list: (params: { page?: number; pageSize?: number; status?: string; ticketTypeId?: string } = {}) => {
+    list: (
+      params: {
+        page?: number;
+        pageSize?: number;
+        status?: string;
+        ticketTypeId?: string;
+        sessionId?: string | null;
+      } = {},
+    ) => {
       const query = new URLSearchParams();
       if (params.page) query.set('page', String(params.page));
       if (params.pageSize) query.set('pageSize', String(params.pageSize));
       if (params.status) query.set('status', params.status);
       if (params.ticketTypeId) query.set('ticketTypeId', params.ticketTypeId);
+      if (params.sessionId) query.set('sessionId', params.sessionId);
       return request<Paged<TicketDto>>(`/admin/tickets?${query.toString()}`);
     },
-    generate: (ticketTypeId: string, count: number) =>
+    /** @param options.assignments 选配领码人：按票别勾选职工，生成时绑定领码人 */
+    generate: (
+      ticketTypeId: string,
+      count: number,
+      options: { sessionId?: string | null; assignments?: TicketAssignment[] } = {},
+    ) =>
       request<{ batchId: string; count: number; codes: string[] }>('/admin/tickets/generate', {
         method: 'POST',
-        body: { ticketTypeId, count },
+        // sessionId 为 null（未选场次）时不带该字段：契约里「不传」与「传 null」语义不同
+        body: {
+          ticketTypeId,
+          count,
+          ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+          assignments: options.assignments,
+        },
       }),
     revoke: (id: string) => request<TicketDto>(`/admin/tickets/${id}/revoke`, { method: 'POST' }),
     /**
      * 一键作废：作废当前筛选下全部「未使用」码（used / revoked 不受影响）。
      *
      * @param ticketTypeId 传则只作废该票种；不传即全部票种
+     * @param sessionId 场次过滤；多场时后端要求必传
      * @returns 实际作废的数量
      */
-    revokeBulk: (ticketTypeId?: string) =>
+    revokeBulk: (ticketTypeId?: string, sessionId?: string | null) =>
       request<{ revoked: number }>('/admin/tickets/revoke-bulk', {
         method: 'POST',
-        body: { ticketTypeId },
+        body: sessionId ? { ticketTypeId, sessionId } : { ticketTypeId },
       }),
-    exportUrl: (params: { status?: string; ticketTypeId?: string } = {}) => {
+    exportUrl: (params: { status?: string; ticketTypeId?: string; sessionId?: string | null } = {}) => {
       const query = new URLSearchParams();
       if (params.status) query.set('status', params.status);
       if (params.ticketTypeId) query.set('ticketTypeId', params.ticketTypeId);
+      if (params.sessionId) query.set('sessionId', params.sessionId);
       return downloadUrl(`/admin/tickets/export?${query.toString()}`);
     },
   },
 
   batches: {
-    list: () => request<TicketBatchDto[]>('/admin/ticket-batches'),
+    list: (options: { sessionId?: string | null } = {}) =>
+      request<TicketBatchDto[]>(`/admin/ticket-batches${sessionIdQuery(options.sessionId)}`),
   },
 
   departments: {
-    list: () => request<DepartmentAdminDto[]>('/admin/departments'),
-    create: (body: { name: string; sortOrder?: number }) =>
-      request<DepartmentAdminDto>('/admin/departments', { method: 'POST', body }),
+    list: (options: { sessionId?: string | null } = {}) =>
+      request<DepartmentAdminDto[]>(`/admin/departments${sessionIdQuery(options.sessionId)}`),
+    create: (body: { name: string; sortOrder?: number }, sessionId?: string | null) =>
+      request<DepartmentAdminDto>('/admin/departments', {
+        method: 'POST',
+        body: sessionId ? { ...body, sessionId } : body,
+      }),
     /** 除名称/排序/启停外，PATCH 还负责问卷表头配置（问卷类型、附件号、标题、填写说明） */
     update: (
       id: string,
@@ -472,24 +546,39 @@ export const adminApi = {
 
   /** 被评列：打分表的列，与职工名单分离（参考表的主任/副书记/得分） */
   voteColumns: {
-    list: (departmentId?: string) =>
-      request<VoteColumnDto[]>(
-        `/admin/vote-columns${departmentId ? `?departmentId=${encodeURIComponent(departmentId)}` : ''}`,
-      ),
-    create: (body: { departmentId: string; name: string; employeeId?: string | null; sortOrder?: number }) =>
-      request<VoteColumnDto>('/admin/vote-columns', { method: 'POST', body }),
+    list: (departmentId?: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      if (departmentId) query.set('departmentId', departmentId);
+      if (sessionId) query.set('sessionId', sessionId);
+      const qs = query.toString();
+      return request<VoteColumnDto[]>(`/admin/vote-columns${qs ? `?${qs}` : ''}`);
+    },
+    create: (
+      body: { departmentId: string; name: string; employeeId?: string | null; sortOrder?: number },
+      sessionId?: string | null,
+    ) =>
+      request<VoteColumnDto>('/admin/vote-columns', {
+        method: 'POST',
+        body: sessionId ? { ...body, sessionId } : body,
+      }),
     update: (id: string, body: { name?: string; employeeId?: string | null; sortOrder?: number; enabled?: boolean }) =>
       request<VoteColumnDto>(`/admin/vote-columns/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/vote-columns/${id}`, { method: 'DELETE' }),
   },
 
   employees: {
-    list: (departmentId?: string) =>
-      request<EmployeeDto[]>(
-        `/admin/employees${departmentId ? `?departmentId=${encodeURIComponent(departmentId)}` : ''}`,
-      ),
-    create: (body: { departmentId: string; name: string; employeeNo?: string | null; sortOrder?: number }) =>
-      request<EmployeeDto>('/admin/employees', { method: 'POST', body }),
+    list: (departmentId?: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      if (departmentId) query.set('departmentId', departmentId);
+      if (sessionId) query.set('sessionId', sessionId);
+      const qs = query.toString();
+      return request<EmployeeDto[]>(`/admin/employees${qs ? `?${qs}` : ''}`);
+    },
+    create: (
+      body: { departmentId: string; name: string; employeeNo?: string | null; sortOrder?: number },
+      sessionId?: string | null,
+    ) =>
+      request<EmployeeDto>('/admin/employees', { method: 'POST', body: sessionId ? { ...body, sessionId } : body }),
     update: (id: string, body: Partial<EmployeeDto> & { departmentId?: string }) =>
       request<EmployeeDto>(`/admin/employees/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/employees/${id}`, { method: 'DELETE' }),
@@ -502,16 +591,24 @@ export const adminApi = {
   },
 
   criteria: {
-    list: (departmentId: string) =>
-      request<CriterionDto[]>(`/admin/criteria?departmentId=${encodeURIComponent(departmentId)}`),
-    create: (body: {
-      departmentId: string;
-      name: string;
-      description?: string | null;
-      minScore: number;
-      maxScore: number;
-      sortOrder?: number;
-    }) => request<CriterionDto>('/admin/criteria', { method: 'POST', body }),
+    list: (departmentId: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      query.set('departmentId', departmentId);
+      if (sessionId) query.set('sessionId', sessionId);
+      return request<CriterionDto[]>(`/admin/criteria?${query.toString()}`);
+    },
+    create: (
+      body: {
+        departmentId: string;
+        name: string;
+        description?: string | null;
+        minScore: number;
+        maxScore: number;
+        sortOrder?: number;
+      },
+      sessionId?: string | null,
+    ) =>
+      request<CriterionDto>('/admin/criteria', { method: 'POST', body: sessionId ? { ...body, sessionId } : body }),
     update: (id: string, body: Partial<CriterionDto>) =>
       request<CriterionDto>(`/admin/criteria/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/criteria/${id}`, { method: 'DELETE' }),
@@ -523,13 +620,22 @@ export const adminApi = {
   },
 
   stats: {
-    overview: () => request<StatsOverview>('/admin/stats/overview'),
+    overview: (options: { sessionId?: string | null } = {}) =>
+      request<StatsOverview>(`/admin/stats/overview${sessionIdQuery(options.sessionId)}`),
   },
 
   results: {
-    list: (departmentId: string) =>
-      request<ResultsDto>(`/admin/results?departmentId=${encodeURIComponent(departmentId)}`),
-    exportUrl: (departmentId: string) =>
-      downloadUrl(`/admin/results/export.xlsx?departmentId=${encodeURIComponent(departmentId)}`),
+    list: (departmentId: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      query.set('departmentId', departmentId);
+      if (sessionId) query.set('sessionId', sessionId);
+      return request<ResultsDto>(`/admin/results?${query.toString()}`);
+    },
+    exportUrl: (departmentId: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      query.set('departmentId', departmentId);
+      if (sessionId) query.set('sessionId', sessionId);
+      return downloadUrl(`/admin/results/export.xlsx?${query.toString()}`);
+    },
   },
 };

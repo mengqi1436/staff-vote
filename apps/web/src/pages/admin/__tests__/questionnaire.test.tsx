@@ -182,10 +182,10 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
   it('按附件8版式渲染：附件号、标题（xx 为部门下拉）、斜线表头、被评列、项点行、填写说明', async () => {
     renderQuestionnaire();
 
-    // 抬头与被评列都从部门/问卷配置回填
+    // 抬头与被评列都从部门/问卷配置回填；多场后列表请求带场次过滤（未选场次为 null）
     expect(await screen.findByLabelText('附件号')).toHaveValue('附件1-1');
-    await waitFor(() => expect(mocks.columnList).toHaveBeenCalledWith('d1'));
-    await waitFor(() => expect(mocks.criteriaList).toHaveBeenCalledWith('d1'));
+    await waitFor(() => expect(mocks.columnList).toHaveBeenCalledWith('d1', null));
+    await waitFor(() => expect(mocks.criteriaList).toHaveBeenCalledWith('d1', null));
 
     // 标题中的「xx」渲染为部门下拉，默认选中第一个部门；其余文字原样展示
     expect(screen.getByRole('combobox', { name: '选择部门' })).toHaveValue('');
@@ -217,8 +217,8 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     await user.click(screen.getByRole('combobox', { name: '选择部门' }));
     await user.click(await screen.findByTitle('财务科'));
 
-    await waitFor(() => expect(mocks.columnList).toHaveBeenCalledWith('d2'));
-    expect(mocks.criteriaList).toHaveBeenCalledWith('d2');
+    await waitFor(() => expect(mocks.columnList).toHaveBeenCalledWith('d2', null));
+    expect(mocks.criteriaList).toHaveBeenCalledWith('d2', null);
   }, TIMEOUT_MS);
 
   it('附件号内联编辑，失焦自动 PATCH 到该部门', async () => {

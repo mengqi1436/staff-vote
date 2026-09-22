@@ -140,6 +140,21 @@ export interface ResultsExportInput {
   }>;
   /** 参与票种口径：含未参与计分的票种，便于解释口径 */
   ticketTypes: Array<{ code: string; name: string; weightPercent: number; involved: boolean }>;
+  /**
+   * 票别口径（计分四口径中的「票别×被评列×项点」与「票别×被评列」）。
+   * 行已按票种展开，名称由 results 服务填好，这里只负责排版。
+   */
+  perTicketType: {
+    /** 票别单项明细：每行一个「票种 × 被评对象 × 项点」 */
+    criteriaRows: Array<{
+      ticketTypeCode: string;
+      voteColumnName: string;
+      criterionName: string;
+      avg: number;
+    }>;
+    /** 票别合计明细：每行一个「票种 × 被评对象」 */
+    columnRows: Array<{ ticketTypeCode: string; voteColumnName: string; average: number }>;
+  };
 }
 
 /**
@@ -205,6 +220,39 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
       name: row.name,
       weightPercent: row.weightPercent,
       involved: row.involved ? '是' : '否',
+    })),
+  );
+
+  // 票别口径的两个明细 sheet：评分内容仍匿名，这里只到票别 × 被评对象粒度。
+  fillSheet(
+    workbook.addWorksheet('票别单项明细'),
+    [],
+    [
+      { header: '票种', key: 'ticketTypeCode', width: 10 },
+      { header: '被评对象', key: 'voteColumnName', width: 20 },
+      { header: '项点', key: 'criterionName', width: 24 },
+      { header: '平均分', key: 'avg', width: 12 },
+    ],
+    input.perTicketType.criteriaRows.map((row) => ({
+      ticketTypeCode: row.ticketTypeCode,
+      voteColumnName: row.voteColumnName,
+      criterionName: row.criterionName,
+      avg: row.avg,
+    })),
+  );
+
+  fillSheet(
+    workbook.addWorksheet('票别合计明细'),
+    [],
+    [
+      { header: '票种', key: 'ticketTypeCode', width: 10 },
+      { header: '被评对象', key: 'voteColumnName', width: 20 },
+      { header: '平均分', key: 'average', width: 12 },
+    ],
+    input.perTicketType.columnRows.map((row) => ({
+      ticketTypeCode: row.ticketTypeCode,
+      voteColumnName: row.voteColumnName,
+      average: row.average,
     })),
   );
 

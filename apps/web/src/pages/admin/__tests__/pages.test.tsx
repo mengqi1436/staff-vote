@@ -98,6 +98,17 @@ vi.mock('../../../lib/api.js', async () => {
     'system.title': '某某单位职工素质评议',
   };
 
+  const sessions = [
+    {
+      id: 's1',
+      name: '内设机构',
+      status: 'voting' as const,
+      startAt: '2026-09-19T00:00:00.000Z',
+      endedAt: null,
+      createdAt: '2026-09-19T00:00:00.000Z',
+    },
+  ];
+
   const results = {
     department: { id: 'd1', name: '办公室' },
     criteria: [{ id: 'c1', name: '政治素质', minScore: 0, maxScore: 100 }],
@@ -144,6 +155,15 @@ vi.mock('../../../lib/api.js', async () => {
         ],
       })),
       logout: vi.fn(async () => undefined),
+      sessions: {
+        list: vi.fn(async () => ({ sessions })),
+        create: vi.fn(async (name: string) => ({
+          session: { ...sessions[0], id: 's2', name, status: 'draft' as const, startAt: null, endedAt: null },
+        })),
+        start: vi.fn(async () => ({ session: { ...sessions[0], status: 'voting' as const } })),
+        pause: vi.fn(async () => ({ session: { ...sessions[0], status: 'paused' as const } })),
+        end: vi.fn(async () => ({ session: { ...sessions[0], status: 'ended' as const } })),
+      },
       me: vi.fn(async () => ({
         id: 'u1',
         username: 'admin',
@@ -298,7 +318,8 @@ describe('后台页面渲染', () => {
     );
 
     expect(await screen.findByText('票种权重')).toBeInTheDocument();
-    // 导航按评议工作流分组：准备 → 发票 → 执行 → 收尾
+    // 导航按评议工作流分组：场次 → 准备 → 发票 → 执行 → 收尾
+    expect(await screen.findByText('场次管理')).toBeInTheDocument();
     expect(await screen.findByText('评议准备')).toBeInTheDocument();
     expect(screen.getByText('发票与票种')).toBeInTheDocument();
     expect(screen.getByText('评议执行')).toBeInTheDocument();

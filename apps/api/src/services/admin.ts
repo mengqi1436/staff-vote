@@ -12,7 +12,7 @@ import { prisma } from '../db.js';
 import { generateUniqueCodes } from '../lib/code.js';
 import { DEFAULT_SETTINGS, SETTING_KEYS } from '../lib/settings.js';
 import { ApiError } from '../middleware/errorHandler.js';
-import type { TicketStatus } from '../generated/prisma/enums.js';
+import type { SessionStatus, TicketStatus } from '../generated/prisma/enums.js';
 
 // -----------------------------------------------------------------------------
 // 传输对象（与 apps/web/src/lib/api.ts 的类型一一对应）
@@ -20,6 +20,130 @@ import type { TicketStatus } from '../generated/prisma/enums.js';
 
 /** Prisma 生成枚举的别名：单一真源，避免手写字面量与 schema.prisma 漂移。 */
 export type TicketStatusValue = TicketStatus;
+export type SessionStatusValue = SessionStatus;
+
+/** 迁移写入的默认场次（存量数据的归属），src 侧需要引用同一字面量。 */
+export const DEFAULT_SESSION_ID = '00000000-0000-7000-8000-000000000001';
+
+/** 场次状态的合法流转表。ended 是终态；voting ⇄ paused 互通。 */
+const SESSION_TRANSITIONS: Record<SessionStatusValue, SessionStatusValue[]> = {
+  draft: ['voting'],
+  voting: ['paused', 'ended'],
+  paused: ['voting', 'ended'],
+  ended: [],
+};
+
+export interface VoteSessionDto {
+  id: string;
+  name: string;
+  status: SessionStatusValue;
+  startAt: string | null;
+  endedAt: string | null;
+  createdAt: string;
+}
+
+export async function listSessions(): Promise<{ sessions: VoteSessionDto[] }> {
+  const rows = await prisma.voteSession.findMany({
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+  return {
+    sessions: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      startAt: toIso(row.startAt),
+      endedAt: toIso(row.endedAt),
+      createdAt: row.createdAt.toISOString(),
+    })),
+  };
+}
+
+/**
+ * 解析管理端请求的场次。
+ *
+ * 显式指定 → 校验存在；未指定 → 库里恰有一场时自动取那一场，
+ * 零场或多场时 400 SESSION_REQUIRED（前端必须明确选择场次）。
+ *
+ * @param explicit 请求携带的场次 ID（查询参数或 body 字段），可空
+ * @returns 场次 ID
+ */
+export async function resolveSessionId(explicit?: string): Promise<string> {
+  if (explicit) {
+    const found = await prisma.voteSession.findUnique({
+      where: { id: explicit },
+      select: { id: true },
+    });
+    if (!found) throw ApiError.badRequest('场次不存在', 'SESSION_NOT_FOUND');
+    return found.id;
+  }
+  const count = await prisma.voteSession.count();
+  if (count === 1) {
+    const only = await prisma.voteSession.findFirstOrThrow({ select: { id: true } });
+    return only.id;
+  }
+  throw ApiError.badRequest('当前存在多个场次，请指定 sessionId', 'SESSION_REQUIRED');
+}
+
+export async function createSession(
+  input: { name: string },
+  operator: string,
+): Promise<VoteSessionDto> {
+  const name = input.name.trim();
+  const existing = await prisma.voteSession.findUnique({ where: { name } });
+  if (existing) throw ApiError.conflict(`场次「${name}」已存在`, 'SESSION_EXISTS');
+
+  const created = await prisma.voteSession.create({ data: { name } });
+  await writeAudit('session.create', { name, operator });
+  return {
+    id: created.id,
+    name: created.name,
+    status: created.status,
+    startAt: toIso(created.startAt),
+    endedAt: toIso(created.endedAt),
+    createdAt: created.createdAt.toISOString(),
+  };
+}
+
+/**
+ * 场次状态机流转：draft→start→voting；voting⇄pause；voting|paused→end→ended。
+ * ended 终态不可逆。首次 start 写 startAt（恢复不覆盖），end 写 endedAt。
+ */
+export async function transitionSession(
+  id: string,
+  action: 'start' | 'pause' | 'end',
+  operator: string,
+): Promise<VoteSessionDto> {
+  const current = await prisma.voteSession.findUnique({ where: { id } });
+  if (!current) throw ApiError.notFound('场次不存在');
+
+  const nextStatus: SessionStatusValue =
+    action === 'start' ? 'voting' : action === 'pause' ? 'paused' : 'ended';
+  if (!SESSION_TRANSITIONS[current.status].includes(nextStatus)) {
+    throw ApiError.conflict(
+      `场次当前状态为 ${current.status}，不能执行 ${action}`,
+      'INVALID_SESSION_TRANSITION',
+    );
+  }
+
+  const updated = await prisma.voteSession.update({
+    where: { id },
+    data: {
+      status: nextStatus,
+      // 首次 start 才写 startAt；paused→voting 的恢复不覆盖首次开始时间。
+      startAt: action === 'start' && !current.startAt ? new Date() : undefined,
+      endedAt: action === 'end' ? new Date() : undefined,
+    },
+  });
+  await writeAudit(`session.${action}`, { name: current.name, operator });
+  return {
+    id: updated.id,
+    name: updated.name,
+    status: updated.status,
+    startAt: toIso(updated.startAt),
+    endedAt: toIso(updated.endedAt),
+    createdAt: updated.createdAt.toISOString(),
+  };
+}
 
 export interface TicketTypeDto {
   id: string;
@@ -163,8 +287,8 @@ function weightSumViolation(after: number, before: number): string | null {
   return `启用票种权重合计为 ${after}%，不得超过 100%（差额 ${diff}）`;
 }
 
-async function enabledWeightTotal(): Promise<number> {
-  const rows = await prisma.ticketType.findMany({ where: { enabled: true } });
+async function enabledWeightTotal(sessionId: string): Promise<number> {
+  const rows = await prisma.ticketType.findMany({ where: { enabled: true, sessionId } });
   return rows.reduce((sum, row) => sum + row.weightPercent, 0);
 }
 
@@ -187,9 +311,12 @@ function toTicketTypeDto(row: {
 }
 
 /** 票种列表，附带各票种的发放/使用/作废计数（后台首屏与票种页都用它）。 */
-export async function listTicketTypes(): Promise<TicketTypeDto[]> {
+export async function listTicketTypes(sessionId?: string): Promise<TicketTypeDto[]> {
   const [types, grouped] = await Promise.all([
-    prisma.ticketType.findMany({ orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }] }),
+    prisma.ticketType.findMany({
+      where: { sessionId },
+      orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+    }),
     prisma.ticket.groupBy({ by: ['ticketTypeId', 'status'], _count: { _all: true } }),
   ]);
 
@@ -214,6 +341,7 @@ export async function listTicketTypes(): Promise<TicketTypeDto[]> {
 }
 
 export interface TicketTypeCreateInput {
+  sessionId?: string;
   code: string;
   name: string;
   weightPercent: number;
@@ -233,18 +361,20 @@ export async function createTicketType(
   input: TicketTypeCreateInput,
   operator: string,
 ): Promise<TicketTypeDto> {
+  const sessionId = await resolveSessionId(input.sessionId);
   const code = input.code.trim();
   const existing = await prisma.ticketType.findUnique({ where: { code } });
   if (existing) throw ApiError.conflict(`票种编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
 
   const enabled = input.enabled ?? true;
-  const before = await enabledWeightTotal();
+  const before = await enabledWeightTotal(sessionId);
   const after = before + (enabled ? input.weightPercent : 0);
   const violation = weightSumViolation(after, before);
   if (violation) throw ApiError.conflict(violation, 'WEIGHT_SUM_INVALID');
 
   const created = await prisma.ticketType.create({
     data: {
+      sessionId,
       code,
       name: input.name.trim(),
       weightPercent: input.weightPercent,
@@ -276,7 +406,7 @@ export async function updateTicketType(
   }
 
   if (patch.weightPercent !== undefined || patch.enabled !== undefined) {
-    const before = await enabledWeightTotal();
+    const before = await enabledWeightTotal(current.sessionId);
     const nextWeight = patch.weightPercent ?? current.weightPercent;
     const nextEnabled = patch.enabled ?? current.enabled;
     const after =
@@ -325,29 +455,82 @@ export interface GenerateTicketsResult {
   codes: string[];
 }
 
+/** 发码时的领码人指定：employeeIds 按顺序对应生成的随机码（发放留痕）。 */
+export interface TicketAssignmentInput {
+  ticketTypeId: string;
+  employeeIds: string[];
+}
+
 /**
  * 批量发码。
  *
  * 批次与随机码在同一事务里写入：批次记录了发放数量，若两者不一致会留下
  * 无法对账的孤儿批次。写码时用批次数量与插入行数比对兜底。
+ *
+ * @param ticketTypeId 票种；必须属于解析出的场次
+ * @param count 发码数量
+ * @param operator 操作者用户名
+ * @param options.sessionId 场次（可空 → 单场自动 / 多场 400 SESSION_REQUIRED）
+ * @param options.assignments 可选的领码人指定：按序写入 assigneeId（发放留痕，
+ *        票仍不记名——评分数据不含票据标识）。职工必须属于同一场次。
  */
 export async function generateTickets(
   ticketTypeId: string,
   count: number,
   operator: string,
+  options: { sessionId?: string; assignments?: TicketAssignmentInput[] } = {},
 ): Promise<GenerateTicketsResult> {
+  const sessionId = await resolveSessionId(options.sessionId);
   const ticketType = await prisma.ticketType.findUnique({ where: { id: ticketTypeId } });
   if (!ticketType) throw ApiError.notFound('票种不存在');
+  if (ticketType.sessionId !== sessionId) {
+    throw ApiError.badRequest('票种不属于该场次', 'SESSION_MISMATCH');
+  }
   if (!ticketType.enabled) throw ApiError.conflict('票种已停用，不能继续发码', 'TICKET_TYPE_DISABLED');
+
+  // 领码人按 assignments 顺序平铺，与生成的码一一对应。
+  let assigneeIds: string[] = [];
+  if (options.assignments && options.assignments.length > 0) {
+    for (const assignment of options.assignments) {
+      if (assignment.ticketTypeId !== ticketTypeId) {
+        throw ApiError.badRequest('assignments 中的票种与发码票种不一致', 'SESSION_MISMATCH');
+      }
+      assigneeIds = assigneeIds.concat(assignment.employeeIds);
+    }
+    if (assigneeIds.length !== count) {
+      throw ApiError.badRequest(
+        `领码人数量（${assigneeIds.length}）与发码数量（${count}）不一致`,
+        'ASSIGNMENT_COUNT_MISMATCH',
+      );
+    }
+    const employees = await prisma.employee.findMany({
+      where: { id: { in: assigneeIds } },
+      select: { id: true, sessionId: true },
+    });
+    const employeeById = new Map(employees.map((row) => [row.id, row]));
+    for (const employeeId of assigneeIds) {
+      const employee = employeeById.get(employeeId);
+      if (!employee) throw ApiError.badRequest('领码人不存在', 'ASSIGNEE_NOT_FOUND');
+      if (employee.sessionId !== sessionId) {
+        throw ApiError.badRequest('领码人必须属于同一场次', 'SESSION_MISMATCH');
+      }
+    }
+  }
 
   const codes = generateUniqueCodes(count);
 
   const result = await prisma.$transaction(async (tx) => {
     const batch = await tx.ticketBatch.create({
-      data: { ticketTypeId, count: codes.length, operator },
+      data: { ticketTypeId, sessionId, count: codes.length, operator },
     });
     const inserted = await tx.ticket.createMany({
-      data: codes.map((code) => ({ code, ticketTypeId, batchId: batch.id })),
+      data: codes.map((code, index) => ({
+        code,
+        ticketTypeId,
+        batchId: batch.id,
+        sessionId,
+        assigneeId: assigneeIds[index] ?? null,
+      })),
     });
     if (inserted.count !== codes.length) {
       // 随机码理论上不会撞库；真撞上就整体回滚，不留下数量对不上的批次。
@@ -361,6 +544,7 @@ export async function generateTickets(
     code: ticketType.code,
     count: result.count,
     batchId: result.batchId,
+    assigned: assigneeIds.length,
     operator,
   });
   return { batchId: result.batchId, count: result.count, codes };
@@ -371,6 +555,7 @@ export interface TicketListQuery {
   pageSize: number;
   status?: TicketStatusValue;
   ticketTypeId?: string;
+  sessionId?: string;
 }
 
 export interface Paged<T> {
@@ -402,7 +587,11 @@ function toTicketDto(row: {
 
 /** 随机码分页列表。 */
 export async function listTickets(query: TicketListQuery): Promise<Paged<TicketDto>> {
-  const where = { status: query.status, ticketTypeId: query.ticketTypeId };
+  const where = {
+    status: query.status,
+    ticketTypeId: query.ticketTypeId,
+    sessionId: query.sessionId,
+  };
   const [items, total] = await Promise.all([
     prisma.ticket.findMany({
       where,
@@ -425,6 +614,7 @@ export async function listTickets(query: TicketListQuery): Promise<Paged<TicketD
 export interface TicketExportFilter {
   status?: TicketStatusValue;
   ticketTypeId?: string;
+  sessionId?: string;
 }
 
 /**
@@ -435,7 +625,11 @@ export interface TicketExportFilter {
  */
 export async function listTicketsForExport(filter: TicketExportFilter) {
   return prisma.ticket.findMany({
-    where: { status: filter.status, ticketTypeId: filter.ticketTypeId },
+    where: {
+      status: filter.status,
+      ticketTypeId: filter.ticketTypeId,
+      sessionId: filter.sessionId,
+    },
     orderBy: [{ createdAt: 'asc' }, { code: 'asc' }],
     take: 50_000,
     include: { ticketType: { select: { code: true, name: true } } },
@@ -509,8 +703,9 @@ export async function revokeTicketsBulk(
 }
 
 /** 发码批次列表（倒序，管理端看最近发放）。 */
-export async function listTicketBatches(): Promise<TicketBatchDto[]> {
+export async function listTicketBatches(sessionId?: string): Promise<TicketBatchDto[]> {
   const batches = await prisma.ticketBatch.findMany({
+    where: { sessionId },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 500,
     include: { ticketType: { select: { id: true, code: true, name: true } } },
@@ -528,8 +723,9 @@ export async function listTicketBatches(): Promise<TicketBatchDto[]> {
 // 部门
 // -----------------------------------------------------------------------------
 
-export async function listDepartments(): Promise<DepartmentDto[]> {
+export async function listDepartments(sessionId?: string): Promise<DepartmentDto[]> {
   const rows = await prisma.department.findMany({
+    where: { sessionId },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
   return rows.map((row) => ({
@@ -545,15 +741,17 @@ export async function listDepartments(): Promise<DepartmentDto[]> {
 }
 
 export async function createDepartment(
-  input: { name: string; sortOrder?: number },
+  input: { sessionId?: string; name: string; sortOrder?: number },
   operator: string,
 ): Promise<DepartmentDto> {
+  const sessionId = await resolveSessionId(input.sessionId);
   const name = input.name.trim();
-  if (await prisma.department.findUnique({ where: { name } })) {
+  // 部门名称在场次内唯一：不同场次可以有同名部门。
+  if (await prisma.department.findFirst({ where: { sessionId, name } })) {
     throw ApiError.conflict(`部门「${name}」已存在`, 'DEPARTMENT_EXISTS');
   }
   const created = await prisma.department.create({
-    data: { name, sortOrder: input.sortOrder ?? 0 },
+    data: { sessionId, name, sortOrder: input.sortOrder ?? 0 },
   });
   await writeAudit('department.create', { name, operator });
   return {
@@ -590,7 +788,9 @@ export async function updateDepartment(
 
   const name = patch.name?.trim();
   if (name && name !== current.name) {
-    const conflict = await prisma.department.findUnique({ where: { name } });
+    const conflict = await prisma.department.findFirst({
+      where: { sessionId: current.sessionId, name, id: { not: id } },
+    });
     if (conflict) throw ApiError.conflict(`部门「${name}」已存在`, 'DEPARTMENT_EXISTS');
   }
   if (patch.questionnaireType !== undefined && !QUESTIONNAIRE_TYPES.includes(patch.questionnaireType)) {
@@ -639,9 +839,12 @@ export async function disableDepartment(id: string, operator: string): Promise<v
 // 职工
 // -----------------------------------------------------------------------------
 
-export async function listEmployees(departmentId?: string): Promise<EmployeeDto[]> {
+export async function listEmployees(
+  departmentId?: string,
+  sessionId?: string,
+): Promise<EmployeeDto[]> {
   const rows = await prisma.employee.findMany({
-    where: { departmentId },
+    where: { departmentId, sessionId },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
   return rows.map((row) => ({
@@ -656,6 +859,8 @@ export async function listEmployees(departmentId?: string): Promise<EmployeeDto[
 
 export interface EmployeeCreateInput {
   departmentId: string;
+  /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
+  sessionId?: string;
   name: string;
   employeeNo?: string | null;
   sortOrder?: number;
@@ -680,6 +885,10 @@ export async function createEmployee(
 ): Promise<EmployeeDto> {
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw ApiError.badRequest('部门不存在');
+  // 职工归属场次 = 部门所属场次；显式传 sessionId 时校验一致，防止配错。
+  if (input.sessionId !== undefined && input.sessionId !== department.sessionId) {
+    throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
+  }
 
   const employeeNo = normalizeEmployeeNo(input.employeeNo);
   if (employeeNo) await assertEmployeeNoAvailable(employeeNo);
@@ -687,6 +896,7 @@ export async function createEmployee(
   const created = await prisma.employee.create({
     data: {
       departmentId: input.departmentId,
+      sessionId: department.sessionId,
       name: input.name.trim(),
       employeeNo,
       sortOrder: input.sortOrder ?? 0,
@@ -717,9 +927,12 @@ export async function updateEmployee(
   const current = await prisma.employee.findUnique({ where: { id } });
   if (!current) throw ApiError.notFound('职工不存在');
 
+  // 跨部门移动时场次跟随新部门（同一批次导入的名单可能跨场次调整归属）。
+  let nextSessionId: string | undefined;
   if (patch.departmentId && patch.departmentId !== current.departmentId) {
     const department = await prisma.department.findUnique({ where: { id: patch.departmentId } });
     if (!department) throw ApiError.badRequest('部门不存在');
+    nextSessionId = department.sessionId;
   }
 
   let employeeNo: string | null | undefined;
@@ -732,6 +945,7 @@ export async function updateEmployee(
     where: { id },
     data: {
       departmentId: patch.departmentId,
+      sessionId: nextSessionId,
       name: patch.name?.trim(),
       employeeNo,
       sortOrder: patch.sortOrder,
@@ -783,7 +997,9 @@ export interface ImportEmployeesResult {
 export async function importEmployees(
   rows: Array<{ rowNumber: number; departmentName: string; name: string; employeeNo: string | null }>,
   operator: string,
+  sessionId?: string,
 ): Promise<ImportEmployeesResult> {
+  const targetSessionId = await resolveSessionId(sessionId);
   const result: ImportEmployeesResult = {
     total: rows.length,
     created: 0,
@@ -807,13 +1023,15 @@ export async function importEmployees(
 
       let departmentId = departmentCache.get(row.departmentName);
       if (!departmentId) {
-        const existing = await prisma.department.findUnique({
-          where: { name: row.departmentName },
+        const existing = await prisma.department.findFirst({
+          where: { sessionId: targetSessionId, name: row.departmentName },
         });
         if (existing) {
           departmentId = existing.id;
         } else {
-          const created = await prisma.department.create({ data: { name: row.departmentName } });
+          const created = await prisma.department.create({
+            data: { sessionId: targetSessionId, name: row.departmentName },
+          });
           departmentId = created.id;
           result.departmentsCreated += 1;
         }
@@ -825,12 +1043,12 @@ export async function importEmployees(
         if (existing) {
           await prisma.employee.update({
             where: { id: existing.id },
-            data: { name: row.name, departmentId },
+            data: { name: row.name, departmentId, sessionId: targetSessionId },
           });
           result.updated += 1;
         } else {
           await prisma.employee.create({
-            data: { departmentId, name: row.name, employeeNo: row.employeeNo },
+            data: { departmentId, sessionId: targetSessionId, name: row.name, employeeNo: row.employeeNo },
           });
           result.created += 1;
         }
@@ -843,7 +1061,7 @@ export async function importEmployees(
       if (sameName) {
         result.updated += 1;
       } else {
-        await prisma.employee.create({ data: { departmentId, name: row.name } });
+        await prisma.employee.create({ data: { departmentId, sessionId: targetSessionId, name: row.name } });
         result.created += 1;
       }
     } catch (error) {
@@ -875,9 +1093,12 @@ function normalizeDescription(value: string | null | undefined): string | null {
   return text === '' ? null : text;
 }
 
-export async function listCriteria(departmentId?: string): Promise<CriterionDto[]> {
+export async function listCriteria(
+  departmentId?: string,
+  sessionId?: string,
+): Promise<CriterionDto[]> {
   const rows = await prisma.criterion.findMany({
-    where: { departmentId },
+    where: { departmentId, sessionId },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
   return rows.map((row) => ({
@@ -894,6 +1115,8 @@ export async function listCriteria(departmentId?: string): Promise<CriterionDto[
 
 export interface CriterionCreateInput {
   departmentId: string;
+  /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
+  sessionId?: string;
   name: string;
   description?: string | null;
   minScore: number;
@@ -911,10 +1134,14 @@ export async function createCriterion(
 
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw ApiError.badRequest('部门不存在');
+  if (input.sessionId !== undefined && input.sessionId !== department.sessionId) {
+    throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
+  }
 
   const created = await prisma.criterion.create({
     data: {
       departmentId: input.departmentId,
+      sessionId: department.sessionId,
       name: input.name.trim(),
       description: normalizeDescription(input.description),
       minScore: input.minScore,
@@ -994,9 +1221,12 @@ export async function disableCriterion(id: string, operator: string): Promise<vo
 // 被评列（打分表的列）
 // -----------------------------------------------------------------------------
 
-export async function listVoteColumns(departmentId?: string): Promise<VoteColumnDto[]> {
+export async function listVoteColumns(
+  departmentId?: string,
+  sessionId?: string,
+): Promise<VoteColumnDto[]> {
   const rows = await prisma.voteColumn.findMany({
-    where: { departmentId },
+    where: { departmentId, sessionId },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     include: { employee: { select: { name: true } } },
   });
@@ -1013,6 +1243,8 @@ export async function listVoteColumns(departmentId?: string): Promise<VoteColumn
 
 export interface VoteColumnCreateInput {
   departmentId: string;
+  /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
+  sessionId?: string;
   name: string;
   /** 该职务列的具体被评人（可选）。 */
   employeeId?: string | null;
@@ -1049,11 +1281,15 @@ export async function createVoteColumn(
   const name = input.name.trim();
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw ApiError.badRequest('部门不存在');
+  if (input.sessionId !== undefined && input.sessionId !== department.sessionId) {
+    throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
+  }
   const employeeId = await resolveEmployeeId(input.employeeId, input.departmentId);
 
   const created = await prisma.voteColumn.create({
     data: {
       departmentId: input.departmentId,
+      sessionId: department.sessionId,
       name,
       employeeId,
       sortOrder: input.sortOrder ?? 0,

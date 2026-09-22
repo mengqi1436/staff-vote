@@ -10,6 +10,7 @@ import { AdminLogin } from './pages/admin/Login.js';
 import { AdminPrintSheet } from './pages/admin/PrintSheet.js';
 import { AdminQuestionnaire } from './pages/admin/Questionnaire.js';
 import { AdminResults } from './pages/admin/Results.js';
+import { AdminSessions } from './pages/admin/Sessions.js';
 import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminTicketTypes } from './pages/admin/TicketTypes.js';
 import { AdminTickets } from './pages/admin/Tickets.js';
@@ -47,6 +48,7 @@ export function App() {
           }
         >
           <Route index element={<AdminDashboard />} />
+          <Route path="sessions" element={<AdminSessions />} />
           <Route path="ticket-types" element={<AdminTicketTypes />} />
           <Route path="tickets" element={<AdminTickets />} />
           <Route path="departments" element={<AdminDepartments />} />
