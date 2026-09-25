@@ -148,3 +148,6 @@ pnpm db:drift            # 退出码 0：实际库与 schema.prisma 无漂移
 ## 部署
 
 见 [deploy/README.md](deploy/README.md)：建系统用户、建库、迁移、构建、Nginx、systemd、升级与备份。
+## Gate test
+
+本行由 no-mistakes gate 链路测试添加，验证 acp:dsh agent 全流水线。
