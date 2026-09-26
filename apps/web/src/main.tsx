@@ -23,8 +23,8 @@ createRoot(container).render(
           因此整体达标。唯 Tabs 的 itemHoverColor 由 colorPrimaryHover 派生，是
           落在灰底上的悬停文字，需在 components.Tabs 覆盖回 #0066cc
         - colorPrimaryHover #0071e3 / colorPrimaryActive #0055aa：实心主色按钮悬停
-          时是「白字 + 主色底」，antd 派生的悬停底（#0066cc 色板第 5 档）配白字
-          贴着 4.5:1 临界，显式取亮一档的旧 Apple 蓝（白字约 4.7:1）与深一档 active
+          时是「白字 + 主色底」，antd 派生的悬停底（#0066cc 色板第 5 档 #2384d9）
+          配白字只有约 3.9:1，显式取亮一档的旧 Apple 蓝（白字约 4.7:1）与深一档 active
         - colorLink #0066cc 与主色同值：antd 6 的链接色不跟随 colorPrimary，需显式
           指定；colorLinkHover #0055aa 同理——antd 派生的默认悬停色偏浅，浅底不达 AA
         - colorBgLayout #f5f5f7：与 body、DESIGN.md 的 layout-bg 同值，不设则后台

@@ -1,7 +1,7 @@
 /**
  * 设计验收审计：不靠肉眼，用浏览器读取真实渲染结果。
  *
- * 标准企业风版本的检查项（年鉴时代的「圆角必须为 0」「禁阴影」纪律已随方向废弃）：
+ * 检查项与视觉方向无关（年鉴时代的「圆角必须为 0」「禁阴影」纪律已随方向废弃）：
  *   1. 没有横向溢出
  *   2. 可见文本里没有 em-dash / en-dash（硬禁令）
  *   3. 正文对比度 ≥ 4.5:1（大字 ≥ 3:1）
@@ -162,7 +162,7 @@ const PROBE = () => {
 
   const total = (key) => findings.reduce((n, f) => n + f[key].length, 0);
   const lines = [];
-  lines.push('================ 设计验收审计（标准企业风） ================');
+  lines.push('================ 设计验收审计（Apple 风契约 v1） ================');
   lines.push('');
   lines.push(`横向溢出（应为 0）                    : ${findings.filter((f) => f.overflowX > 0).length} 页`);
   lines.push(`em-dash 违规（应为 0）                : ${total('emDash')}`);

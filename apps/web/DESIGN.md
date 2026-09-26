@@ -73,7 +73,7 @@ components:
 ## Colors
 
 - `colorPrimary`：`#0066cc`（深 Apple 蓝）。主色文字会落在白底与 Layout 浅灰底（`#f5f5f7`）两种底上，浅一档的 `#0071e3` 在灰底只有约 4.3:1，`#0066cc` 两个底都在 5:1 以上；antd 由主色派生的选中文字（Menu / Tabs 的 `itemSelectedColor` 等）因此整体达标。唯 Tabs 的 `itemHoverColor` 由 `colorPrimaryHover` 派生、又是直接落在灰底上的悬停文字，需在 `components.Tabs` 覆盖为 `#0066cc`（选中/按下文字沿用默认派生值即可，不重复覆盖）。
-- `colorPrimaryHover`：`#0071e3` / `colorPrimaryActive`：`#0055aa`。实心主色按钮悬停时是「白字 + 主色底」，antd 派生的悬停底（`#0066cc` 色板第 5 档）配白字贴着 4.5:1 临界，显式取亮一档的 Apple 蓝（白字约 4.7:1）与深一档 active。
+- `colorPrimaryHover`：`#0071e3` / `colorPrimaryActive`：`#0055aa`。实心主色按钮悬停时是「白字 + 主色底」，antd 派生的悬停底（`#0066cc` 色板第 5 档 `#2384d9`）配白字只有约 3.9:1，显式取亮一档的 Apple 蓝（白字约 4.7:1）与深一档 active。
 - `colorLink`：`#0066cc`，与主色同值（antd 6 的链接色不跟随 `colorPrimary`，需显式指定）；`colorLinkHover` 取更深一档 `#0055aa`——antd 派生的默认悬停色偏浅，落在浅底上不足 4.5:1。普通 `<a>`（react-router `Link`）的静止 / hover / active 三态由 `colorLink` / `colorLinkHover` / `colorLinkActive` 给出，不要在页面里内联覆盖链接色。
 - `components.Menu.groupTitleColor`：`rgba(0, 0, 0, 0.65)`。antd 默认 `colorTextDescription`（`rgba(0, 0, 0, 0.45)`）落在浅色侧栏上只有约 3.3:1。
 - `colorInfoText` / `colorWarningText`：antd 的 `genColorMapToken` 把它们取为各自色板第 9 档，而 6.6.4 的 `generateColorPalettes` 把第 9 档映射回 `colors[5]`（即原色）——默认 `colorWarningText` 就是 `#faad14`，对 `colorWarningBg` 只有 1.83:1，故显式取深档 `#874d00`（约 6.5:1）；`colorInfoText` 默认即 `#0066cc`，对 `colorInfoBg` 约 5.1:1，无需覆盖。
