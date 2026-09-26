@@ -72,6 +72,7 @@ components:
 ## Colors
 
 - `colorPrimary` 与 `colorLink`：`#0071e3`（Apple 蓝，白底对比度约 4.6:1，达 WCAG AA）。
+- `components.Menu` 的 `itemSelectedColor` / `subMenuItemSelectedColor`：`#0066cc`（深一档 Apple 蓝）。antd 的选中底 `controlItemBgActive = colorPrimaryBg`（`#e6f7ff`）是浅主色，`#0071e3` 文字落在其上只有约 4.3:1，故选中文字单独用深档达 AA。
 - `colorError`：`#d70015`（Apple 系统红深档）。
 - 其余状态色沿用 antd 语义（success `#52c41a` / warning `#faad14` / info `#0071e3`（跟随主色，避免残留 antd 默认蓝））。
 - 唯一约束：**状态不靠颜色单独表意**，停用/作废等必须同时有文字。

@@ -34,6 +34,12 @@ createRoot(container).render(
           colorError: '#d70015',
           borderRadius: 10,
         },
+        components: {
+          Menu: {
+            itemSelectedColor: '#0066cc',
+            subMenuItemSelectedColor: '#0066cc',
+          },
+        },
       }}
     >
       <AntApp>
