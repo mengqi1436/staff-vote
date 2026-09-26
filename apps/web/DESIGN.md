@@ -73,8 +73,8 @@ components:
 ## Colors
 
 - `colorPrimary`：`#0071e3`（Apple 蓝，白底对比度约 4.6:1，达 WCAG AA）。
-- `colorLink`：`#0066cc`（深一档 Apple 蓝）。链接文字会落在 `Layout` 的 `#f5f5f5` 等浅灰底上，`#0071e3` 在其上只有约 4.3:1，故链接整体取深档。普通 `<a>`（react-router `Link`）不吃 `colorLink`，用它的地方要显式取该 token。
-- `components.Menu` 的 `itemSelectedColor` / `subMenuItemSelectedColor`：`#0066cc`（深一档 Apple 蓝）。antd 的选中底 `controlItemBgActive = colorPrimaryBg`（`#e6f7ff`）是浅主色，`#0071e3` 文字落在其上只有约 4.3:1，故选中文字单独用深档达 AA。
+- `colorLink`：`#0066cc`（深一档 Apple 蓝）。链接文字会落在 `Layout` 的 `#f5f5f7` 等浅灰底上，`#0071e3` 在其上只有约 4.3:1，故链接整体取深档；普通 `<a>`（react-router `Link`）的静止 / hover / active 三态分别由 `colorLink` / `colorLinkHover` / `colorLinkActive` 给出，不要在页面里内联覆盖链接色。`colorLinkHover` 另取更深一档 `#0055aa`：antd 由 `colorLink` 派生的默认悬停色比它浅两档，落在浅底上同样不足 4.5:1。
+- `components.Menu` 的 `itemSelectedColor` / `subMenuItemSelectedColor`：`#0066cc`（深一档 Apple 蓝）。antd 的选中底 `controlItemBgActive = colorPrimaryBg`（`#e6f7ff`）是浅主色，`#0071e3` 文字落在其上只有约 4.3:1，故选中文字单独用深档达 AA。同组的分组标题 `groupTitleColor` 取 `rgba(0, 0, 0, 0.65)`：antd 默认 `colorTextDescription`（`rgba(0, 0, 0, 0.45)`）落在浅色侧栏上只有约 3.3:1。
 - `colorInfoText` / `colorWarningText`：`#0066cc` / `#874d00`（深档）。antd 派生出的这两个 token 等于 `colorInfo` / `colorWarning` 原色，落在同族浅底（`#e6f7ff` / `#fffbe6`）上只有约 4.3:1 / 1.8:1；静默提示条（`StaticNotice`）的标题就在这样的浅底上，故取深档（约 5.1:1 / 6.5:1）。
 - `colorError`：`#d70015`（Apple 系统红深档）。
 - 其余状态色沿用 antd 语义（success `#52c41a` / warning `#faad14` / info `#0071e3`（跟随主色，避免残留 antd 默认蓝））。

@@ -21,7 +21,7 @@ pnpm db:generate|deploy|seed|drift   # Prisma 生成/迁移/种子/漂移检查
 - **权限码**：唯一真源 `apps/api/src/lib/permissions.ts`，数据库 `permissions` 表是 seed 幂等同步的副本——新增权限码**不需要写迁移**，改文件重跑 `pnpm db:seed` 即可。
 - **新增危险操作必须三处一起改**：后端挂 `requirePermission(code)`、前端 `useAuth().can(code)` 门控按钮、权限码进目录并重跑 seed。前端隐藏按钮只是体验层，后端才是防线；反之只挂后端也 UX 缺陷。无角色的账号权限为空 = 只读。
 - **前端接口客户端** `apps/web/src/lib/api.ts` 契约冻结，改接口先看它。
-- **计分口径**在 `apps/api/src/lib/scoring`：三种「没有数据」刻意区别对待——票种没发（不参与）、格子弃权（计 0）、项点零票（不参与综合分）。改计分前先读 `apps/api/src/lib/scoring` 注释与 `scoring.test.ts`。
+- **计分口径**在 `apps/api/src/lib/scoring.ts`：三种「没有数据」刻意区别对待——票种没发（不参与）、格子弃权（计 0）、项点零票（不参与综合分）。改计分前先读 `apps/api/src/lib/scoring.ts` 注释与 `scoring.test.ts`。
 
 ## 前端设计约束（apps/web/DESIGN.md）
 

@@ -18,8 +18,13 @@ createRoot(container).render(
         投票端由 VoteSurface 局部放大字号与触控目标（嵌套 ConfigProvider 会继承合并
         这里的 token，故投票端自动获得同款主色与圆角）。token 定制全为对比度达标：
         - colorPrimary #0071e3（Apple 蓝）：白底对比度约 4.6:1，达 WCAG AA 4.5:1
-        - colorLink #0066cc（深一档 Apple 蓝）：链接文字会落在 Layout 的 #f5f5f5 等
-          浅灰底上，主色在其上只有约 4.3:1，故链接整体取深档
+        - colorLink #0066cc（深一档 Apple 蓝）：链接文字会落在 Layout 的 #f5f5f7 等
+          浅灰底上，主色在其上只有约 4.3:1，故链接整体取深档；colorLinkHover 再深一档
+          #0055aa——antd 由 colorLink 派生的默认悬停色比它浅两档，同样不达 AA
+        - colorBgLayout #f5f5f7：与 body、DESIGN.md 的 layout-bg 同值，不设则后台
+          Layout 走 antd 默认 #f5f5f5
+        - components.Menu.groupTitleColor rgba(0, 0, 0, 0.65)：侧栏分组标题，antd 默认
+          colorTextDescription 对浅灰底只有约 3.3:1
         - colorInfo 同主色：Alert info、processing 态等走 colorInfo，antd 固定默认
           #1677ff 不跟随主色，不覆盖会残留旧 antd 蓝
         - colorInfoText / colorWarningText 深档：浅色语义底（colorInfoBg #e6f7ff /
@@ -34,6 +39,8 @@ createRoot(container).render(
         token: {
           colorPrimary: '#0071e3',
           colorLink: '#0066cc',
+          colorLinkHover: '#0055aa',
+          colorBgLayout: '#f5f5f7',
           colorInfo: '#0071e3',
           colorInfoText: '#0066cc',
           colorWarningText: '#874d00',
@@ -42,6 +49,7 @@ createRoot(container).render(
         },
         components: {
           Menu: {
+            groupTitleColor: 'rgba(0, 0, 0, 0.65)',
             itemSelectedColor: '#0066cc',
             subMenuItemSelectedColor: '#0066cc',
           },
