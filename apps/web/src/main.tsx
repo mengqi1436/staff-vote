@@ -18,6 +18,8 @@ createRoot(container).render(
         投票端由 VoteSurface 局部放大字号与触控目标（嵌套 ConfigProvider 会继承合并
         这里的 token，故投票端自动获得同款主色与圆角）。token 定制全为对比度达标：
         - colorPrimary #0071e3（Apple 蓝）：白底对比度约 4.6:1，达 WCAG AA 4.5:1
+        - colorPrimaryHover #0066cc：实心主色按钮的悬停底配对白字；antd 由主色派生
+          的悬停底（色板第 5 档 #2692f0）配白字只有约 3.3:1，故取深档
         - colorLink #0066cc（深一档 Apple 蓝）：链接文字会落在 Layout 的 #f5f5f7 等
           浅灰底上，主色在其上只有约 4.3:1，故链接整体取深档；colorLinkHover 再深一档
           #0055aa——antd 由 colorLink 派生的默认悬停色比它浅两档，同样不达 AA
@@ -38,6 +40,7 @@ createRoot(container).render(
       theme={{
         token: {
           colorPrimary: '#0071e3',
+          colorPrimaryHover: '#0066cc',
           colorLink: '#0066cc',
           colorLinkHover: '#0055aa',
           colorBgLayout: '#f5f5f7',
