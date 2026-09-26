@@ -252,6 +252,8 @@ describe('状态机按钮权限门控（只读账号）', () => {
 
     const pause = await screen.findByRole('button', { name: '暂停投票' });
     expect(pause).toBeDisabled();
+    // 主操作按钮无权限时不渲染（不是给一个点不动的按钮）
+    expect(screen.queryByRole('button', { name: /新建场次/ })).toBeNull();
     const ends = screen.getAllByRole('button', { name: '结束投票' });
     expect(ends).toHaveLength(2);
     for (const button of ends) expect(button).toBeDisabled();

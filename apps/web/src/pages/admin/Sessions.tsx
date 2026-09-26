@@ -215,16 +215,18 @@ export function AdminSessions() {
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
               刷新
             </Button>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                form.resetFields();
-                setCreateOpen(true);
-              }}
-            >
-              新建场次
-            </Button>
+            {canWrite ? (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  form.resetFields();
+                  setCreateOpen(true);
+                }}
+              >
+                新建场次
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -246,7 +248,9 @@ export function AdminSessions() {
               emptyText: (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="还没有场次，请点击右上角「新建场次」开始"
+                  description={
+                    canWrite ? '还没有场次，请点击右上角「新建场次」开始' : '还没有场次'
+                  }
                 />
               ),
             }}
