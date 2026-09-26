@@ -30,9 +30,11 @@ createRoot(container).render(
         - colorBgLayout #f5f5f7：与 body、DESIGN.md 的 layout-bg 同值，不设则后台
           Layout 走 antd 默认 #f5f5f5
         - colorInfo #0066cc：Alert info、processing 态等走 colorInfo，antd 固定默认
-          #1677ff 不跟随主色，不覆盖会残留旧 antd 蓝。colorInfoText / colorWarningText
-          不必覆盖：antd 派生它们取的是各自色板第 9 档深档（genColorMapToken），对
-          同族浅底（colorInfoBg / colorWarningBg）本就远超 AA
+          #1677ff 不跟随主色，不覆盖会残留旧 antd 蓝。colorInfoText 默认即 colorInfo，
+          对 colorInfoBg 约 5.1:1、无需覆盖；colorWarningText 默认则等于 colorWarning
+          原色 #faad14（genColorMapToken 取色板第 9 档，而 6.6.4 的 generateColorPalettes
+          把第 9 档映射回原色），对 colorWarningBg #fffbe6 只有 1.83:1，故显式取深档
+          #874d00（约 6.5:1）
         - colorError #d70015（Apple 系统红深档）：默认 #ff4d4f 作「删除/作废」等
           文字色只有 3.3:1；对 colorErrorBg #ffe7e6 约 4.6:1，无需再加深。
           colorErrorHover #c00f1e：antd 派生的悬停档（色板第 5 档 #E32431）作
@@ -51,6 +53,7 @@ createRoot(container).render(
           colorLinkHover: '#0055aa',
           colorBgLayout: '#f5f5f7',
           colorInfo: '#0066cc',
+          colorWarningText: '#874d00',
           colorError: '#d70015',
           colorErrorHover: '#c00f1e',
           borderRadius: 10,
