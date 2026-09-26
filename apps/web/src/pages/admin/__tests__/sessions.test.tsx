@@ -317,6 +317,36 @@ describe('场次工作台', () => {
     );
   }, 20_000);
 
+  it('统计页签切走即卸载（停掉 5 秒轮询），切回重新挂载并取数', async () => {
+    const user = userEvent.setup();
+    renderWithRoutes(
+      <Route path="/admin/sessions/:id" element={<SessionWorkspace />} />,
+      '/admin/sessions/s2',
+      's2',
+    );
+
+    await screen.findByText('测试场次');
+    // 初始停留在「部门」页签：统计未挂载、不取数
+    expect(adminApi.stats.overview).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: '统计' }));
+    expect(await screen.findByText('各票种发放与使用')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(vi.mocked(adminApi.stats.overview)).toHaveBeenCalledWith({ sessionId: 's2' }),
+    );
+
+    // 切走后统计组件卸载，其 usePolling 的清理随之停掉 5 秒定时器
+    await user.click(screen.getByRole('tab', { name: '部门' }));
+    await waitFor(() => expect(screen.queryByText('各票种发放与使用')).toBeNull());
+
+    // 切回重新挂载并重新取数
+    await user.click(screen.getByRole('tab', { name: '统计' }));
+    expect(await screen.findByText('各票种发放与使用')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(vi.mocked(adminApi.stats.overview)).toHaveBeenCalledTimes(2),
+    );
+  }, 20_000);
+
   it('场次不存在时给出引导，返回场次列表', async () => {
     renderWithRoutes(
       <Route path="/admin/sessions/:id" element={<SessionWorkspace />} />,

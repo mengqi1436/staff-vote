@@ -39,6 +39,8 @@ export function SessionWorkspace() {
   /** 状态机流转请求进行中：所有状态机按钮共用一个 busy */
   const [acting, setActing] = useState(false);
   const [windowOpen, setWindowOpen] = useState(false);
+  /** 当前页签：受控以便让统计页签切走即卸载（否则 5 秒轮询会一直跑） */
+  const [activeTab, setActiveTab] = useState('departments');
 
   const session = useMemo(() => sessions.find((item) => item.id === id), [sessions, id]);
 
@@ -157,6 +159,8 @@ export function SessionWorkspace() {
 
       <Card>
         <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
           items={[
             { key: 'departments', label: '部门', children: <AdminDepartments /> },
             { key: 'criteria', label: '项点', children: <AdminCriteria /> },
@@ -167,7 +171,9 @@ export function SessionWorkspace() {
             {
               key: 'stats',
               label: '统计',
-              children: <SessionStats />,
+              // 只有统计页签需要切走即卸载：它的 5 秒轮询否则会在后台一直跑；
+              // 其余页签用条件渲染会丢编辑态，保持 antd 的常驻挂载
+              children: activeTab === 'stats' ? <SessionStats /> : null,
             },
             { key: 'results', label: '结果导出', children: <AdminResults /> },
           ]}
