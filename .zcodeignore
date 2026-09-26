@@ -32,6 +32,10 @@ apps/web/.impeccable/review/
 .vscode/
 .idea/
 
+# Windows 保留设备名误产物：某进程把输出重定向到 nul 时，MSYS 会创建同名真实文件，
+# 它会让 cbm 索引等文件遍历工具失败
+nul
+
 # ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
 .git/
 .hg/

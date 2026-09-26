@@ -13,7 +13,7 @@ pnpm dev:web             # 前端 http://localhost:5173（/api 代理到后端�
 pnpm db:generate|deploy|seed|drift   # Prisma 生成/迁移/种子/漂移检查
 ```
 
-后端测试细节：单元套件（scoring/code/password）随时可跑；接口套件（vote/admin/rbac 等）需要 `TEST_DATABASE_URL`，未设置时跳过并提示；`test/e2e.test.ts` 未设置时**故意失败**（防止连上开发库清空业务表）——没有测试库时 `pnpm -r test` 预期「部分跳过 + e2e 失败」，是环境状态不是代码缺陷。
+后端测试细节：单元套件（scoring/code/password）随时可跑；接口套件需要 `TEST_DATABASE_URL`，未设置时 `admin.test.ts`、`rbac.test.ts`、`revoke-bulk.test.ts`、`sessions.test.ts`、`permission-gate.test.ts`、`auth-context.test.ts` 六个套件跳过并提示；`vote.test.ts` 与 `test/e2e.test.ts` 未设置时**故意失败**（防止误连开发库，e2e 还会清空业务表）——没有测试库时 `pnpm -r test` 预期「部分跳过 + 这两个文件失败」，是环境状态不是代码缺陷，但 `vote.test.ts` 的失败**不能**据此当成环境问题忽略。
 
 ## 架构与真源（改前必看）
 
