@@ -136,11 +136,15 @@ export function AdminResults() {
             <Button icon={<ReloadOutlined />} onClick={results.refresh} loading={results.loading}>
               刷新
             </Button>
-            <Link to={hasDepartment ? `/admin/results/print?departmentId=${departmentId}` : '/admin/results'}>
-              <Button icon={<PrinterOutlined />} disabled={!hasDepartment}>
+            {hasDepartment ? (
+              <Link to={`/admin/results/print?departmentId=${departmentId}`}>
+                <Button icon={<PrinterOutlined />}>打印打分表</Button>
+              </Link>
+            ) : (
+              <Button icon={<PrinterOutlined />} disabled>
                 打印打分表
               </Button>
-            </Link>
+            )}
             <Button
               type="primary"
               icon={<DownloadOutlined />}

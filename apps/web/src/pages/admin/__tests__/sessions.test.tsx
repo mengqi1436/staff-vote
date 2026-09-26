@@ -115,7 +115,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderWithRoutes(ui: ReactElement, path: string, sessionId: string | null = null) {
+function renderWithRoutes(
+  ui: ReactElement,
+  path: string,
+  sessionId: string | null = null,
+  permissions?: string[],
+) {
   return renderWithAuth(
     <ConfigProvider>
       <AntApp>
@@ -124,7 +129,7 @@ function renderWithRoutes(ui: ReactElement, path: string, sessionId: string | nu
         </MemoryRouter>
       </AntApp>
     </ConfigProvider>,
-    undefined,
+    permissions,
     sessionId,
   );
 }
@@ -234,6 +239,41 @@ describe('场次管理页', () => {
       }),
     );
   });
+});
+
+describe('状态机按钮权限门控（只读账号）', () => {
+  it('列表行内状态机按钮保留但禁用，并说明缺哪个权限', async () => {
+    renderWithRoutes(
+      <Route path="/admin/sessions" element={<AdminSessions />} />,
+      '/admin/sessions',
+      null,
+      [],
+    );
+
+    const pause = await screen.findByRole('button', { name: '暂停投票' });
+    expect(pause).toBeDisabled();
+    const ends = screen.getAllByRole('button', { name: '结束投票' });
+    expect(ends).toHaveLength(2);
+    for (const button of ends) expect(button).toBeDisabled();
+
+    await userEvent.hover(pause);
+    expect(
+      await screen.findByText(/无「修改开放时间与系统设置」权限/),
+    ).toBeInTheDocument();
+  }, 15_000);
+
+  it('工作台不渲染状态机主操作按钮', async () => {
+    renderWithRoutes(
+      <Route path="/admin/sessions/:id" element={<SessionWorkspace />} />,
+      '/admin/sessions/s2',
+      's2',
+      [],
+    );
+
+    expect(await screen.findByText('测试场次')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '开始投票' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /编辑窗口/ })).toBeNull();
+  }, 15_000);
 });
 
 describe('formatWindow（窗口单行描述）', () => {

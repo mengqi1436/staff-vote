@@ -796,10 +796,10 @@ export function AdminTickets() {
         okButtonProps={{ danger: true }}
       >
         <Typography.Paragraph>
-          {`将作废当前筛选下 ${bulkCount} 张未使用码；已使用的码不受影响；作废后不可恢复，请确认`}
+          {`将作废本场次当前筛选下 ${bulkCount} 张未使用码；已使用的码不受影响；作废后不可恢复，请确认`}
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          范围：{typeFilter ? '当前筛选的票种' : '全部票种'}；仅「未使用」状态受影响，已使用与已作废的码保持原样。
+          范围：本场次{typeFilter ? '当前筛选的票种' : '全部票种'}；仅「未使用」状态受影响，已使用与已作废的码保持原样。
         </Typography.Paragraph>
       </Modal>
 

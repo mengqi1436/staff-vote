@@ -132,37 +132,51 @@ export function AdminSessions() {
         return (
           <Space size={8} wrap>
             {actions.map((action) =>
-              action.confirm ? (
-                <Popconfirm
-                  key={action.key}
-                  title={action.confirm.title}
-                  description={action.confirm.description}
-                  okText={action.confirm.okText}
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => void transition(row, action.key)}
-                >
+              canWrite ? (
+                action.confirm ? (
+                  <Popconfirm
+                    key={action.key}
+                    title={action.confirm.title}
+                    description={action.confirm.description}
+                    okText={action.confirm.okText}
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void transition(row, action.key)}
+                  >
+                    <Button
+                      size="small"
+                      type="link"
+                      danger={action.danger}
+                      style={{ padding: 0 }}
+                      loading={actingId === row.id}
+                    >
+                      {action.label}
+                    </Button>
+                  </Popconfirm>
+                ) : (
+                  <Button
+                    key={action.key}
+                    size="small"
+                    type="link"
+                    style={{ padding: 0 }}
+                    loading={actingId === row.id}
+                    onClick={() => void transition(row, action.key)}
+                  >
+                    {action.label}
+                  </Button>
+                )
+              ) : (
+                <Tooltip key={action.key} title="无「修改开放时间与系统设置」权限">
                   <Button
                     size="small"
                     type="link"
                     danger={action.danger}
                     style={{ padding: 0 }}
-                    loading={actingId === row.id}
+                    disabled
                   >
                     {action.label}
                   </Button>
-                </Popconfirm>
-              ) : (
-                <Button
-                  key={action.key}
-                  size="small"
-                  type="link"
-                  style={{ padding: 0 }}
-                  loading={actingId === row.id}
-                  onClick={() => void transition(row, action.key)}
-                >
-                  {action.label}
-                </Button>
+                </Tooltip>
               ),
             )}
             <Tooltip title="设为当前场次，后台数据将按该场次展示">

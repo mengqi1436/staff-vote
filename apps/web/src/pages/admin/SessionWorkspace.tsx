@@ -109,33 +109,35 @@ export function SessionWorkspace() {
         }
         extra={
           <>
-            {sessionActions(session.status).map((action) =>
-              action.confirm ? (
-                <Popconfirm
-                  key={action.key}
-                  title={action.confirm.title}
-                  description={action.confirm.description}
-                  okText={action.confirm.okText}
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => void transition(session, action.key)}
-                >
-                  <Button danger={action.danger} loading={acting}>
-                    {action.label}
-                  </Button>
-                </Popconfirm>
-              ) : (
-                <Button
-                  key={action.key}
-                  type={action.key === 'start' ? 'primary' : 'default'}
-                  loading={acting}
-                  onClick={() => void transition(session, action.key)}
-                >
-                  {action.label}
-                </Button>
-              ),
-            )}
             {/* 主操作按钮：无权限时不渲染，而不是给一个点不动的按钮 */}
+            {canWrite
+              ? sessionActions(session.status).map((action) =>
+                  action.confirm ? (
+                    <Popconfirm
+                      key={action.key}
+                      title={action.confirm.title}
+                      description={action.confirm.description}
+                      okText={action.confirm.okText}
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void transition(session, action.key)}
+                    >
+                      <Button danger={action.danger} loading={acting}>
+                        {action.label}
+                      </Button>
+                    </Popconfirm>
+                  ) : (
+                    <Button
+                      key={action.key}
+                      type={action.key === 'start' ? 'primary' : 'default'}
+                      loading={acting}
+                      onClick={() => void transition(session, action.key)}
+                    >
+                      {action.label}
+                    </Button>
+                  ),
+                )
+              : null}
             {canWrite ? (
               <Button icon={<FieldTimeOutlined />} onClick={() => setWindowOpen(true)}>
                 编辑窗口

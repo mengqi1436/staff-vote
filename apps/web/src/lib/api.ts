@@ -106,8 +106,8 @@ export interface VoteStatus {
   opensAt: string | null;
   /** 场次开放窗口终点；null = 长期开放 */
   closesAt: string | null;
-  /** 所在场次（多场评议）；旧后端不返回该字段，恒为 undefined，调用方必须容错 */
-  session?: { id: string; name: string; status: string };
+  /** 所在场次（多场评议）；旧后端不返回该字段（undefined），多场聚合判定回传 null，调用方必须容错 */
+  session?: { id: string; name: string; status: string } | null;
 }
 
 /** 场次（多场评议的顶层组织单位）。状态机：draft → voting → paused ⇄ voting → ended（终态）。 */

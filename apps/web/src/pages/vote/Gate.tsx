@@ -185,8 +185,8 @@ export function VoteGate() {
     );
   }
 
-  // 多场评议：所在场次已暂停或已结束（旧后端没有 session 字段，undefined 时不拦截）
-  if (status.session !== undefined && status.session.status !== 'voting') {
+  // 多场评议：所在场次已暂停或已结束（旧后端没有 session 字段、聚合判定回传 null 时都不拦截）
+  if (status.session != null && status.session.status !== 'voting') {
     return (
       <VoteSurface>
         <GateCard>

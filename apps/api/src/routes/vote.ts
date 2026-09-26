@@ -17,9 +17,9 @@ import {
  *
  * 契约（见 docs/superpowers/specs/2026-09-19-staff-vote-design.md 第 12.1 节）：
  *
- *   GET  /status                  → { open, message, startAt, endAt }
+ *   GET  /status                  → { open, message, opensAt, closesAt, session }
  *                                   未开放时 message = "当前未开放投票"
- *   POST /session   { code }      → { token, ticketType, departments }
+ *   POST /session   { code }      → { token, ticketType, departments, session }
  *                                   校验码存在、未使用、投票开放；限流用 voteLoginLimiter
  *   GET  /sheet?departmentId=     → { department, questionnaireType, headerNote, title, footerNote,
  *                                    criteria[], voteColumns[] }

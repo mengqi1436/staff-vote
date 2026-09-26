@@ -233,6 +233,15 @@ describe('多场评议（Gate 容错）', () => {
     expect(await screen.findByRole('textbox')).toBeInTheDocument();
   });
 
+  it('状态接口 session 为 null（多场聚合判定）时不崩溃，按开放渲染入口', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, { ...statusBody(true), session: null }));
+    renderGate('/');
+
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /进入打分/ })).toBeInTheDocument();
+    expect(screen.queryByText('当前场次未开放投票')).not.toBeInTheDocument();
+  });
+
   it('登录接口返回场次非 voting 时拦截并提示，不存令牌不进打分页', async () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.endsWith('/api/vote/status')) return Promise.resolve(reply(200, statusBody(true)));

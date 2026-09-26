@@ -148,7 +148,7 @@ describe('一键作废未使用码', () => {
     await userEvent.click(button);
 
     expect(
-      await screen.findByText(/将作废当前筛选下\s*7\s*张未使用码/),
+      await screen.findByText(/将作废本场次当前筛选下\s*7\s*张未使用码/),
     ).toBeInTheDocument();
     expect(await screen.findByText(/已使用的码不受影响/)).toBeInTheDocument();
     expect(listMock).toHaveBeenCalledWith({
