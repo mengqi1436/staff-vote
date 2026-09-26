@@ -45,6 +45,13 @@ createRoot(container).render(
             itemSelectedColor: '#0066cc',
             subMenuItemSelectedColor: '#0066cc',
           },
+          Tabs: {
+            // 页签选中/悬停文字默认走主色，而 Admins/Tickets 的 Tabs 直接落在
+            // Layout 灰底上（无 Card 白底包裹），主色在其上不达 AA，同样取深档
+            itemSelectedColor: '#0066cc',
+            itemHoverColor: '#0066cc',
+            itemActiveColor: '#0066cc',
+          },
         },
       }}
     >
