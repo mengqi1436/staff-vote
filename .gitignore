@@ -35,3 +35,6 @@ apps/web/.impeccable/review/
 # Windows 保留设备名误产物：某进程把输出重定向到 nul 时，MSYS 会创建同名真实文件，
 # 它会让 cbm 索引等文件遍历工具失败
 nul
+
+# ZCode 本地工作区目录
+.zcode/
