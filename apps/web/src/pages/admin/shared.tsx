@@ -97,7 +97,18 @@ export function PageHeader({
       }}
     >
       <div>
-        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, lineHeight: 1.4 }}>{title}</h2>
+        {/* Apple 风页面大标题：22px/700、微负字距只用于大标题（中文正文不加） */}
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 22,
+            fontWeight: 700,
+            letterSpacing: '-0.01em',
+            lineHeight: 1.3,
+          }}
+        >
+          {title}
+        </h2>
         {description ? (
           <div style={{ marginTop: 4, color: 'rgba(0, 0, 0, 0.45)', maxWidth: '78ch' }}>
             {description}
@@ -117,7 +128,7 @@ export function PageHeader({
  */
 export function NextStep({ to, children }: { to: string; children: ReactNode }) {
   return (
-    <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #f0f0f0' }}>
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid rgba(0, 0, 0, 0.06)' }}>
       <Link to={to}>下一步：{children} →</Link>
     </div>
   );

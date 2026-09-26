@@ -138,7 +138,7 @@ export function AdminDashboard() {
       <Card title="评议流程进度" style={{ marginBottom: 16 }}>
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12} xl={6}>
-            <Link to="/admin/departments" style={{ display: 'block' }}>
+            <Link to="/admin/departments" className="pressable" style={{ display: 'block' }}>
               <Card size="small" hoverable title="评议准备" extra={<StepNo n={1} />}>
                 <Statistic
                   title="部门 / 职工"
@@ -150,7 +150,7 @@ export function AdminDashboard() {
           </Col>
 
           <Col xs={24} sm={12} xl={6}>
-            <Link to="/admin/tickets" style={{ display: 'block' }}>
+            <Link to="/admin/tickets" className="pressable" style={{ display: 'block' }}>
               <Card size="small" hoverable title="发票" extra={<StepNo n={2} />}>
                 <Statistic title="已发放随机码" value={totals.issued} suffix="张" />
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -161,7 +161,7 @@ export function AdminDashboard() {
           </Col>
 
           <Col xs={24} sm={12} xl={6}>
-            <Link to="/admin/settings" style={{ display: 'block' }}>
+            <Link to="/admin/settings" className="pressable" style={{ display: 'block' }}>
               <Card size="small" hoverable title="开放投票" extra={<StepNo n={3} />}>
                 <div style={{ marginBottom: 8 }}>
                   {voteWindow.open ? <Tag color="success">开放中</Tag> : <Tag>未开放</Tag>}
@@ -175,7 +175,7 @@ export function AdminDashboard() {
           </Col>
 
           <Col xs={24} sm={12} xl={6}>
-            <Link to="/admin/results" style={{ display: 'block' }}>
+            <Link to="/admin/results" className="pressable" style={{ display: 'block' }}>
               <Card size="small" hoverable title="结果收尾" extra={<StepNo n={4} />}>
                 <Statistic title="已收到打分表" value={totals.sheets} suffix="张" />
               </Card>

@@ -22,6 +22,9 @@ import { VoteSurface } from '../../components/VoteSurface.js';
  * 三条纪律写在这里：一是不询问也不展示职工身份（职工可见文案也不出现后台术语），
  * 二是提交失败绝不清空已填内容，三是标红之外必须有可读的错误汇总 —— 键盘与读屏用户
  * 看不到「整张表红了一片」，他们需要一份能跳转的清单。
+ *
+ * 视觉走 Apple 风格契约：常驻提示条（StaticNotice）与提交区只用语义 token（色值/圆角交给全局 token）、
+ * 间距走 16/24 节奏（错误汇总条保持 12/16 紧凑内边距）、数字统计用 .tabular 等宽对齐；表格样式全部由 global.css 承载。
  */
 
 /** 加载打分表失败的文案。 */
@@ -135,7 +138,8 @@ function StaticNotice({ tone, title, children }: { tone: 'warning' | 'info'; tit
   return (
     <div
       style={{
-        padding: '12px 16px',
+        // 内边距统一到 16，与 16/24 间距节奏一致；警示/信息底色走语义 token，不写死色值
+        padding: 16,
         border: `1px solid ${warning ? token.colorWarningBorder : token.colorInfoBorder}`,
         borderRadius: token.borderRadiusLG,
         background: warning ? token.colorWarningBg : token.colorInfoBg,
@@ -456,7 +460,8 @@ export function VoteSheet() {
                   <Button type="primary" htmlType="submit" loading={submitting}>
                     提交评分（提交后不可修改）
                   </Button>
-                  <Typography.Text type="secondary">
+                  {/* 数字统计挂 .tabular：分数纵向对齐后变化才看得清（global.css 既有类） */}
+                  <Typography.Text type="secondary" className="tabular">
                     已填写 {stats.filled} / {stats.total} 项
                     {errors.length > 0 ? `，还有 ${errors.length} 处需要修正` : ''}
                   </Typography.Text>

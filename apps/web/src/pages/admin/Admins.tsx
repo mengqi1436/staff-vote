@@ -15,6 +15,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  theme,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
@@ -77,6 +78,9 @@ export function AdminAdmins() {
 function RbacPanel() {
   const { admin, reload } = useAuth();
   const notify = useNotify();
+  // 「当前登录」标签跟随主题主色：实心主色底 + 白字（solid 保证 AA 对比度），
+  // 非预设色默认浅底 + 主色字对比度不足；固定 color="blue" 是不随主题变的旧默认蓝板，弃用。
+  const { token } = theme.useToken();
 
   const [adminRows, setAdminRows] = useState<AdminUserDto[] | null>(null);
   const [roleRows, setRoleRows] = useState<RoleDto[] | null>(null);
@@ -285,7 +289,9 @@ function RbacPanel() {
       render: (value: string, row) => (
         <Space size={8}>
           <span className="tabular">{value}</span>
-          {row.id === admin?.id ? <Tag color="blue">当前登录</Tag> : null}
+          {row.id === admin?.id ? (
+            <Tag color={token.colorPrimary} variant="solid">当前登录</Tag>
+          ) : null}
         </Space>
       ),
     },

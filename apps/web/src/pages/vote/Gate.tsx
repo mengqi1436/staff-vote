@@ -17,8 +17,9 @@ import { VoteSurface } from '../../components/VoteSurface.js';
  * （后端接口同样会拒绝，前端提示只是提示不是防线）；错误文案只按状态码给，
  * 不回显后端细节。
  *
- * 视觉走标准企业风：白卡片居中，组件全部用 antd 默认样式；
- * 字号与触控目标由 voteTheme（16px / 44px）整体放大，页面不做定制。
+ * 视觉走 Apple 风格契约：白卡片居中、大标题 700 字重加轻微负字距（仅标题级）、
+ * 说明文字用 secondary 灰；主色与圆角交给全局 token，页面不写死色值；
+ * 字号与触控目标由 voteTheme（16px / 44px）整体放大。
  */
 
 /** 登录失败的文案：只按状态码给固定说法，不把内部错误暴露在投票入口上。 */
@@ -198,7 +199,12 @@ export function VoteGate() {
   return (
     <VoteSurface>
       <GateCard>
-        <Typography.Title level={3} style={{ marginTop: 0, marginBottom: 8, textAlign: 'center' }}>
+        {/* 大标题按契约加 700 字重与 -0.01em 负字距；负字距只允许出现在标题级，
+            中文正文与说明文字不加，否则笔画密的中文字会挤在一起。 */}
+        <Typography.Title
+          level={3}
+          style={{ marginTop: 0, marginBottom: 8, textAlign: 'center', fontWeight: 700, letterSpacing: '-0.01em' }}
+        >
           职工素质评议
         </Typography.Title>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 24, textAlign: 'center' }}>
@@ -235,7 +241,8 @@ export function VoteGate() {
           </Button>
         </form>
 
-        <Typography.Paragraph type="secondary" style={{ margin: '16px 0 0' }}>
+        {/* 尾注与标题、说明共用同一条中轴线，卡片视觉更平衡；文案是测试断言点，只动对齐 */}
+        <Typography.Paragraph type="secondary" style={{ margin: '16px 0 0', textAlign: 'center' }}>
           {linkedCode !== '' && code === linkedCode
             ? '已从链接带入随机码，确认无误后点击「进入打分」。一码一票，提交后不可修改。'
             : '一码一票，提交后不可修改，请核对无误后再提交。'}

@@ -26,7 +26,8 @@ import { AdminSessionProvider, useAdminSession } from '../../lib/sessionContext.
  * 菜单按「评议准备 → 发票与票种 → 评议执行 → 评议收尾」的工作流分组
  * （antd Menu type: 'group'），第一次组织评议的管理员从上往下走一遍即可；
  * 末尾的「系统管理」不属于评议流程，单独成组。
- * 视觉全部用 antd 默认 token：深色侧栏 + 浅色内容区，不自定义颜色。
+ * 视觉遵循 Apple 风契约 v1：浅色磨砂侧栏 + sticky 半透明顶栏，
+ * 只动材质与样式值，不引入自造组件。
  *
  * 守卫：身份来自 AuthProvider 的 `useAuth()`（全后台只拉一次 `/me`，
  * 不再由本组件重复请求）；未登录（401）即跳登录页。
@@ -209,14 +210,25 @@ export function AdminLayout() {
   return (
     <AdminSessionProvider>
       <Layout style={{ minHeight: '100vh' }}>
-        <Layout.Sider width={220} theme="dark">
+        {/* 浅色材质侧栏：半透明浅灰 + 背景模糊。Menu 用 theme="light" 并把
+            自身白底设为 transparent，否则 Menu 会用 colorBgContainer 盖住侧栏材质。
+            不再 sticky——内容长时菜单随页面滚动是既有行为，契约未要求固定。 */}
+        <Layout.Sider
+          width={220}
+          theme="light"
+          style={{
+            background: 'rgba(245, 245, 245, 0.85)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+          }}
+        >
           <div
             style={{
               height: 64,
               display: 'flex',
               alignItems: 'center',
               padding: '0 24px',
-              color: token.colorTextLightSolid,
+              color: token.colorText,
               fontSize: 16,
               fontWeight: 600,
             }}
@@ -224,18 +236,28 @@ export function AdminLayout() {
             职工素质评议 · 后台
           </div>
           <Menu
-            theme="dark"
+            theme="light"
             mode="inline"
             selectedKeys={[selectedKey]}
             items={MENU_ITEMS}
-            style={{ borderInlineEnd: 'none' }}
+            style={{ borderInlineEnd: 'none', background: 'transparent' }}
           />
         </Layout.Sider>
 
         <Layout>
+          {/* sticky 顶栏：本结构下外层 Layout 仅 minHeight:100vh、无 overflow 祖先，
+              右列高度随内容拉伸，故 sticky top:0 相对视口悬浮成立；内容区滚动时
+              顶栏保持在前。不画 1px 分隔线，用极淡阴影提示分层；
+              zIndex 50：盖过内容区粘性表头（z≤3），低于 antd 弹层（≥1000）。 */}
           <Layout.Header
             style={{
-              background: token.colorBgContainer,
+              position: 'sticky',
+              top: 0,
+              zIndex: 50,
+              background: 'rgba(255, 255, 255, 0.72)',
+              backdropFilter: 'blur(20px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+              boxShadow: '0 1px 4px rgba(0, 0, 0, 0.04)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',

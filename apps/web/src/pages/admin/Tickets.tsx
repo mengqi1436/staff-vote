@@ -840,8 +840,9 @@ export function AdminTickets() {
               style={{
                 maxHeight: 360,
                 overflow: 'auto',
-                // 新生成的一批：浅底 400ms 淡出，只动 background-color（信息性动画）
-                backgroundColor: freshCodes ? token.blue1 : 'transparent',
+                // 新生成的一批：浅底 400ms 淡出，只动 background-color（信息性动画）。
+                // 用 colorPrimaryBg 而非固定色板 blue1：高亮跟随主题主色，换成 Apple 蓝后仍是同族浅底。
+                backgroundColor: freshCodes ? token.colorPrimaryBg : 'transparent',
                 transition: 'background-color 400ms ease-out',
               }}
             >

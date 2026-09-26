@@ -1,34 +1,32 @@
 ---
 name: 职工素质评议系统
-description: 标准企业风。Ant Design 默认设计 + 投票端尺寸差异，不做自定义视觉体系。
+description: Apple 风格。基于 antd 6 组件体系实现（WWDC Designing Fluid Interfaces 精神的 Web 移植契约 v1），不引入新依赖。
 colors:
-  primary: "#1677ff"
+  primary: "#0071e3"
   success: "#52c41a"
   warning: "#faad14"
-  error: "#ff4d4f"
+  error: "#d70015"
   text: "rgba(0, 0, 0, 0.88)"
   text-secondary: "rgba(0, 0, 0, 0.45)"
-  layout-bg: "#f5f5f5"
+  layout-bg: "#f5f5f7"
   container-bg: "#ffffff"
   border: "#d9d9d9"
   split: "#f0f0f0"
 typography:
   body-admin:
-    fontFamily: "antd 默认系统字体栈（含 PingFang SC / Microsoft YaHei）"
+    fontFamily: "系统字体栈（-apple-system 开头，含 PingFang SC / Microsoft YaHei）"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.57
     letterSpacing: "normal"
   body-vote:
-    fontFamily: "antd 默认系统字体栈（含 PingFang SC / Microsoft YaHei）"
+    fontFamily: "系统字体栈（-apple-system 开头，含 PingFang SC / Microsoft YaHei）"
     fontSize: "16px"
     fontWeight: 400
     lineHeight: 1.57
     letterSpacing: "normal"
 rounded:
-  sm: "4px"
-  md: "6px"
-  lg: "8px"
+  md: "10px (ConfigProvider borderRadius，全局唯一值，不再分 4/6/8 三档)"
 spacing:
   xs: "8px"
   sm: "12px"
@@ -49,7 +47,7 @@ components:
     padding: "0 28px"
   card:
     backgroundColor: "{colors.container-bg}"
-    rounded: "{rounded.lg}"
+    rounded: "{rounded.md}"
     padding: "24px"
   cell-input:
     backgroundColor: "transparent"
@@ -59,27 +57,30 @@ components:
 
 ## Overview
 
-**标准企业风：一切用 Ant Design 6 的默认设计**（默认蓝主色、默认圆角阴影、默认组件形态），不做自定义 token、不自造视觉体系。
+**Apple 风格**：克制的材质、层级分明的排版、即时按压反馈、柔和过渡。设计依据：**WWDC Designing Fluid Interfaces 精神的 Web 移植契约 v1**（下称「契约」）。实现完全基于 antd 6 组件体系，token 只在 `main.tsx` 全局 ConfigProvider 定义，不引入任何新依赖。
 
-前两轮自定义视觉（蓝灰定制主题、纸上年鉴）都已按用户要求废弃并删除。教训写在 theme.ts 注释里：antd 默认就是「标准企业脸」，拿艺术方向替换默认主题是负资产。
+转向记录：前两轮自定义视觉（蓝灰定制主题、纸上年鉴）均已废弃删除；本轮 Apple 风是用户明确要求的第三次转向——用户要求界面更有 Apple 的质感与流畅感。教训不变：不在 antd 之上再造体系，本轮的「体系」就是这份契约本身，各页照做、不自行发挥。
 
-系统有**两个人格**，差异只在尺寸，不在颜色与形状：
+系统有**两个人格**，差异只在密度，不在颜色与形状：
 
 | | 后台 | 投票入口 |
 |---|---|---|
 | 使用者 | 管理员，评议期间每天多次，桌面 | 职工，一年一两次，可能用手机 |
-| 字号 / 控件 | antd 默认（14px / 32px） | `voteTheme`（16px / 44px 触控） |
+| 字号 / 控件 | antd 默认密度（14px / 32px） | `voteTheme`（16px / 44px 触控） |
 | 实现 | 全局默认主题 | `components/VoteSurface.tsx` 包 `voteTheme` |
 
 ## Colors
 
-全部 antd 默认，**唯一的 token 定制是主色**：`colorPrimary: '#0958d9'`（antd 官方色板 blue-7）。原因：antd 默认的 #1677ff 在白底上只有约 4.0:1，达不到 WCAG AA 的 4.5:1，链接与正文级主色文字全部不合格；blue-7 约 5.4:1，一行改动让链接、选中态、按钮等全部派生色达标。
-
-状态色沿用 antd 语义（success / warning / error / info）。唯一约束：**状态不靠颜色单独表意**，停用/作废等必须同时有文字。
+- `colorPrimary` 与 `colorLink`：`#0071e3`（Apple 蓝，白底对比度约 4.6:1，达 WCAG AA）。
+- `colorError`：`#d70015`（Apple 系统红深档）。
+- 其余状态色沿用 antd 语义（success `#52c41a` / warning `#faad14` / info `#0071e3`（跟随主色，避免残留 antd 默认蓝））。
+- 唯一约束：**状态不靠颜色单独表意**，停用/作废等必须同时有文字。
 
 ## Typography
 
-系统字体栈（antd 默认）。数字列（分数、数量、随机码、工号）加 `.tabular`（`font-variant-numeric: tabular-nums`），否则无法纵向比较。
+- 字体栈不变：`-apple-system` 系统栈（antd 默认）。数字列（分数、数量、随机码、工号）加 `.tabular`（`font-variant-numeric: tabular-nums`），否则无法纵向比较。
+- 页面大标题（PageHeader h2）：fontSize 22 / fontWeight 700 / letterSpacing -0.01em / lineHeight 1.3。
+- **中文正文不加负字距**（负字距只给大标题），说明文字用 Typography secondary 灰。
 
 ## Layout
 
@@ -88,19 +89,32 @@ components:
 - 每个流程页底部放 `NextStep` 链接串联下一步。
 - 投票入口三页顶部放 `VoteSteps` 步骤条（验证身份→填写打分→完成提交，不可点击，流程只能前进）。
 
-## Elevation & Depth
+## 材质与层级
 
-antd 默认（Card、Modal、Dropdown 的默认阴影）。不自定义。
+- 顶栏：`sticky` + `rgba(255,255,255,0.72)` + `backdrop-filter: blur(20px) saturate(180%)`，无硬分隔线。
+- 侧栏：浅色半透明 `rgba(245,245,245,0.85)` + `blur(20px)`，Menu `theme="light"`。
+- **内容区不堆材质**：页面主体就是纯色背景 + Card，阴影只用 antd 默认（Modal、Dropdown）。
+- **禁止半透明叠半透明**——毛玻璃上再叠毛玻璃会把层级糊掉。
+
+## 动效
+
+- 按压反馈：`.pressable`（`translateY(1px)`，120ms）——可点击的卡片/按钮即按即回。
+- 过渡：120–240ms，`ease-out`。
+- 不引入动画库，没有弹跳（bounce）keyframes。
+- `prefers-reduced-motion` 兜底保留（global.css 全局）。
 
 ## Shapes
 
-antd 默认圆角（4/6/8px）。不自定义。
+全局 `borderRadius: 10`（ConfigProvider 单值，组件圆角由它派生）。
+
+## 不可动的版式基准
+
+`global.css` 的 **`.sheet-excel`（问卷配置 Excel 版式）与 `.score-table`（打分表）** 复刻纸质参考表/附件8，**版式规则不可动**；Apple 化只允许替换焦点色等颜色值，不改结构、间距、行列规则。
 
 ## Components
 
 - **共享（`pages/admin/shared.tsx`）**：`PageHeader` / `NextStep` / `ErrorState`（401 统一跳登录）/ `LoadingState`（Skeleton）/ `StaleDataAlert`（轮询失败保留旧数据）/ `useNotify`。
 - **投票端**：`VoteSurface`（套 voteTheme）、`VoteSteps`（步骤条）、`ScoreTable`（粘性表头 + 粘性姓名列 + Tab/方向键网格导航 + blur 校验 + >50 行分页）。
-- **打分表 CSS（global.css `.score-table`）**：功能样式（粘性定位、44px 格高、antd 标准色的焦点/非法态），颜色一律取 antd 标准色值。
 - **窗口判定单一真源（`pages/admin/lib.ts`）**：`voteWindowConditions` 逐条返回三层条件，`evaluateVoteWindow` 由其派生；设置页判定表直接渲染 rows，不再有第二份实现。
 - **身份与权限（`lib/auth.tsx`）**：`AuthProvider` 包住 `/admin` 全部路由，`useAuth()` 给出 `{ admin, loading, error, can(code), reload }`。权限码由 `/me` 权威下发，前端只用来决定**按钮显隐**。测试用 `src/test-utils.tsx` 的 `renderWithAuth(ui, permissions?)` 注入固定权限（默认全权限，只读传 `[]`），避免「加载中」造成的显隐断言竞态。
 - **按钮门控的统一标准**：主操作按钮（新增/导入/保存/发码/作废）无权限时**不渲染**；行内开关与行内操作（启停/编辑/删除）保留但 `disabled` + Tooltip 写明缺哪个权限——整列消失会让表格看起来缺列。
@@ -122,19 +136,20 @@ antd 默认圆角（4/6/8px）。不自定义。
 
 **Do**
 
-- 用 antd 标准组件与默认 token 表达界面；需要强调就用组件语义（type="primary"、Alert、Tag）。
+- 用 Apple 的克制原则表达界面：材质只给悬浮层（顶栏/侧栏），按压即反馈（`.pressable`），状态不靠颜色单独表意（同时有文字）。
 - 口径说明必须保留（Alert info / Typography secondary）：票种加权、归一化等权平均、零票排除、同分并列——产品原则「结果可复现、可解释」。
 - 无障碍基线不退化：投票端 error summary（role=alert + 可聚焦 + 逐条链接到格子）、aria-describedby / aria-invalid、blur 校验、44px 触控目标。
-- 动效克制：仅按压反馈（120ms）、发码后新码浅底淡出（400ms，信息性）、状态过渡（≤180ms）；全部尊重 prefers-reduced-motion（global.css 全局兜底）。
+- 动效遵守契约：按压反馈 120ms、过渡 120–240ms ease-out；信息性动画（如发码后新码浅底淡出）同样尊重 prefers-reduced-motion（global.css 全局兜底）。
 - 新增一个「不可逆或能改变投票有效性」的操作时，**三处一起改**：后端挂 `requirePermission`、前端用 `useAuth().can()` 门控、权限码加进 `lib/permissions.ts` 目录并重跑 seed。
 
 **Don't**
 
-- 不再自造视觉体系（自定义色板、规则线、重线表头、Ledger 组件族——两轮尝试均已删除）。
+- 不自造 Apple 规范之外的体系：色板、动效曲线、材质强度都按本文档契约，不各页自行发挥。
+- 不在内容区堆材质，不半透明叠半透明。
+- 不引入动画库、CSS 框架或第二组件库——Apple 化基于 antd 6 组件体系实现。
 - 不在职工可见文案出现后台术语（票种权重、归一化、批次）。
 - 不用 Alert 承载常驻提示（antd 6 Alert 固定 role="alert"，常驻内容会与动态错误抢唯一 alert 语义；常驻提示用静默样式，动态错误才用 Alert）。
 - 不用 emoji 当图标；图标统一 @ant-design/icons。
-- 不引入动画库、CSS 框架或第二组件库。
 - 不要「只在前端隐藏按钮」就当权限做完了：那只是体验层，直接调接口一样能改数据；反之也不要只挂后端而让用户点了才被拒。
 - 不要把权限码写成页面里散落的字符串比较，一律走 `useAuth().can(code)`，保证默认拒绝（无身份即无权）。
 

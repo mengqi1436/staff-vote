@@ -9,7 +9,8 @@ import { VoteSurface } from '../../components/VoteSurface.js';
  * 因此刻意不放「返回」或「再改一次」的入口 —— 一码一票提交即核销，
  * 留一个回退入口只会让人以为还能改，等发现不行时已经来不及补救。
  *
- * 视觉用 antd Result 的标准成功态，不做自定义动效。
+ * 视觉走 Apple 风格契约：Result 标准成功态 + 克制的留白，不做自定义动效；
+ * 成功色与圆角交给全局 token，页面不写死色值。
  */
 export function VoteDone() {
   return (
@@ -26,7 +27,8 @@ export function VoteDone() {
         <Card style={{ width: '100%', maxWidth: 640 }}>
           <VoteSteps current={2} />
           <Result status="success" title="提交成功" subTitle="感谢您的参与。">
-            <div style={{ display: 'grid', gap: 12, textAlign: 'left' }}>
+            {/* 说明块间距走 16/24 节奏 */}
+            <div style={{ display: 'grid', gap: 16, textAlign: 'left' }}>
               <p style={{ margin: 0 }}>
                 您的评分已经提交并生效，<strong>提交后不可修改</strong>。
               </p>

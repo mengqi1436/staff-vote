@@ -1,13 +1,14 @@
 /* =============================================================================
    全局基础样式
    =============================================================================
-   刻意保持极薄：视觉全部交给 Ant Design 默认设计（标准企业风）。
-   这里只留 antd 覆盖不到、且功能必需的部分：
+   刻意保持极薄：视觉交给 antd 6 组件体系 + 全局 token（Apple 风契约 v1，
+   见 main.tsx）。这里只留 antd 覆盖不到、且功能必需的部分：
      - 打分表粘性定位（投票入口的核心体验）
      - 数字等宽对齐（评议数据纵向比较必需）
      - 按压反馈与 reduced-motion（可访问性基线）
      - 打印规则（打分表归档用）
-   上一轮的「纸上年鉴」主题变量与 ledger-* 类已整体删除。
+   注意：.sheet-excel 全区与 .score-table 的版式规则（粘性、列宽、参考表
+   字号、边框结构）复刻纸质参考表，是版式基准，不随主题改动。
    ============================================================================= */
 
 html,
@@ -18,7 +19,7 @@ body,
 }
 
 body {
-  background: #f5f5f5;
+  background: #f5f5f7; /* Apple 风浅灰底 */
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
@@ -33,7 +34,7 @@ body {
 /* =============================================================================
    打分表（投票入口核心）
    粘性表头 + 粘性姓名列：几十行几列时始终知道在给谁打分、打到哪一项。
-   颜色用 antd 标准色值，与默认主题一致。
+   颜色与全局 token 一致：焦点 Apple 蓝 #0071e3、非法 #d70015。
    ============================================================================= */
 
 /* 参考表是全表黑色细实线框：collapse + 1px #000，四边都画 */
@@ -91,23 +92,25 @@ body {
   background: transparent;
   color: rgba(0, 0, 0, 0.88);
   outline: none;
-  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out, box-shadow 120ms ease-out;
 }
 
 .score-table .cell-input:hover {
-  border-color: #d9d9d9;
+  border-color: rgba(0, 0, 0, 0.2); /* Apple 风中性灰，无色彩倾向 */
 }
 
+/* 聚焦即 Apple 蓝描边 + 同色浅光晕，与全局 colorPrimary #0071e3 一致 */
 .score-table .cell-input:focus {
-  border-color: #1677ff;
-  box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+  border-color: #0071e3;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12);
 }
 
-/* 越界或非法：antd 标准错误色，另有 aria-invalid 与文字说明，不靠颜色单独表意 */
+/* 越界或非法：Apple 系统红深档 #d70015（浅底上文字对比度 ≥4.5:1），
+   另有 aria-invalid 与文字说明，不靠颜色单独表意 */
 .score-table .cell-input.invalid {
-  background: #fff2f0;
-  border-color: #ff4d4f;
-  color: #cf1322;
+  background: rgba(215, 0, 21, 0.08);
+  border-color: #d70015;
+  color: #d70015;
   font-weight: 600;
 }
 

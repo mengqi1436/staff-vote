@@ -231,7 +231,8 @@ export function ScoreTable({
     <div
       style={{
         overflowX: 'auto',
-        // 参考表是全表黑色细实线框，格线由 global.css 的 .score-table 提供
+        // 格线、粘性定位与输入框焦点/非法色全部由 global.css 的 .score-table 承载，
+        // 组件不写死色值；这里的白底是横向滚动区域的自建底色（Apple 契约允许的唯一色值）
         background: '#fff',
       }}
     >
