@@ -2,7 +2,7 @@ import type { ThemeConfig } from 'antd';
 
 /**
  * 主题：Apple 风契约 v1 = 全队统一的基础 token 定制见 main.tsx 的全局
- * ConfigProvider（colorPrimary #0071e3、colorError #d70015、borderRadius 10）。
+ * ConfigProvider（colorPrimary #0066cc、colorError #d70015、borderRadius 10）。
  * 本文件只管投票端与后台的密度分叉，不再重复声明颜色/圆角。
  *
  * ponytail: 上一轮为「纸上年鉴」写了 150 行定制 token（0 圆角、墨黑主色、

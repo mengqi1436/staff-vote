@@ -25,7 +25,7 @@ pnpm db:generate|deploy|seed|drift   # Prisma 生成/迁移/种子/漂移检查
 
 ## 前端设计约束（apps/web/DESIGN.md）
 
-- **Apple 风格**（WWDC Designing Fluid Interfaces 精神的 Web 移植契约 v1，基于 antd 6 实现）：主色 `#0071e3`、链接 `#0066cc`（深一档，浅灰底上才达 WCAG AA）、错误 `#d70015`、圆角 10、顶栏/侧栏毛玻璃、按压反馈 `.pressable`。禁止引入动画库/CSS 框架/第二组件库。
+- **Apple 风格**（WWDC Designing Fluid Interfaces 精神的 Web 移植契约 v1，基于 antd 6 实现）：主色 `#0066cc`（深 Apple 蓝，白底与浅灰底文字均达 WCAG AA；链接同值）、错误 `#d70015`、圆角 10、顶栏/侧栏毛玻璃、按压反馈 `.pressable`。禁止引入动画库/CSS 框架/第二组件库。
 - 唯一允许的 token 层在 `main.tsx` 全局 ConfigProvider（`theme.ts`），各页不得自行覆盖色板/动效/材质。
 - 两个人格：后台 antd 默认密度（14px/32px）；投票入口用 `VoteSurface` 包 `voteTheme`（16px/44px 触控）。
 - 版式基准不可动：`global.css` 的 `.sheet-excel` 与 `.score-table` 复刻纸质参考表/附件8，只允许换焦点色等颜色值。
