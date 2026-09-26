@@ -54,6 +54,9 @@ let viewerAgent: ReturnType<typeof request.agent>;
 
 let sequence = 0;
 
+/** 用例临时建的场次，afterAll 统一清理。 */
+const extraSessionIds: string[] = [];
+
 function nextSeq(): number {
   sequence += 1;
   return sequence;
@@ -199,6 +202,7 @@ describeDb('一键作废随机码', () => {
 
   afterAll(async () => {
     await clearTicketFixtures();
+    await prisma.voteSession.deleteMany({ where: { id: { in: extraSessionIds } } });
     await cleanupRbac(TAG);
     await prisma.$disconnect();
   });
@@ -307,6 +311,7 @@ describeDb('一键作废随机码', () => {
     const otherSessionId = (
       await prisma.voteSession.create({ data: { name: `${TAG}场次-他场${nextSeq()}` } })
     ).id;
+    extraSessionIds.push(otherSessionId);
     const typeOther = await makeTickets('他场', { unused: 2 }, otherSessionId);
 
     // 默认场次范围会连带作废同库其他测试文件挂在默认场次下的夹具
@@ -349,12 +354,6 @@ describeDb('一键作废随机码', () => {
         });
       }
     }
-
-    // 清理他场次的夹具（clearTicketFixtures 只按票种 code 前缀清，这里补场次）
-    await prisma.ticket.deleteMany({ where: { ticketTypeId: typeOther.id } });
-    await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: typeOther.id } });
-    await prisma.ticketType.deleteMany({ where: { id: typeOther.id } });
-    await prisma.voteSession.deleteMany({ where: { id: otherSessionId } });
   });
 
   it('缺少 sessionId → 400 VALIDATION_FAILED，一张码都没被作废', async () => {

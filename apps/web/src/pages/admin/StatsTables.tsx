@@ -1,7 +1,7 @@
 /**
  * 场次统计的两张进度表（原概览页抽出的组件）。
  *
- * 每张表自带取数：按「当前场次」（场次上下文）轮询 stats.overview，
+ * 两张表由统计页签统一取数：按「当前场次」（场次上下文）轮询 stats.overview，
  * 5 秒一轮、失败保留旧数据只提示 —— 与原概览页同一套行为。
  * 口径说明（产品原则 4：结果可复现、可解释）随表保留。
  */
@@ -29,14 +29,16 @@ function useOverview() {
   return usePolling(fetchOverview, 5000);
 }
 
+type OverviewState = ReturnType<typeof useOverview>;
+
 /** 使用率＝已使用 ÷ 已发放；还没有发出任何码时记 0，不显示无意义的除式。 */
 function usagePercent(issued: number, used: number): number {
   return issued > 0 ? Math.round((used / issued) * 100) : 0;
 }
 
 /** 「各票种发放与使用」表（原概览页同名列定义）。 */
-export function TicketTypeStatsTable() {
-  const { data, error, loading, refresh } = useOverview();
+export function TicketTypeStatsTable({ overview }: { overview: OverviewState }) {
+  const { data, error, loading, refresh } = overview;
 
   const ticketColumns: TableColumnsType<TicketTypeStat> = [
     { title: '编码', dataIndex: 'code', width: 84 },
@@ -113,8 +115,8 @@ export function TicketTypeStatsTable() {
 }
 
 /** 「各部门提交进度」表（原概览页同名列定义）。 */
-export function DepartmentProgressTable() {
-  const { data, error, loading, refresh } = useOverview();
+export function DepartmentProgressTable({ overview }: { overview: OverviewState }) {
+  const { data, error, loading, refresh } = overview;
 
   const departmentColumns: TableColumnsType<DepartmentStat> = [
     {
@@ -169,5 +171,16 @@ export function DepartmentProgressTable() {
         已提交按打分表计，一码一票，提交即核销，不可修改；停用部门保留历史提交数据，不影响已收表数与导出。
       </Typography.Paragraph>
     </Card>
+  );
+}
+
+/** 统计页签：两张表共用一路取数，同一场次同一接口不重复轮询。 */
+export function SessionStats() {
+  const overview = useOverview();
+  return (
+    <>
+      <TicketTypeStatsTable overview={overview} />
+      <DepartmentProgressTable overview={overview} />
+    </>
   );
 }

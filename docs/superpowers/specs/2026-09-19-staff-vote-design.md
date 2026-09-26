@@ -246,7 +246,7 @@ staff-vote/
 | `TicketBatch` | ticketTypeId, count, createdAt, operator | 发放批次 |
 | `ScoreSheet` | departmentId, ticketTypeId, submittedAt | 无 ticketId、无 IP、无 UA |
 | `ScoreItem` | sheetId, employeeId, criterionId, score(Int) | 唯一 (sheetId, employeeId, criterionId) |
-| `Setting` | key(PK), value | 投票总开关、起止时间、系统标题 |
+| `Setting` | key(PK), value | 系统标题（投票开关与开放时间窗已下沉到场次 `VoteSession`） |
 | `AuditLog` | action, detail(Json), createdAt | 发码、改权重、改开放时间留痕 |
 
 ## 12. API 契约
@@ -255,7 +255,7 @@ staff-vote/
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/vote/status` | `{open, message, startAt, endAt}`，未开放时 `message="当前未开放投票"` |
+| GET | `/api/vote/status` | `{open, message, opensAt, closesAt, session}`（多场或零场时 `session` 为 null），未开放时 `message="当前未开放投票"` |
 | POST | `/api/vote/session` | 体 `{code}`；校验存在、未使用、投票开放；返回短期 JWT（携带 `ticketId` 供提交时原子核销、`ticketTypeId` 供加权，**不含码明文**）与部门列表 |
 | GET | `/api/vote/sheet?departmentId=` | 该部门项点列（含 min/max）与职工行 |
 | POST | `/api/vote/submit` | 体 `{departmentId, items[{employeeId, criterionId, score}]}`，`Authorization: Bearer <vote token>` |

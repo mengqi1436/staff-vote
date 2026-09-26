@@ -15,7 +15,7 @@ import { AdminQuestionnaire } from './Questionnaire.js';
 import { AdminTicketTypes } from './TicketTypes.js';
 import { AdminTickets } from './Tickets.js';
 import { AdminResults } from './Results.js';
-import { DepartmentProgressTable, TicketTypeStatsTable } from './StatsTables.js';
+import { SessionStats } from './StatsTables.js';
 
 /**
  * 单页场次工作台（/admin/sessions/:id）。
@@ -90,6 +90,14 @@ export function SessionWorkspace() {
     );
   }
 
+  if (sessionId !== id) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center' }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
   const statusMeta = SESSION_STATUS_META[session.status];
 
   return (
@@ -159,12 +167,7 @@ export function SessionWorkspace() {
             {
               key: 'stats',
               label: '统计',
-              children: (
-                <>
-                  <TicketTypeStatsTable />
-                  <DepartmentProgressTable />
-                </>
-              ),
+              children: <SessionStats />,
             },
             { key: 'results', label: '结果导出', children: <AdminResults /> },
           ]}

@@ -148,16 +148,18 @@ async function seedTickets(cookie) {
     return { name: pair.slice(0, eq), value: pair.slice(eq + 1), domain: '127.0.0.1', path: '/' };
   });
 
+  // 单独管理页已并入场次工作台页签，这里只截列表与首个场次的工作台首屏。
+  const sessionList = await api('/admin/sessions', { cookie: rawCookie });
+  const firstSessionId = sessionList.body?.sessions?.[0]?.id;
+  const workspace = firstSessionId ? `/admin/sessions/${firstSessionId}` : '/admin/sessions';
+  if (!firstSessionId) console.log('[shot] 库里没有场次，工作台截图退回场次列表');
+
   const targets = [
     ['admin-login', '/admin/login'],
     ['admin-dashboard', '/admin'],
-    ['admin-ticket-types', '/admin/ticket-types'],
-    ['admin-tickets', '/admin/tickets'],
-    ['admin-departments', '/admin/departments'],
-    ['admin-employees', '/admin/employees'],
-    ['admin-criteria', '/admin/criteria'],
+    ['admin-sessions', '/admin/sessions'],
+    ['admin-workspace', workspace],
     ['admin-settings', '/admin/settings'],
-    ['admin-results', '/admin/results'],
     ['admin-print', '/admin/results/print'],
   ];
 
