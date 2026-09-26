@@ -20,7 +20,8 @@ createRoot(container).render(
         - colorPrimary #0066cc（深 Apple 蓝）：主色文字会落在白底与 Layout 浅灰底
           （#f5f5f7）上，浅一档的 #0071e3 在灰底只有约 4.3:1，#0066cc 两个底都在
           5:1 以上；antd 由主色派生的选中文字（Menu/Tabs itemSelectedColor 等）
-          因此整体达标，无需逐组件覆盖
+          因此整体达标。唯 Tabs 的 itemHoverColor 由 colorPrimaryHover 派生，是
+          落在灰底上的悬停文字，需在 components.Tabs 覆盖回 #0066cc
         - colorPrimaryHover #0071e3 / colorPrimaryActive #0055aa：实心主色按钮悬停
           时是「白字 + 主色底」，antd 派生的悬停底（#0066cc 色板第 5 档）配白字
           贴着 4.5:1 临界，显式取亮一档的旧 Apple 蓝（白字约 4.7:1）与深一档 active
@@ -54,6 +55,11 @@ createRoot(container).render(
         components: {
           Menu: {
             groupTitleColor: 'rgba(0, 0, 0, 0.65)',
+          },
+          Tabs: {
+            // 选中/按下文字默认即 colorPrimary / colorPrimaryActive（均已达标），
+            // 仅悬停文字默认取 colorPrimaryHover，在 Layout 灰底上只有约 4.3:1
+            itemHoverColor: '#0066cc',
           },
         },
       }}
