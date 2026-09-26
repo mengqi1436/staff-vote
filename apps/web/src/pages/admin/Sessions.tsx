@@ -43,7 +43,7 @@ export function AdminSessions() {
   const load = useCallback(() => adminApi.sessions.list(), []);
   const { data, error, loading, refresh } = usePolling(load, 0);
   const notify = useNotify();
-  const { setSessionId } = useAdminSession();
+  const { setSessionId, reload } = useAdminSession();
   const { can } = useAuth();
   const navigate = useNavigate();
   const canWrite = can('settings.write');
@@ -71,6 +71,7 @@ export function AdminSessions() {
       notify.success(`场次「${result.session.name}」已创建`);
       setCreateOpen(false);
       refresh();
+      reload();
     } catch (caught) {
       notify.error(describeError(caught, '创建场次失败，请重试'));
     } finally {
@@ -85,6 +86,7 @@ export function AdminSessions() {
       const result = await adminApi.sessions[action](row.id);
       notify.success(`场次「${row.name}」${SESSION_STATUS_META[result.session.status].text}`);
       refresh();
+      reload();
     } catch (caught) {
       // 409 INVALID_SESSION_TRANSITION 等错误统一走既有错误提示路径
       notify.error(describeError(caught, '操作失败，请重试'));
@@ -287,7 +289,10 @@ export function AdminSessions() {
         session={windowRow}
         open={windowRow !== null}
         onClose={() => setWindowRow(null)}
-        onSaved={() => refresh()}
+        onSaved={() => {
+          refresh();
+          reload();
+        }}
       />
     </>
   );
