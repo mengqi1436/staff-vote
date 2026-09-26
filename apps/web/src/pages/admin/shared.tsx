@@ -5,14 +5,14 @@
  *   - ErrorState：401 统一跳登录（会话过期时不让管理员逐页看「加载失败」）
  *   - StaleDataAlert：轮询失败时保留旧数据只提示
  *   - PageHeader：统一页头结构
- *   - NextStep：评议工作流的步骤串联
  *   - useNotify：统一 message 入口
  * 视觉全部用 antd 标准组件，不自造体系。
  * 上一轮的 LedgerSection / LedgerNotes / Figure 已随「年鉴」主题删除；
  * 口径说明直接用 Alert type="info" 或 Typography.Text type="secondary"。
+ * （NextStep 随管理页并入场次工作台页签而移除：页签之间不再需要跨页引导。）
  */
 import { App as AntApp, Alert, Button, Result, Skeleton, Space } from 'antd';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import type { ReactNode } from 'react';
 import { ApiError } from '../../lib/api.js';
 
@@ -116,20 +116,6 @@ export function PageHeader({
         ) : null}
       </div>
       {extra ? <Space wrap>{extra}</Space> : null}
-    </div>
-  );
-}
-
-/**
- * 评议工作流的「下一步」引导，放在页面底部。
- *
- * 后台页面按工作流分组（准备 → 发票 → 执行 → 收尾），这个链接把步骤串起来，
- * 让第一次组织评议的管理员不用自己想「接下来该去哪」。
- */
-export function NextStep({ to, children }: { to: string; children: ReactNode }) {
-  return (
-    <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid rgba(0, 0, 0, 0.06)' }}>
-      <Link to={to}>下一步：{children} →</Link>
     </div>
   );
 }

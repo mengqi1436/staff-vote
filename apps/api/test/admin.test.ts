@@ -1197,12 +1197,11 @@ describeDb('管理端接口', () => {
   // 设置
   // ---------------------------------------------------------------------------
 
-  it('设置 GET 返回四个键，PUT 更新并留痕', async () => {
+  it('设置 GET 只返回 system.title，PUT 更新并留痕', async () => {
     const initial = await agent.get('/api/admin/settings');
     expect(initial.status).toBe(200);
-    for (const key of ['vote.open', 'vote.startAt', 'vote.endAt', 'system.title']) {
-      expect(typeof initial.body[key]).toBe('string');
-    }
+    // 投票开关与时间窗已下沉到场次，设置键集合缩减为只剩标题
+    expect(initial.body).toEqual({ 'system.title': expect.any(String) });
 
     const title = `${TAG}标题-${nextCode()}`;
     const updated = await agent.put('/api/admin/settings').send({ 'system.title': title });
@@ -1215,37 +1214,14 @@ describeDb('管理端接口', () => {
       1,
     );
 
-    // 开关与起止时间：写完立即回读，随后复原，避免影响同库的其他用例
-    const before = await agent.get('/api/admin/settings');
-    try {
-      const opened = await agent.put('/api/admin/settings').send({ 'vote.open': 'true' });
-      expect(opened.body['vote.open']).toBe('true');
-      expect((await agent.get('/api/admin/settings')).body['vote.open']).toBe('true');
-
-      const cleared = await agent
-        .put('/api/admin/settings')
-        .send({ 'vote.startAt': '', 'vote.endAt': '' });
-      expect(cleared.body).toMatchObject({ 'vote.startAt': '', 'vote.endAt': '' });
-      expect((await agent.get('/api/admin/settings')).body['vote.endAt']).toBe('');
-    } finally {
-      await agent.put('/api/admin/settings').send({
-        'vote.open': before.body['vote.open'],
-        'vote.startAt': before.body['vote.startAt'],
-        'vote.endAt': before.body['vote.endAt'],
-      });
-    }
-
-    // 非法值一律 400，且不落库
-    expect((await agent.put('/api/admin/settings').send({ 'vote.open': 'yes' })).status).toBe(400);
-    expect((await agent.put('/api/admin/settings').send({ 'vote.startAt': '昨天' })).status).toBe(400);
+    // 非法值 400，且不落库
     expect((await agent.put('/api/admin/settings').send({ 'system.title': '' })).status).toBe(400);
 
-    const badOrder = await agent.put('/api/admin/settings').send({
-      'vote.startAt': '2026-09-20T00:00:00+08:00',
-      'vote.endAt': '2026-09-19T00:00:00+08:00',
-    });
-    expect(badOrder.status).toBe(400);
-    expect(badOrder.body.error.code).toBe('VOTE_WINDOW_INVALID');
+    // 已退役的键被校验层剥离：请求成功但不产生任何键
+    const retired = await agent.put('/api/admin/settings').send({ 'vote.open': 'true' });
+    expect(retired.status).toBe(200);
+    expect(retired.body).toEqual({ 'system.title': expect.any(String) });
+    expect(await prisma.setting.count({ where: { key: 'vote.open' } })).toBe(0);
   });
 
   // ---------------------------------------------------------------------------
@@ -1316,15 +1292,19 @@ describeDb('管理端接口', () => {
       (after.body.departments as Array<{ id: string }>).find((item) => item.id === department.id),
     ).toMatchObject({ employeeCount: 1, sheetCount: 1 });
 
-    // 投票窗口：message 必须与 open 一致，且时间可解析
+    // 投票窗口（本场次数据）：message 必须与 open 一致，时间可解析，status 为场次状态
     const voteWindow = res.body.voteWindow as {
       open: boolean;
       message: string;
-      startAt: string | null;
+      opensAt: string | null;
+      closesAt: string | null;
+      status: string;
     };
     expect(typeof voteWindow.open).toBe('boolean');
     expect(voteWindow.message).toBe(voteWindow.open ? '' : '当前未开放投票');
-    if (voteWindow.startAt) expect(Number.isNaN(Date.parse(voteWindow.startAt))).toBe(false);
+    if (voteWindow.opensAt) expect(Number.isNaN(Date.parse(voteWindow.opensAt))).toBe(false);
+    if (voteWindow.closesAt) expect(Number.isNaN(Date.parse(voteWindow.closesAt))).toBe(false);
+    expect(['draft', 'voting', 'paused', 'ended']).toContain(voteWindow.status);
     expect(Number.isNaN(Date.parse(res.body.generatedAt as string))).toBe(false);
   });
 

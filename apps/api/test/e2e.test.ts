@@ -141,9 +141,9 @@ describe('端到端：职工素质评议完整流程', () => {
   it('1b. 创建场次并启动（draft → voting），非法流转被拒', async () => {
     const started = await admin.post(`/api/admin/sessions/${sessionId}/start`);
     expect(started.status).toBe(200);
-    expect(started.body.status).toBe('voting');
-    expect(started.body.startAt).toBeTruthy();
-    expect(started.body.endedAt).toBeNull();
+    expect(started.body.session.status).toBe('voting');
+    expect(started.body.session.startAt).toBeTruthy();
+    expect(started.body.session.endedAt).toBeNull();
 
     // voting → start 不是合法流转（已是 voting）
     const again = await admin.post(`/api/admin/sessions/${sessionId}/start`);
@@ -230,8 +230,10 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(bad.status).toBeLessThan(500);
   });
 
-  it('6. 非开放时段：投票状态为关闭，登录被拒', async () => {
-    await admin.put('/api/admin/settings').send({ 'vote.open': 'false' });
+  it('6. 非开放时段：暂停场次后投票状态为关闭，登录被拒', async () => {
+    const paused = await admin.post(`/api/admin/sessions/${sessionId}/pause`);
+    expect(paused.status).toBe(200);
+    expect(paused.body.session.status).toBe('paused');
 
     const status = await request(app).get('/api/vote/status');
     expect(status.status).toBe(200);
@@ -250,8 +252,10 @@ describe('端到端：职工素质评议完整流程', () => {
   });
 
   it('7. 开放投票后批量发码', async () => {
-    const res = await admin.put('/api/admin/settings').send({ 'vote.open': 'true' });
+    // paused → start 恢复 voting：开放窗口按场次控制，不再有全局开关
+    const res = await admin.post(`/api/admin/sessions/${sessionId}/start`);
     expect(res.status).toBe(200);
+    expect(res.body.session.status).toBe('voting');
 
     const status = await request(app).get('/api/vote/status');
     expect(status.body.open).toBe(true);
@@ -504,14 +508,14 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(codes && codes.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('17. 关闭投票后状态回到未开放', async () => {
-    await admin.put('/api/admin/settings').send({ 'vote.open': 'false' });
+  it('17. 暂停场次后状态回到未开放', async () => {
+    await admin.post(`/api/admin/sessions/${sessionId}/pause`);
     const status = await request(app).get('/api/vote/status');
     expect(status.body.open).toBe(false);
     expect(status.body.message).toBe('当前未开放投票');
 
-    // 恢复全局开关：多场次流程用例需要全局窗口开放。
-    await admin.put('/api/admin/settings').send({ 'vote.open': 'true' });
+    // 恢复 voting：多场次流程用例还要继续发码登录。
+    await admin.post(`/api/admin/sessions/${sessionId}/start`);
   });
 
   it('18. 多场次流程：建场 → start → 发码（留痕）→ 完整提交 → pause 拒登录 → end 终态', async () => {
@@ -543,7 +547,7 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '王五' });
     expect(empB.status).toBe(200);
 
-    // 票种 code 全局唯一（主场次已占 A/B/C），第二场次用独立编码；
+    // 票种 code 场次内唯一（同码可用于不同场次）；第二场次用独立编码 D 以区分语义；
     // 权重校验按场次内启用票种合计，本场次从 0 起算，100 合法。
     const typeBCreated = await admin
       .post('/api/admin/ticket-types')
@@ -565,7 +569,7 @@ describe('端到端：职工素质评议完整流程', () => {
     });
     expect(generatedTicket.assignee?.name).toBe('王五');
 
-    // 登录：全局开 + 场次 voting
+    // 登录：场次 B voting 且窗口不限（主场次状态与它无关）
     const loginB = await request(app).post('/api/vote/session').send({ code: gen.body.codes[0] });
     expect(loginB.status).toBe(200);
     expect(loginB.body.session.id).toBe(sessionBId);
@@ -598,7 +602,7 @@ describe('端到端：职工素质评议完整流程', () => {
     // pause 后：新登录被拒（用一张未使用的码，避免"码已核销"抢在场次校验前面）
     const paused = await admin.post(`/api/admin/sessions/${sessionBId}/pause`);
     expect(paused.status).toBe(200);
-    expect(paused.body.status).toBe('paused');
+    expect(paused.body.session.status).toBe('paused');
     const deniedLogin = await request(app)
       .post('/api/vote/session')
       .send({ code: gen.body.codes[1] });
@@ -608,8 +612,8 @@ describe('端到端：职工素质评议完整流程', () => {
     // end：paused → ended；ended 终态，再 start / pause 都 409
     const ended = await admin.post(`/api/admin/sessions/${sessionBId}/end`);
     expect(ended.status).toBe(200);
-    expect(ended.body.status).toBe('ended');
-    expect(ended.body.endedAt).toBeTruthy();
+    expect(ended.body.session.status).toBe('ended');
+    expect(ended.body.session.endedAt).toBeTruthy();
     const restart = await admin.post(`/api/admin/sessions/${sessionBId}/start`);
     expect(restart.status).toBe(409);
     expect(restart.body.error.code).toBe('INVALID_SESSION_TRANSITION');

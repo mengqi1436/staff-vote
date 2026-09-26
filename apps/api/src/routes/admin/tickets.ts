@@ -57,8 +57,10 @@ const GenerateSchema = z.object({
     .optional(),
 });
 
-/** 一键作废的范围：不带 body 或不带 ticketTypeId 都是「全部票种」。 */
+/** 一键作废的范围：场次必传（误作废历史场次的有效票无法挽回）；
+ *  不带 ticketTypeId 即该场次「全部票种」。 */
 const RevokeBulkSchema = z.object({
+  sessionId: z.string().min(1, '缺少 sessionId'),
   ticketTypeId: z.string().min(1).optional(),
 });
 
@@ -105,13 +107,13 @@ ticketsRouter.post('/generate', requirePermission('tickets.generate'), async (re
 });
 
 /**
- * 一键作废：把当前范围内的全部未使用码作废。
+ * 一键作废：把该场次范围内的全部未使用码作废。
  *
  * 注册在 `/:id/revoke` 之前只是可读性上的顺序（两者路径段数不同，不会互相匹配）。
  */
 ticketsRouter.post('/revoke-bulk', requirePermission('tickets.revoke'), async (req, res) => {
-  const { ticketTypeId } = RevokeBulkSchema.parse(req.body ?? {});
-  res.json(await revokeTicketsBulk({ ticketTypeId }, operatorOf(req)));
+  const { sessionId, ticketTypeId } = RevokeBulkSchema.parse(req.body ?? {});
+  res.json(await revokeTicketsBulk({ sessionId, ticketTypeId }, operatorOf(req)));
 });
 
 ticketsRouter.post('/:id/revoke', requirePermission('tickets.revoke'), async (req, res) => {

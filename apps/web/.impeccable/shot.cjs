@@ -137,8 +137,8 @@ async function seedTickets(cookie) {
   await seedDemo(rawCookie);
   await seedTickets(rawCookie);
 
-  // 3) 让投票入口处于"已开放"，好截到可登录态
-  await api('/admin/settings', { method: 'PUT', cookie: rawCookie, body: { 'vote.open': 'true' } });
+  // 3) 投票入口开放与否不再有全局开关：由场次状态（voting）与该场次开放时间窗决定。
+  //    截图反映当前库里的实际状态；要让入口开放，先在场次工作台把场次「开始投票」。
 
   const browser = await chromium.launch();
 
@@ -193,8 +193,8 @@ async function seedTickets(cookie) {
     await ctx.close();
   }
 
-  // 未开放态：单独截一张，因为这是需求里点名要的文案
-  await api('/admin/settings', { method: 'PUT', cookie: rawCookie, body: { 'vote.open': 'false' } });
+  // 未开放态：单独截一张，因为这是需求里点名要的文案。
+  // 截到开放还是未开放取决于库中场次状态（无全局开关可关）。
   const closedCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const closedPage = await closedCtx.newPage();
   await closedPage.goto(`${WEB}/`, { waitUntil: 'networkidle' });

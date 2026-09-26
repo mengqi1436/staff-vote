@@ -37,7 +37,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
 const { cleanupRbac, createAdmin, createRole } = await import('./rbac-fixtures.js');
-const { ensureDefaultSession } = await import('./session-fixtures.js');
+const { DEFAULT_SESSION_ID, ensureDefaultSession } = await import('./session-fixtures.js');
 
 /** 没有可用测试库就整组跳过。 */
 const describeDb = suiteEnabled ? describe : describe.skip;
@@ -71,15 +71,17 @@ interface MadeTickets {
  *
  * 票种一律 `weightPercent: 0` 且不启用：权重合计是同库其他用例的全局约束，
  * 这里不参与接口层的权重校验，夹具也不该影响别人。
+ * 不传 sessionId 时归属默认场次。
  */
 async function makeTickets(
   label: string,
   plan: { unused?: number; used?: number; revoked?: number },
+  sessionId?: string,
 ): Promise<MadeTickets> {
   const code = `${TAG}${label}${nextSeq()}`;
   const type = await prisma.ticketType.create({
     data: {
-      sessionId: await ensureDefaultSession(prisma),
+      sessionId: sessionId ?? (await ensureDefaultSession(prisma)),
       code,
       name: `${TAG}票种-${label}`,
       weightPercent: 0,
@@ -113,7 +115,7 @@ async function makeTickets(
   const batch = await prisma.ticketBatch.create({
     data: {
       ticketTypeId: type.id,
-      sessionId: await ensureDefaultSession(prisma),
+      sessionId: sessionId ?? (await ensureDefaultSession(prisma)),
       count: rows.length,
       operator: TAG,
     },
@@ -212,7 +214,7 @@ describeDb('一键作废随机码', () => {
 
     const res = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: type.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: type.id });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ revoked: 2 });
 
@@ -229,7 +231,7 @@ describeDb('一键作废随机码', () => {
 
     const res = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: type.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: type.id });
     expect(res.body).toEqual({ revoked: 1 });
     expect(await countsOf(type.id)).toEqual({ unused: 0, used: 0, revoked: 2 });
   });
@@ -240,7 +242,7 @@ describeDb('一键作废随机码', () => {
 
     const res = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: typeA.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: typeA.id });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ revoked: 2 });
 
@@ -253,13 +255,13 @@ describeDb('一键作废随机码', () => {
 
     const first = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: type.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: type.id });
     expect(first.status).toBe(200);
     expect(first.body).toEqual({ revoked: 3 });
 
     const second = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: type.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: type.id });
     expect(second.status).toBe(200);
     expect(second.body).toEqual({ revoked: 0 });
 
@@ -272,22 +274,24 @@ describeDb('一键作废随机码', () => {
 
     await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: typeA.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: typeA.id });
     await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: typeB.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: typeB.id });
 
     const audits = await prisma.auditLog.findMany({ where: { action: REVOKE_ACTION } });
     const details = audits.map((row) => row.detail);
 
     expect(details).toContainEqual({
       scope: 'ticketType',
+      sessionId: DEFAULT_SESSION_ID,
       ticketTypeId: typeA.id,
       count: 1,
       operator: `${TAG}admin`,
     });
     expect(details).toContainEqual({
       scope: 'ticketType',
+      sessionId: DEFAULT_SESSION_ID,
       ticketTypeId: typeB.id,
       count: 2,
       operator: `${TAG}admin`,
@@ -296,29 +300,43 @@ describeDb('一键作废随机码', () => {
     expect(JSON.stringify(details)).not.toContain(`${TAG}审计B`);
   });
 
-  it('不传 ticketTypeId 即全部票种：库内所有未使用码一起作废', async () => {
+  it('不传 ticketTypeId 即该场次全部票种；绝不跨场次作废', async () => {
     const typeA = await makeTickets('全部A', { unused: 1 });
     const typeB = await makeTickets('全部B', { unused: 2 });
+    // 另一场次的票种与票：作废范围限定在场次，绝不能被连带作废
+    const otherSessionId = (
+      await prisma.voteSession.create({ data: { name: `${TAG}场次-他场${nextSeq()}` } })
+    ).id;
+    const typeOther = await makeTickets('他场', { unused: 2 }, otherSessionId);
 
-    // 全局范围会连带作废同库其他测试文件的夹具（它们可能正处在自己的用例中间）。
-    // 与 admin.test.ts「改完设置再复原」同一做法：先记下不属于本文件的未使用码，用完立刻放回。
+    // 默认场次范围会连带作废同库其他测试文件挂在默认场次下的夹具
+    // （它们可能正处在自己的用例中间）。沿用原「全局复原」做法：先记下，用完立刻放回。
     const foreign = await prisma.ticket.findMany({
-      where: { status: 'unused', ticketTypeId: { notIn: [typeA.id, typeB.id] } },
+      where: {
+        status: 'unused',
+        sessionId: DEFAULT_SESSION_ID,
+        ticketTypeId: { notIn: [typeA.id, typeB.id] },
+      },
       select: { id: true },
     });
 
     try {
-      const res = await operatorAgent.post('/api/admin/tickets/revoke-bulk').send({});
+      const res = await operatorAgent
+        .post('/api/admin/tickets/revoke-bulk')
+        .send({ sessionId: DEFAULT_SESSION_ID });
       expect(res.status).toBe(200);
-      // 本文件之外若恰有未使用码，也会被这条全局语句一并作废，因此只做下界断言
+      // 默认场次内 3 张自己的码 + 其他文件恰有的未使用码，只做下界断言
       expect(res.body.revoked).toBeGreaterThanOrEqual(3);
 
       expect(await countsOf(typeA.id)).toEqual({ unused: 0, used: 0, revoked: 1 });
       expect(await countsOf(typeB.id)).toEqual({ unused: 0, used: 0, revoked: 2 });
+      // 他场次的码原样不动：这是「范围限定在场次」的硬断言
+      expect(await countsOf(typeOther.id)).toEqual({ unused: 2, used: 0, revoked: 0 });
 
       const audits = await prisma.auditLog.findMany({ where: { action: REVOKE_ACTION } });
       expect(audits.map((row) => row.detail)).toContainEqual({
-        scope: 'all',
+        scope: 'session',
+        sessionId: DEFAULT_SESSION_ID,
         ticketTypeId: null,
         count: res.body.revoked,
         operator: `${TAG}admin`,
@@ -331,6 +349,21 @@ describeDb('一键作废随机码', () => {
         });
       }
     }
+
+    // 清理他场次的夹具（clearTicketFixtures 只按票种 code 前缀清，这里补场次）
+    await prisma.ticket.deleteMany({ where: { ticketTypeId: typeOther.id } });
+    await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: typeOther.id } });
+    await prisma.ticketType.deleteMany({ where: { id: typeOther.id } });
+    await prisma.voteSession.deleteMany({ where: { id: otherSessionId } });
+  });
+
+  it('缺少 sessionId → 400 VALIDATION_FAILED，一张码都没被作废', async () => {
+    const type = await makeTickets('缺场次', { unused: 1 });
+
+    const res = await operatorAgent.post('/api/admin/tickets/revoke-bulk').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_FAILED');
+    expect(await countsOf(type.id)).toEqual({ unused: 1, used: 0, revoked: 0 });
   });
 
   it('无 tickets.revoke 权限：403 PERMISSION_DENIED 且一张码都没被作废', async () => {
@@ -339,7 +372,7 @@ describeDb('一键作废随机码', () => {
 
     const res = await viewerAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: type.id });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: type.id });
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('PERMISSION_DENIED');
@@ -388,13 +421,13 @@ describeDb('一键作废随机码', () => {
   it('ticketTypeId 类型非法返回 400，不存在的票种按 0 处理', async () => {
     const invalid = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: 123 });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: 123 });
     expect(invalid.status).toBe(400);
     expect(invalid.body.error.code).toBe('VALIDATION_FAILED');
 
     const missing = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
-      .send({ ticketTypeId: 'not-exist-ticket-type' });
+      .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: 'not-exist-ticket-type' });
     expect(missing.status).toBe(200);
     expect(missing.body).toEqual({ revoked: 0 });
   });

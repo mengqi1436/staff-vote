@@ -94,8 +94,9 @@ export function AdminPrintSheet() {
         borderBottom: '1px solid #f0f0f0',
       }}
     >
-      <Link to={departmentId ? `/admin/results?departmentId=${departmentId}` : '/admin/results'}>
-        <Button icon={<ArrowLeftOutlined />}>返回结果页</Button>
+      {/* 结果与导出已并入场次工作台，本页无场次上下文，引导回场次列表进入工作台 */}
+      <Link to="/admin/sessions">
+        <Button icon={<ArrowLeftOutlined />}>返回场次列表</Button>
       </Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <span style={{ fontSize: 12, color: 'rgba(0, 0, 0, 0.45)' }}>
@@ -116,10 +117,10 @@ export function AdminPrintSheet() {
         <div style={{ maxWidth: 720, margin: '0 auto', padding: 32 }}>
           <Card title="缺少部门参数">
             <p style={{ margin: '0 0 16px' }}>
-              正式打分表按部门生成：请先在「结果与导出」页选定部门，再点「打印打分表」进入本页。
+              正式打分表按部门生成：请先进入场次工作台的「结果导出」页签选定部门，再点「打印打分表」进入本页。
             </p>
-            <Link to="/admin/results">
-              <Button type="primary">前往结果与导出</Button>
+            <Link to="/admin/sessions">
+              <Button type="primary">前往场次列表</Button>
             </Link>
           </Card>
         </div>

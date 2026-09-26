@@ -1,6 +1,6 @@
 # 职工素质评议系统（staff-vote）
 
-职工素质项点打分系统。职工凭后台发放的**票种随机码**匿名登录投票入口，选择部门后在一张与 `docs/参考表.xlsx` 同形的表单上按素质项点打分；管理员在后台配置打分表结构（问卷类型、表头文案、被评列、项点与描述）、发放随机码、控制投票开放时间，并实时查看发码与投票进度、导出结果。
+职工素质项点打分系统。职工凭后台发放的**票种随机码**匿名登录投票入口，选择部门后在一张与 `docs/参考表.xlsx` 同形的表单上按素质项点打分；管理员在后台配置打分表结构（问卷类型、表头文案、被评列、项点与描述）、发放随机码、按场次控制开放时间窗，并实时查看发码与投票进度、导出结果。
 
 - **匿名性**：评分表与随机码物理隔断，无法从任何一张评分反推投票人
 - **动态表单**：行 = 评价项点（含描述），列 = 被评列（主任、党支部书记、车间得分…），全部由后台配置
@@ -59,7 +59,7 @@ staff-vote/
 │  └─ test/                  单元 + 接口 + 端到端测试
 ├─ apps/web/                 前端
 │  ├─ src/pages/vote/        投票入口三页 + 参考表同形打分表
-│  ├─ src/pages/admin/       后台十一页（含「问卷配置」）
+│  ├─ src/pages/admin/       后台页面（场次列表 + 单页场次工作台等）
 │  └─ src/lib/api.ts         接口客户端（契约冻结）
 ├─ deploy/                   nginx.conf · systemd 单元 · 部署手册
 ├─ sql/                      建库脚本与 SQL 说明
@@ -76,6 +76,15 @@ staff-vote/
   PostgreSQL 17 未内置 `uuidv7()`（PG 18 才引入），因此 UUID 由 Prisma 客户端生成，**数据库列不设 DEFAULT**，以保证 schema 与库零漂移。
 - 时间列一律 `timestamptz`。Prisma 默认映射成不带时区的 `timestamp(3)`，本项目显式用 `@db.Timestamptz(3)` 覆盖 —— 不带时区的时间在跨时区与夏令时场景下有歧义。
 - 表名与列名统一 snake_case，让 DBA 直接阅读迁移 SQL 无认知负担。
+- `vote_sessions` 每个场次自带 `opens_at` / `closes_at`（`timestamptz(3)`，可空：`opens_at` 空 = 不限开始，`closes_at` 空 = 长期开放），开放时间窗从全局设置下沉到场次。
+- `ticket_types` 的唯一约束是 `(session_id, code)`（索引名 `ticket_types_session_id_code_key`）：票种编码在**场次内**唯一，跨场次可重用；随机码 `tickets.code` 仍**全局唯一**。
+- `settings` 只保留 `system.title`；原全局投票总开关与全局时间窗（`vote.open` / `vote.startAt` / `vote.endAt`）已删除。
+
+### 投票开放控制
+
+- 开放**只由场次决定**：场次状态机处于 `voting`，且当前时间不早于本场次 `opens_at`（若设）、不晚于本场次 `closes_at`（若设）。
+- 全局投票总开关与全局时间窗（settings 的 `vote.open` / `vote.startAt` / `vote.endAt`）已彻底删除——开放 / 暂停 / 结束由场次状态机控制，时间窗由场次字段控制，不存在任何 settings 层面的开关。
+- 判定逻辑集中在后端 `evaluateVoteWindow(session, now?)`（`apps/api/src/lib/settings.ts`，返回 `{ open, message, opensAt, closesAt }`），前端不重复实现、只消费后端结果；不带 `sessionId` 的状态查询按「存在任一开放中的场次」判定。
 
 ### 口令与加密
 

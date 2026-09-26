@@ -102,8 +102,10 @@ export interface ImportFeedback {
 export interface VoteStatus {
   open: boolean;
   message: string;
-  startAt: string | null;
-  endAt: string | null;
+  /** 场次开放窗口起点；null = 不限开始 */
+  opensAt: string | null;
+  /** 场次开放窗口终点；null = 长期开放 */
+  closesAt: string | null;
   /** 所在场次（多场评议）；旧后端不返回该字段，恒为 undefined，调用方必须容错 */
   session?: { id: string; name: string; status: string };
 }
@@ -113,6 +115,10 @@ export interface AdminSessionDto {
   id: string;
   name: string;
   status: 'draft' | 'voting' | 'paused' | 'ended';
+  /** 开放窗口起点；null = 不限开始（开放与否还取决于 status 与 closesAt） */
+  opensAt: string | null;
+  /** 开放窗口终点；null = 长期开放 */
+  closesAt: string | null;
   startAt: string | null;
   endedAt: string | null;
   createdAt: string;
@@ -284,7 +290,15 @@ export interface StatsOverview {
   }>;
   totals: { issued: number; used: number; unused: number; revoked: number; sheets: number };
   departments: Array<{ id: string; name: string; enabled: boolean; employeeCount: number; sheetCount: number }>;
-  voteWindow: VoteStatus;
+  /** 本场次的投票开放判定（场次 status + 场次窗口，不再读全局设置） */
+  voteWindow: {
+    open: boolean;
+    message: string;
+    opensAt: string | null;
+    closesAt: string | null;
+    /** 判定所针对的场次状态（draft / voting / paused / ended） */
+    status: string;
+  };
   generatedAt: string;
 }
 
@@ -316,10 +330,8 @@ export interface ResultsDto {
   generatedAt: string;
 }
 
+/** 系统设置。窗口下沉到场次后，全局设置只剩系统标题。 */
 export interface SettingsDto {
-  'vote.open': string;
-  'vote.startAt': string;
-  'vote.endAt': string;
   'system.title': string;
 }
 
@@ -415,6 +427,16 @@ export const adminApi = {
     list: () => request<{ sessions: AdminSessionDto[] }>('/admin/sessions'),
     create: (name: string) =>
       request<{ session: AdminSessionDto }>('/admin/sessions', { method: 'POST', body: { name } }),
+    /**
+     * 更新场次名称与开放窗口。
+     *
+     * opensAt / closesAt 传 ISO 字符串或 null：null = 清空该侧限制，
+     * 缺省 = 不修改。两者均非空时后端校验 opensAt < closesAt，违反返回 400。
+     */
+    update: (
+      id: string,
+      body: { name?: string; opensAt?: string | null; closesAt?: string | null },
+    ) => request<{ session: AdminSessionDto }>(`/admin/sessions/${id}`, { method: 'PATCH', body }),
     start: (id: string) =>
       request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/start`, { method: 'POST' }),
     pause: (id: string) =>
@@ -495,16 +517,16 @@ export const adminApi = {
       }),
     revoke: (id: string) => request<TicketDto>(`/admin/tickets/${id}/revoke`, { method: 'POST' }),
     /**
-     * 一键作废：作废当前筛选下全部「未使用」码（used / revoked 不受影响）。
+     * 一键作废：作废该场次下当前筛选的全部「未使用」码（used / revoked 不受影响）。
      *
+     * @param sessionId 必传：作废范围必须限定在单个场次
      * @param ticketTypeId 传则只作废该票种；不传即全部票种
-     * @param sessionId 场次过滤；多场时后端要求必传
      * @returns 实际作废的数量
      */
-    revokeBulk: (ticketTypeId?: string, sessionId?: string | null) =>
+    revokeBulk: (sessionId: string, ticketTypeId?: string) =>
       request<{ revoked: number }>('/admin/tickets/revoke-bulk', {
         method: 'POST',
-        body: sessionId ? { ticketTypeId, sessionId } : { ticketTypeId },
+        body: ticketTypeId ? { ticketTypeId, sessionId } : { sessionId },
       }),
     exportUrl: (params: { status?: string; ticketTypeId?: string; sessionId?: string | null } = {}) => {
       const query = new URLSearchParams();

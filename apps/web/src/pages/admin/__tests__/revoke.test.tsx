@@ -52,6 +52,9 @@ const UNUSED_CODE = 'ABCD2345';
 /** 未使用码总数：既决定一键作废按钮的 disabled，也决定确认框里的 N。 */
 let unusedTotal = 3;
 
+/**
+ * 渲染页面并注入权限集合与当前场次 s1（一键作废的范围必须限定在场次内）。
+ */
 function renderPage(permissions?: string[]) {
   return renderWithAuth(
     <ConfigProvider>
@@ -62,6 +65,7 @@ function renderPage(permissions?: string[]) {
       </AntApp>
     </ConfigProvider>,
     permissions,
+    's1',
   );
 }
 
@@ -151,6 +155,7 @@ describe('一键作废未使用码', () => {
       status: 'unused',
       ticketTypeId: undefined,
       pageSize: 1,
+      sessionId: 's1',
     });
     // 只是确认框，点「确认作废」之前不能写库
     expect(revokeBulkMock).not.toHaveBeenCalled();
@@ -179,8 +184,8 @@ describe('一键作废未使用码', () => {
     await userEvent.click(confirm);
 
     expect(await screen.findByText('已作废 2 张')).toBeInTheDocument();
-    // 多场评议后作废请求带上当前场次过滤（未选场次时为 undefined）
-    expect(revokeBulkMock).toHaveBeenCalledWith(undefined, undefined);
+    // 作废范围限定在当前场次（sessionId 必传），票种筛选未选时为 undefined
+    expect(revokeBulkMock).toHaveBeenCalledWith('s1', undefined);
     // 作废后必须重新拉列表与未使用数量，界面不能停留在旧数据
     await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(listCallsBefore));
   }, 15_000);

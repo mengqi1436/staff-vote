@@ -25,7 +25,6 @@ import { describeError } from './lib.js';
 import {
   ErrorState,
   LoadingState,
-  NextStep,
   PageHeader,
   StaleDataAlert,
   useNotify,
@@ -523,7 +522,6 @@ export function AdminCriteria() {
         </Form>
       </Modal>
 
-      <NextStep to="/admin/ticket-types">票种权重</NextStep>
     </>
   );
 }

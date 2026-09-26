@@ -85,15 +85,22 @@ export const voteRouter: Router = Router();
 
 /** 投票开放状态。投票页据此渲染「当前未开放投票」遮罩。
  *
- * `?sessionId=` 可选：带了就按该场次判定（open 还需场次为 voting）；
- * 未带且库中恰有一场时自动取那一场，零场或多场时只按全局窗口判定。
- * 响应的 session 字段回传参与判定的场次（含 status），无则为 null。
+ * `?sessionId=` 可选：带了就按该场次精确判定（status + 场次时间窗）；
+ * 未带且库中恰有一场时自动取那一场，零场或多场时聚合判定
+ * （任一场次 voting 且在窗口内即开放）。
+ * 响应的 session 字段回传参与判定的场次（无则为 null），不含时间窗字段。
  */
 voteRouter.get('/status', async (req, res) => {
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
   const session = await resolveStatusSession(sessionId || undefined);
   const window = await getVoteStatus(session);
-  res.json({ ...window, session });
+  // session 只回传三字段：时间窗已通过 window.opensAt/closesAt 对外，且不破坏既有形状。
+  res.json({
+    ...window,
+    session: session
+      ? { id: session.id, name: session.name, status: session.status }
+      : null,
+  });
 });
 
 /** 凭随机码换取投票令牌。 */

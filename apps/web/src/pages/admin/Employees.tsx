@@ -26,7 +26,6 @@ import { EMPTY_TEXT, describeError } from './lib.js';
 import {
   ErrorState,
   LoadingState,
-  NextStep,
   PageHeader,
   StaleDataAlert,
   useNotify,
@@ -475,7 +474,6 @@ export function AdminEmployees() {
         </Form>
       </Modal>
 
-      <NextStep to="/admin/criteria">评分项点</NextStep>
     </>
   );
 }

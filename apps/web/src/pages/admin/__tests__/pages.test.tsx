@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -85,16 +85,14 @@ vi.mock('../../../lib/api.js', async () => {
     voteWindow: {
       open: true,
       message: '投票开放中',
-      startAt: '2026-09-19T00:00:00.000Z',
-      endAt: null,
+      opensAt: '2026-09-19T00:00:00.000Z',
+      closesAt: null,
+      status: 'voting',
     },
     generatedAt: '2026-09-19T02:00:00.000Z',
   };
 
   const settings = {
-    'vote.open': 'true',
-    'vote.startAt': '2026-09-19T00:00:00.000Z',
-    'vote.endAt': '',
     'system.title': '某某单位职工素质评议',
   };
 
@@ -103,6 +101,8 @@ vi.mock('../../../lib/api.js', async () => {
       id: 's1',
       name: '内设机构',
       status: 'voting' as const,
+      opensAt: null,
+      closesAt: null,
       startAt: '2026-09-19T00:00:00.000Z',
       endedAt: null,
       createdAt: '2026-09-19T00:00:00.000Z',
@@ -159,6 +159,9 @@ vi.mock('../../../lib/api.js', async () => {
         list: vi.fn(async () => ({ sessions })),
         create: vi.fn(async (name: string) => ({
           session: { ...sessions[0], id: 's2', name, status: 'draft' as const, startAt: null, endedAt: null },
+        })),
+        update: vi.fn(async (id: string, body: Record<string, unknown>) => ({
+          session: { ...sessions[0], id, ...body },
         })),
         start: vi.fn(async () => ({ session: { ...sessions[0], status: 'voting' as const } })),
         pause: vi.fn(async () => ({ session: { ...sessions[0], status: 'paused' as const } })),
@@ -271,7 +274,6 @@ vi.mock('../../../lib/api.js', async () => {
 
 const { AdminLogin } = await import('../Login.js');
 const { AdminLayout } = await import('../AdminLayout.js');
-const { AdminDashboard } = await import('../Dashboard.js');
 const { AdminTicketTypes } = await import('../TicketTypes.js');
 const { AdminTickets } = await import('../Tickets.js');
 const { AdminDepartments } = await import('../Departments.js');
@@ -302,14 +304,14 @@ describe('后台页面渲染', () => {
     expect(screen.getByRole('button', { name: /登\s*录/ })).toBeInTheDocument();
   });
 
-  it('后台外壳渲染工作流分组导航与当前管理员', async () => {
+  it('后台外壳渲染三项目导航与当前管理员，工作台路由隐藏场次选择器', async () => {
     renderWithAuth(
       <ConfigProvider>
         <AntApp>
-          <MemoryRouter initialEntries={['/admin']}>
+          <MemoryRouter initialEntries={['/admin/sessions']}>
             <Routes>
               <Route path="/admin" element={<AdminLayout />}>
-                <Route index element={<div>概览占位</div>} />
+                <Route path="sessions" element={<div>场次列表占位</div>} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -317,32 +319,36 @@ describe('后台页面渲染', () => {
       </ConfigProvider>,
     );
 
-    expect(await screen.findByText('票种权重')).toBeInTheDocument();
-    // 导航按评议工作流分组：场次 → 准备 → 发票 → 执行 → 收尾
-    expect(await screen.findByText('场次管理')).toBeInTheDocument();
-    expect(await screen.findByText('评议准备')).toBeInTheDocument();
-    expect(screen.getByText('发票与票种')).toBeInTheDocument();
-    expect(screen.getByText('评议执行')).toBeInTheDocument();
-    expect(screen.getByText('评议收尾')).toBeInTheDocument();
+    // 菜单重组后只剩三项；顶栏标题与菜单文案相同，用计数断言避免重复匹配
+    expect((await screen.findAllByText('场次管理')).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('系统设置')).toBeInTheDocument();
+    expect(screen.getByText('账号与权限')).toBeInTheDocument();
+    // 旧的工作流分组导航不再存在
+    expect(screen.queryByText('评议准备')).not.toBeInTheDocument();
+    // 顶栏当前页标题与管理员
     expect(await screen.findByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /退出登录/ })).toBeInTheDocument();
+    // 非工作台路由显示场次选择器
+    expect(screen.getByRole('combobox', { name: '当前场次' })).toBeInTheDocument();
   });
 
-  it('概览页渲染流程进度中枢与票况数据', async () => {
-    renderPage(<AdminDashboard />);
+  it('场次工作台路由：顶栏标题为工作台且隐藏场次选择器', async () => {
+    renderWithAuth(
+      <ConfigProvider>
+        <AntApp>
+          <MemoryRouter initialEntries={['/admin/sessions/s1']}>
+            <Routes>
+              <Route path="/admin" element={<AdminLayout />}>
+                <Route path="sessions/:id" element={<div>工作台占位</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </AntApp>
+      </ConfigProvider>,
+    );
 
-    // 流程进度中枢：四个步骤
-    expect(await screen.findByText('评议准备')).toBeInTheDocument();
-    expect(screen.getByText('发票')).toBeInTheDocument();
-    expect(screen.getByText('开放投票')).toBeInTheDocument();
-    expect(screen.getByText('结果收尾')).toBeInTheDocument();
-    // 开放投票步骤展示真实开放状态
-    expect(screen.getByText('开放中')).toBeInTheDocument();
-    // 发票步骤展示 totals 真实数据
-    expect(screen.getByText('已发放随机码')).toBeInTheDocument();
-    // 票种表与部门表
-    expect(await screen.findByText('领导班子')).toBeInTheDocument();
-    expect(screen.getByText('办公室')).toBeInTheDocument();
+    expect(await screen.findByText('场次工作台')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: '当前场次' })).not.toBeInTheDocument();
   });
 
   it('票种页实时显示启用票种权重合计与差额（停用票种不计入）', async () => {
@@ -354,8 +360,6 @@ describe('后台页面渲染', () => {
     // 企业风：合计不足 100 时用 error 型 Alert 警示
     expect(summary.closest('.ant-alert-error')).not.toBeNull();
     expect(await screen.findByText('职工代表')).toBeInTheDocument();
-    // 工作流串联：底部引导去随机码发放
-    expect(screen.getByRole('link', { name: /下一步：随机码发放/ })).toBeInTheDocument();
   });
 
   it('发码页渲染批量发码表单、码明细与批次页签', async () => {
@@ -366,11 +370,9 @@ describe('后台页面渲染', () => {
     expect(await screen.findByText('发放批次')).toBeInTheDocument();
     // 状态列文字表意（Tag 颜色仅辅助）
     expect(await screen.findByText('未使用')).toBeInTheDocument();
-    // 工作流串联：底部引导去开放时间
-    expect(screen.getByRole('link', { name: /下一步：开放时间/ })).toBeInTheDocument();
   });
 
-  it('部门页渲染部门列表、软删除口径与下一步引导', async () => {
+  it('部门页渲染部门列表与软删除口径', async () => {
     renderPage(<AdminDepartments />);
 
     expect(await screen.findByText('办公室')).toBeInTheDocument();
@@ -379,18 +381,15 @@ describe('后台页面渲染', () => {
     expect(
       await screen.findByText(/停用后不再出现在投票入口，历史评分仍可导出/),
     ).toBeInTheDocument();
-    // 评议工作流串联
-    expect(screen.getByRole('link', { name: /下一步：职工名单/ })).toBeInTheDocument();
   });
 
-  it('职工页渲染名单、导入入口与列约定、下一步引导', async () => {
+  it('职工页渲染名单、导入入口与列约定', async () => {
     renderPage(<AdminEmployees />);
 
     expect(await screen.findByText('张三')).toBeInTheDocument();
     expect(await screen.findByText('导入 Excel/CSV')).toBeInTheDocument();
     // 导入列约定说明（部门,姓名,工号）
     expect(await screen.findByText(/列顺序固定：部门,姓名,工号/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /下一步：评分项点/ })).toBeInTheDocument();
   });
 
   it('项点页渲染列配置与归一化口径说明', async () => {
@@ -400,22 +399,19 @@ describe('后台页面渲染', () => {
     expect(await screen.findByText('各项满分不同时的综合得分口径')).toBeInTheDocument();
     // 三行示例保留：90 与 62.5 归一化后等权平均得 76.25
     expect(await screen.findByText(/76\.25/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /下一步：票种权重/ })).toBeInTheDocument();
   });
 
-  it('设置页渲染三层开放条件、无内嵌文字的开关与下一步引导', async () => {
+  it('设置页渲染系统标题表单', async () => {
     renderPage(<AdminSettings />);
 
-    expect(await screen.findByText('三层条件全部满足才算开放')).toBeInTheDocument();
-    expect(await screen.findByText(/当前状态：/)).toBeInTheDocument();
-    // 非开放时段投票入口的提示口径保留
-    expect(
-      await screen.findByText(/非开放时段，投票入口显示「当前未开放投票」/),
-    ).toBeInTheDocument();
-    // 无障碍修复：Switch 内不放文字，开/关状态由旁边文字表达
-    const master = await screen.findByRole('switch', { name: /投票总开关/ });
-    expect(master.textContent).toBe('');
-    expect(screen.getByRole('link', { name: /下一步：概览/ })).toBeInTheDocument();
+    const titleInput = await screen.findByLabelText('系统标题');
+    // 开放时间窗已下沉到场次：设置页不再有总开关与时间窗
+    expect(screen.queryByRole('switch', { name: /投票总开关/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('三层条件全部满足才算开放')).not.toBeInTheDocument();
+    // 首次取数后表单灌入服务端值（轮询不覆盖编辑中内容，用 waitFor 等灌值完成）
+    await waitFor(() =>
+      expect((titleInput as HTMLInputElement).value).toBe('某某单位职工素质评议'),
+    );
   });
 
   it('结果页渲染排名、参与票种与导出入口', async () => {
@@ -431,8 +427,6 @@ describe('后台页面渲染', () => {
     // （页头描述也含「票种加权后的原始分」短语，断言用口径条目全句避免多重匹配）
     expect(await screen.findByText(/表中各项得分为「票种加权后的原始分」/)).toBeInTheDocument();
     expect(screen.getByText(/实际参与计算的票种/)).toBeInTheDocument();
-    // 工作流串联：底部引导去打印打分表
-    expect(screen.getByRole('link', { name: /下一步：打印打分表/ })).toBeInTheDocument();
   });
 
   it('打印页渲染正式打分表与签字栏', async () => {

@@ -35,6 +35,8 @@ const describeDb = suiteEnabled ? describe : describe.skip;
 const TAG = 'SS';
 const ADMIN_USERNAME = `${TAG}admin`;
 const PASSWORD = 'Test-Passw0rd!2026';
+/** 不存在的场次 ID（PATCH 404 用例）。 */
+const MISSING_SESSION_ID = '00000000-0000-7000-8000-000000000000';
 
 const app = createApp();
 let agent: ReturnType<typeof request.agent>;
@@ -142,19 +144,19 @@ describeDb('场次管理', () => {
 
     const started = await agent.post(`/api/admin/sessions/${id}/start`);
     expect(started.status).toBe(200);
-    expect(started.body.status).toBe('voting');
-    expect(started.body.startAt).toBeTruthy();
+    expect(started.body.session.status).toBe('voting');
+    expect(started.body.session.startAt).toBeTruthy();
 
     // draft → pause 非法（此刻已是 voting，但 pause 合法）；先测 draft 时期不可能，跳过
     const paused = await agent.post(`/api/admin/sessions/${id}/pause`);
     expect(paused.status).toBe(200);
-    expect(paused.body.status).toBe('paused');
+    expect(paused.body.session.status).toBe('paused');
 
     // paused → end 合法
     const ended = await agent.post(`/api/admin/sessions/${id}/end`);
     expect(ended.status).toBe(200);
-    expect(ended.body.status).toBe('ended');
-    expect(ended.body.endedAt).toBeTruthy();
+    expect(ended.body.session.status).toBe('ended');
+    expect(ended.body.session.endedAt).toBeTruthy();
 
     // ended 终态：start / pause / end 全部 409
     for (const action of ['start', 'pause', 'end']) {
@@ -167,13 +169,106 @@ describeDb('场次管理', () => {
   it('状态机：paused → start 恢复 voting，且不覆盖首次 startAt', async () => {
     const id = await newSession(`${TAG}场次-恢复`);
     const started = await agent.post(`/api/admin/sessions/${id}/start`);
-    const firstStartAt = started.body.startAt as string;
+    const firstStartAt = started.body.session.startAt as string;
     await agent.post(`/api/admin/sessions/${id}/pause`);
 
     const resumed = await agent.post(`/api/admin/sessions/${id}/start`);
     expect(resumed.status).toBe(200);
-    expect(resumed.body.status).toBe('voting');
-    expect(resumed.body.startAt).toBe(firstStartAt);
+    expect(resumed.body.session.status).toBe('voting');
+    expect(resumed.body.session.startAt).toBe(firstStartAt);
+  });
+
+  it('PATCH 更新名称与开放时间窗：缺省不改、null 清空、重名 409', async () => {
+    const id = await newSession(`${TAG}场次-编辑`);
+    const opensAt = '2026-09-01T08:00:00+08:00';
+    const closesAt = '2026-09-30T18:00:00+08:00';
+
+    // 合法更新：名称 + 时间窗一起改。时间按时刻比较：TIMESTAMPTZ 回读是 UTC ISO 串。
+    const opensAtMs = Date.parse(opensAt);
+    const closesAtMs = Date.parse(closesAt);
+    const updated = await agent.patch(`/api/admin/sessions/${id}`).send({ name: `${TAG}场次-编辑后`, opensAt, closesAt });
+    expect(updated.status).toBe(200);
+    expect(updated.body.session).toMatchObject({
+      id,
+      name: `${TAG}场次-编辑后`,
+    });
+    expect(Date.parse(updated.body.session.opensAt)).toBe(opensAtMs);
+    expect(Date.parse(updated.body.session.closesAt)).toBe(closesAtMs);
+    // 列表带出新字段
+    const list = await agent.get('/api/admin/sessions');
+    const row = list.body.sessions.find((s: { id: string }) => s.id === id);
+    expect(Date.parse(row.opensAt)).toBe(opensAtMs);
+    expect(Date.parse(row.closesAt)).toBe(closesAtMs);
+
+    // 缺省（undefined）不改：只清 closesAt，opensAt 保持
+    const cleared = await agent.patch(`/api/admin/sessions/${id}`).send({ closesAt: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.session.closesAt).toBeNull();
+    expect(Date.parse(cleared.body.session.opensAt)).toBe(opensAtMs);
+
+    // 重名 → 409 SESSION_EXISTS（排除自身：改回原名不冲突）
+    const other = await newSession(`${TAG}场次-重名他场`);
+    const dup = await agent
+      .patch(`/api/admin/sessions/${id}`)
+      .send({ name: `${TAG}场次-重名他场` });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.code).toBe('SESSION_EXISTS');
+    const self = await agent
+      .patch(`/api/admin/sessions/${id}`)
+      .send({ name: `${TAG}场次-编辑后` });
+    expect(self.status).toBe(200);
+    expect(other).toBeTruthy();
+  });
+
+  it('PATCH opensAt >= closesAt → 400 VOTE_WINDOW_INVALID', async () => {
+    const id = await newSession(`${TAG}场次-窗口校验`);
+    // 相等也拒绝：两侧同时设
+    const equal = await agent.patch(`/api/admin/sessions/${id}`).send({
+      opensAt: '2026-09-20T00:00:00+08:00',
+      closesAt: '2026-09-20T00:00:00+08:00',
+    });
+    expect(equal.status).toBe(400);
+    expect(equal.body.error.code).toBe('VOTE_WINDOW_INVALID');
+
+    // 顺序写反同样拒绝
+    const reversed = await agent.patch(`/api/admin/sessions/${id}`).send({
+      opensAt: '2026-09-21T00:00:00+08:00',
+      closesAt: '2026-09-20T00:00:00+08:00',
+    });
+    expect(reversed.status).toBe(400);
+    expect(reversed.body.error.code).toBe('VOTE_WINDOW_INVALID');
+
+    // 只改一侧、与库里另一侧合成反序也拒绝：先设正序窗口，再把 closesAt 改到 opensAt 之前
+    await agent.patch(`/api/admin/sessions/${id}`).send({
+      opensAt: '2026-09-10T00:00:00+08:00',
+      closesAt: '2026-09-30T00:00:00+08:00',
+    });
+    const oneSided = await agent
+      .patch(`/api/admin/sessions/${id}`)
+      .send({ closesAt: '2026-09-01T00:00:00+08:00' });
+    expect(oneSided.status).toBe(400);
+    expect(oneSided.body.error.code).toBe('VOTE_WINDOW_INVALID');
+  });
+
+  it('PATCH 场次不存在 → 404；ended 场次仍可改窗口', async () => {
+    const missing = await agent
+      .patch(`/api/admin/sessions/${MISSING_SESSION_ID}`)
+      .send({ name: 'x' });
+    expect(missing.status).toBe(404);
+
+    const id = await newSession(`${TAG}场次-终态改窗`);
+    await agent.post(`/api/admin/sessions/${id}/start`);
+    await agent.post(`/api/admin/sessions/${id}/end`);
+    expect((await agent.get('/api/admin/sessions')).body.sessions.find((s: { id: string }) => s.id === id).status).toBe('ended');
+
+    // ended 为终态，但时间窗不属于状态机：为下一期复用窗口是正常操作
+    const res = await agent.patch(`/api/admin/sessions/${id}`).send({
+      opensAt: '2026-10-01T08:00:00+08:00',
+      closesAt: '2026-10-31T18:00:00+08:00',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.session.status).toBe('ended');
+    expect(Date.parse(res.body.session.opensAt)).toBe(Date.parse('2026-10-01T08:00:00+08:00'));
   });
 
   it('多场时未带 sessionId 的创建类请求 → 400 SESSION_REQUIRED', async () => {

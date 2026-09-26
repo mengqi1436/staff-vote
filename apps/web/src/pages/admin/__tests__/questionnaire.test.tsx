@@ -5,12 +5,18 @@
  * 标题中的「xx」是内嵌的部门下拉框，抬头/列头/说明在表上内联编辑、失焦自动保存。
  * 断言重点不是「渲染出来了」，而是「改完之后调了哪个接口、带了什么参数」。
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { configure, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALL_PERMISSIONS, renderWithAuth } from '../../../test-utils.js';
+
+/**
+ * 整套测试并行跑时机器负载高，默认 1 秒的异步断言超时太紧
+ * （单跑通过、整套失败属于环境耗时，与页面逻辑无关），与 perm-gate.test 同款放宽。
+ */
+configure({ asyncUtilTimeout: 15000 });
 
 /** 参考表口径的部门配置：附件1-1 + 个人问卷 + 标题含 xx 占位。 */
 function departments() {

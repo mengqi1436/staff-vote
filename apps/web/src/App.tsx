@@ -1,19 +1,12 @@
 import { Button, Result } from 'antd';
-import { BrowserRouter, Route, Routes, useNavigate } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router';
 import { AdminAdmins } from './pages/admin/Admins.js';
 import { AdminLayout } from './pages/admin/AdminLayout.js';
-import { AdminCriteria } from './pages/admin/Criteria.js';
-import { AdminDashboard } from './pages/admin/Dashboard.js';
-import { AdminDepartments } from './pages/admin/Departments.js';
-import { AdminEmployees } from './pages/admin/Employees.js';
 import { AdminLogin } from './pages/admin/Login.js';
 import { AdminPrintSheet } from './pages/admin/PrintSheet.js';
-import { AdminQuestionnaire } from './pages/admin/Questionnaire.js';
-import { AdminResults } from './pages/admin/Results.js';
 import { AdminSessions } from './pages/admin/Sessions.js';
+import { SessionWorkspace } from './pages/admin/SessionWorkspace.js';
 import { AdminSettings } from './pages/admin/Settings.js';
-import { AdminTicketTypes } from './pages/admin/TicketTypes.js';
-import { AdminTickets } from './pages/admin/Tickets.js';
 import { AuthProvider } from './lib/auth.js';
 import { VoteDone } from './pages/vote/Done.js';
 import { VoteGate } from './pages/vote/Gate.js';
@@ -27,6 +20,10 @@ import { VoteSheet } from './pages/vote/Sheet.js';
  *   /admin   后台管理（Cookie 会话）
  * 分开挂载而非共用一个外壳，是因为两者的会话模型与错误处理完全不同，
  * 强行共用布局只会让权限判断散落在各个页面上。
+ *
+ * 后台信息架构：/admin/sessions 场次列表 → /admin/sessions/:id 单页场次工作台
+ * （部门、项点、职工、问卷、票种、随机码、统计、结果导出都在工作台页签里）。
+ * 原独立管理页的路由已并入工作台，组件文件保留供工作台复用。
  */
 export function App() {
   return (
@@ -47,16 +44,10 @@ export function App() {
             </AuthProvider>
           }
         >
-          <Route index element={<AdminDashboard />} />
+          <Route index element={<Navigate to="/admin/sessions" replace />} />
           <Route path="sessions" element={<AdminSessions />} />
-          <Route path="ticket-types" element={<AdminTicketTypes />} />
-          <Route path="tickets" element={<AdminTickets />} />
-          <Route path="departments" element={<AdminDepartments />} />
-          <Route path="questionnaire" element={<AdminQuestionnaire />} />
-          <Route path="employees" element={<AdminEmployees />} />
-          <Route path="criteria" element={<AdminCriteria />} />
+          <Route path="sessions/:id" element={<SessionWorkspace />} />
           <Route path="settings" element={<AdminSettings />} />
-          <Route path="results" element={<AdminResults />} />
           <Route path="admins" element={<AdminAdmins />} />
         </Route>
 

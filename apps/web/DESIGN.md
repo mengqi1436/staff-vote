@@ -90,8 +90,7 @@ components:
 ## Layout
 
 - 页面结构 = `PageHeader`（标题+说明+右侧操作）+ antd `Card` 分区。
-- **信息架构按评议工作流组织**：准备（部门→职工→项点）→ 发票（票种→随机码）→ 执行（开放时间）→ 收尾（结果→打印）。侧栏菜单按此分组（Menu `type: 'group'`），概览页顶部是流程进度中枢（四步可点击卡片，数据来自 stats.overview）。
-- 每个流程页底部放 `NextStep` 链接串联下一步。
+- **信息架构按场次组织**：场次列表 + 单页场次工作台（Tabs 依次：部门 → 项点 → 职工 → 问卷 → 票种权重 → 随机码 → 统计 → 结果导出，页头常驻开放控制）。
 - 投票入口三页顶部放 `VoteSteps` 步骤条（验证身份→填写打分→完成提交，不可点击，流程只能前进）。
 
 ## 材质与层级
@@ -118,14 +117,14 @@ components:
 
 ## Components
 
-- **共享（`pages/admin/shared.tsx`）**：`PageHeader` / `NextStep` / `ErrorState`（401 统一跳登录）/ `LoadingState`（Skeleton）/ `StaleDataAlert`（轮询失败保留旧数据）/ `useNotify`。
+- **共享（`pages/admin/shared.tsx`）**：`PageHeader` / `ErrorState`（401 统一跳登录）/ `LoadingState`（Skeleton）/ `StaleDataAlert`（轮询失败保留旧数据）/ `useNotify`。
 - **投票端**：`VoteSurface`（套 voteTheme）、`VoteSteps`（步骤条）、`ScoreTable`（粘性表头 + 粘性姓名列 + Tab/方向键网格导航 + blur 校验 + >50 行分页）。
-- **窗口判定单一真源（`pages/admin/lib.ts`）**：`voteWindowConditions` 逐条返回三层条件，`evaluateVoteWindow` 由其派生；设置页判定表直接渲染 rows，不再有第二份实现。
+- **开放判定单一真源在后端（`apps/api/src/lib/settings.ts` 的 `evaluateVoteWindow`）**：场次状态 + 本场次时间窗（`opensAt` / `closesAt` 可空）的判定集中在后端，前端不重复实现，只消费后端结果（`/vote/status`、`stats.overview`）。前端自己的窗口逻辑只有展示/编辑两件工具（`pages/admin/sessionShared.tsx`）：`formatWindow`（窗口单行描述，空侧显式写「不限开始 / 长期开放」）与 `SessionWindowModal`（编辑窗口弹窗，场次列表行与工作台页头共用）。
 - **身份与权限（`lib/auth.tsx`）**：`AuthProvider` 包住 `/admin` 全部路由，`useAuth()` 给出 `{ admin, loading, error, can(code), reload }`。权限码由 `/me` 权威下发，前端只用来决定**按钮显隐**。测试用 `src/test-utils.tsx` 的 `renderWithAuth(ui, permissions?)` 注入固定权限（默认全权限，只读传 `[]`），避免「加载中」造成的显隐断言竞态。
 - **按钮门控的统一标准**：主操作按钮（新增/导入/保存/发码/作废）无权限时**不渲染**；行内开关与行内操作（启停/编辑/删除）保留但 `disabled` + Tooltip 写明缺哪个权限——整列消失会让表格看起来缺列。
 - **权限被拒的呈现**：整页无权访问时给结果页说明（如「没有「管理管理员账号与角色权限」权限」），操作被拒时用页面内 Alert 带出后端 message，不吞掉原因。
-- **权重分配（票种页）**：列出启用票种 + 实时合计，合计≠100 时保存禁用并写清差额；提交时按「先降权、后升权」逐条串行，中间每一步合计都不会超过 100%，不会撞上后端「合计不得超过 100」的上限。这是单行 PATCH 契约下一次改完全部权重的可靠方式（后端规则允许 ≤100 的升权中间步，正是为了让多步重分配可行）。
-- **一键作废（随机码页）**：`danger` 按钮 + 确认框先报准确数量（「将作废当前筛选下 N 张未使用码；已使用的码不受影响；作废后不可恢复」），只影响 `未使用` 状态。
+- **权重分配（票种页签）**：票种编码在**场次内**唯一（同一场次不重号，跨场次可重用）。列出启用票种 + 实时合计，合计≠100 时保存禁用并写清差额；提交时按「先降权、后升权」逐条串行，中间每一步合计都不会超过 100%，不会撞上后端「合计不得超过 100」的上限。这是单行 PATCH 契约下一次改完全部权重的可靠方式（后端规则允许 ≤100 的升权中间步，正是为了让多步重分配可行）。
+- **一键作废（随机码页签）**：作废范围**限定在本场次**——`danger` 按钮 + 确认框先报准确数量（「将作废本场次当前筛选下 N 张未使用码；已使用的码不受影响；作废后不可恢复」），只影响 `未使用` 状态。
 
 ## 权限与角色
 

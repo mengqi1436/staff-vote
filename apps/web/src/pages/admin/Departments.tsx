@@ -23,7 +23,6 @@ import { describeError } from './lib.js';
 import {
   ErrorState,
   LoadingState,
-  NextStep,
   PageHeader,
   StaleDataAlert,
   useNotify,
@@ -287,7 +286,6 @@ export function AdminDepartments() {
         </Form>
       </Modal>
 
-      <NextStep to="/admin/employees">职工名单</NextStep>
     </>
   );
 }

@@ -37,7 +37,7 @@ enum SessionStatus {
 }
 
 /// 投票场次。各场次的部门/项点/票种/随机码/评分数据经 session_id 隔离，
-/// 同库保留历史场次；全局设置（settings）仍作用于全部场次。
+/// 同库保留历史场次；开放时间窗按场次独立配置（opens_at / closes_at）。
 model VoteSession {
   id        String        @id @default(uuid(7))
   name      String        @unique
@@ -46,6 +46,10 @@ model VoteSession {
   startAt   DateTime?     @db.Timestamptz(3) @map("start_at")
   /// end 的时间；ended 为终态，之后不再变化。
   endedAt   DateTime?     @db.Timestamptz(3) @map("ended_at")
+  /// 开放开始时间；空 = 不限制开始（状态为 voting 即开放）。
+  opensAt   DateTime?     @db.Timestamptz(3) @map("opens_at")
+  /// 开放结束时间；空 = 长期开放（状态为 voting 且已到 opensAt 即开放）。
+  closesAt  DateTime?     @db.Timestamptz(3) @map("closes_at")
   createdAt DateTime      @default(now()) @db.Timestamptz(3) @map("created_at")
 
   departments   Department[]
@@ -247,7 +251,8 @@ model Criterion {
 model TicketType {
   id            String   @id @default(uuid(7))
   sessionId     String   @map("session_id")
-  code          String   @unique
+  /// 票种编码在场次内唯一：不同场次可以各自有 A/B/C。
+  code          String
   name          String
   /// 启用票种的 weightPercent 合计必须为 100，由服务层在写入时校验
   weightPercent Int      @map("weight_percent")
@@ -261,6 +266,7 @@ model TicketType {
   batches     TicketBatch[]
   scoreSheets ScoreSheet[]
 
+  @@unique([sessionId, code])
   @@index([sessionId])
   @@map("ticket_types")
 }
@@ -350,7 +356,7 @@ model ScoreItem {
   @@map("score_items")
 }
 
-/// 全局设置：投票总开关、开放起止时间、系统标题等。值为字符串，按 key 解析。
+/// 全局设置（当前仅系统标题）。值为字符串，按 key 解析。
 model Setting {
   key       String   @id
   value     String

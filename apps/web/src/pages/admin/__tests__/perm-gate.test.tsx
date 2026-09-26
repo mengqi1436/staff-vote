@@ -68,9 +68,6 @@ vi.mock('../../../lib/api.js', async () => {
       },
       settings: {
         get: vi.fn(async () => ({
-          'vote.open': 'true',
-          'vote.startAt': '2026-09-19T00:00:00.000Z',
-          'vote.endAt': '',
           'system.title': '某某单位职工素质评议',
         })),
         update: vi.fn(),
@@ -143,7 +140,8 @@ describe('后台四页写操作权限门控', () => {
     granted.unmount();
 
     renderPage(<AdminSettings />, []);
-    expect(await screen.findByText('三层条件全部满足才算开放')).toBeInTheDocument();
+    // 先等数据到货，避免把「还在加载」误判成「保存按钮被隐藏」
+    expect(await screen.findByLabelText('系统标题')).toBeInTheDocument();
     expect(screen.queryAllByRole('button', { name: /保\s*存设置/ })).toHaveLength(0);
   });
 

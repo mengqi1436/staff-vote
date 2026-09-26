@@ -38,11 +38,11 @@ function loginErrorText(error: unknown): string {
 function closedHint(status: VoteStatus | null): string {
   if (status === null) return '请在通知的投票时间内再来。';
   const now = dayjs();
-  if (status.startAt !== null && now.isBefore(dayjs(status.startAt))) {
-    return `投票将于 ${dayjs(status.startAt).format('YYYY-MM-DD HH:mm')} 开始，请在开放时间内再来。`;
+  if (status.opensAt !== null && now.isBefore(dayjs(status.opensAt))) {
+    return `投票将于 ${dayjs(status.opensAt).format('YYYY-MM-DD HH:mm')} 开始，请在开放时间内再来。`;
   }
-  if (status.endAt !== null && now.isAfter(dayjs(status.endAt))) {
-    return `投票已于 ${dayjs(status.endAt).format('YYYY-MM-DD HH:mm')} 结束，感谢参与。`;
+  if (status.closesAt !== null && now.isAfter(dayjs(status.closesAt))) {
+    return `投票已于 ${dayjs(status.closesAt).format('YYYY-MM-DD HH:mm')} 结束，感谢参与。`;
   }
   const message = status.message.trim();
   if (message !== '' && message !== '当前未开放投票') return message;

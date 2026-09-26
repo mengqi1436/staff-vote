@@ -1,7 +1,8 @@
 /**
- * 投票场次管理：列表、创建与状态机控制。
+ * 投票场次管理：列表、创建、编辑与状态机控制。
  *
  * 状态机（draft → voting ⇄ paused → ended，ended 终态）：
+ *   PATCH /:id       更新名称与开放时间窗（opensAt / closesAt，null=清空）
  *   POST /:id/start  draft|paused → voting（首次 start 写 startAt）
  *   POST /:id/pause  voting → paused
  *   POST /:id/end    voting|paused → ended（写 endedAt，之后不可逆）
@@ -18,12 +19,23 @@ import {
   createSession,
   listSessions,
   transitionSession,
+  updateSession,
 } from '../../services/admin.js';
 import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
 
 const CreateSchema = z.object({
   name: z.string().trim().min(1, '场次名称不能为空').max(100),
+});
+
+/** ISO 8601 时间；Date.parse 对 '2026-09-19T08:00:00+08:00' 这类写法都成立。 */
+const isoTime = z.string().refine((value) => !Number.isNaN(Date.parse(value)), '必须为 ISO 8601 时间');
+
+/** PATCH 语义：缺省（undefined）= 不改；显式 null = 清空（该侧恢复不限制）。 */
+const UpdateSchema = z.object({
+  name: z.string().trim().min(1, '场次名称不能为空').max(100).optional(),
+  opensAt: isoTime.nullable().optional(),
+  closesAt: isoTime.nullable().optional(),
 });
 
 const ActionParamSchema = z.object({
@@ -44,10 +56,18 @@ sessionsRouter.post('/', requirePermission('settings.write'), async (req, res) =
   res.json({ session: await createSession(body, operatorOf(req)) });
 });
 
+/** 更新名称与开放时间窗：{ session: {...} }，形状同 create。 */
+sessionsRouter.patch('/:id', requirePermission('settings.write'), async (req, res) => {
+  const { id } = IdParamSchema.parse(req.params);
+  const body = UpdateSchema.parse(req.body);
+  res.json({ session: await updateSession(id, body, operatorOf(req)) });
+});
+
 /** 统一注册 start / pause / end 三个流转端点。 */
 for (const action of ['start', 'pause', 'end'] as const) {
   sessionsRouter.post(`/:id/${action}`, requirePermission('settings.write'), async (req, res) => {
     const { id } = ActionParamSchema.parse({ ...req.params, action });
-    res.json(await transitionSession(id, action, operatorOf(req)));
+    // 契约形状：{ session: {...} }，与 create / PATCH 一致
+    res.json({ session: await transitionSession(id, action, operatorOf(req)) });
   });
 }

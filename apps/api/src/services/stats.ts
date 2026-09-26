@@ -10,11 +10,11 @@
  *     usedByAssignee 为「已核销且领码人非空」的票按领码人分组（含姓名）。
  *     票不记名：这只是发放/核销留痕，评分数据（score_sheets 不含票据标识）仍匿名。
  *
- * 传入场次 ID 时全部计数限定在该场次；不传时按全局（单场部署等价于该场）。
+ * 场次 ID 必传（路由层经 resolveSessionId 解析），全部计数与投票窗口限定在该场次。
  * 全部计数用 groupBy / 一次扫描拿到，不做「每行一次 count」的循环查询。
  */
 import { prisma } from '../db.js';
-import { evaluateVoteWindow, toSettingMap, type VoteWindowState } from '../lib/settings.js';
+import { evaluateVoteWindow } from '../lib/settings.js';
 
 export interface StatsTicketTypeRow {
   id: string;
@@ -46,6 +46,17 @@ export interface StatsDepartmentRow {
   sheetCount: number;
 }
 
+/** 投票开放窗口（本场次数据）：开放判定结果 + 场次状态本身。 */
+export interface StatsVoteWindow {
+  open: boolean;
+  message: string;
+  /** 场次开放时间窗（未设置则为 null） */
+  opensAt: string | null;
+  closesAt: string | null;
+  /** 场次状态（draft / voting / paused / ended） */
+  status: string;
+}
+
 export interface StatsOverviewDto {
   ticketTypes: StatsTicketTypeRow[];
   totals: {
@@ -58,13 +69,13 @@ export interface StatsOverviewDto {
   /** 票别发放留痕（含领码人姓名），按票种一行 */
   tickets: StatsTicketRow[];
   departments: StatsDepartmentRow[];
-  voteWindow: VoteWindowState;
+  voteWindow: StatsVoteWindow;
   generatedAt: string;
 }
 
-/** 汇总票种发放/使用情况 + 部门进度 + 当前投票窗口。 */
-export async function getStatsOverview(sessionId?: string): Promise<StatsOverviewDto> {
-  const [ticketTypes, ticketGroups, sheets, departments, employeeGroups, sheetGroups, settingRows, assignedTickets] =
+/** 汇总票种发放/使用情况 + 部门进度 + 本场次的投票窗口。 */
+export async function getStatsOverview(sessionId: string): Promise<StatsOverviewDto> {
+  const [ticketTypes, ticketGroups, sheets, departments, employeeGroups, sheetGroups, session, assignedTickets] =
     await Promise.all([
       prisma.ticketType.findMany({
         where: { sessionId },
@@ -90,7 +101,11 @@ export async function getStatsOverview(sessionId?: string): Promise<StatsOvervie
         where: { sessionId },
         _count: { _all: true },
       }),
-      prisma.setting.findMany(),
+      // 投票窗口是本场次的数据：状态 + 场次自己的开放时间窗。
+      prisma.voteSession.findUniqueOrThrow({
+        where: { id: sessionId },
+        select: { status: true, opensAt: true, closesAt: true },
+      }),
       // 发放留痕：只扫「指定了领码人」的票，票数是人级别的量，内存聚合足够。
       prisma.ticket.findMany({
         where: { sessionId, assigneeId: { not: null } },
@@ -194,7 +209,7 @@ export async function getStatsOverview(sessionId?: string): Promise<StatsOvervie
       employeeCount: employeeCountByDepartment.get(department.id) ?? 0,
       sheetCount: sheetCountByDepartment.get(department.id) ?? 0,
     })),
-    voteWindow: evaluateVoteWindow(toSettingMap(settingRows)),
+    voteWindow: { ...evaluateVoteWindow(session), status: session.status },
     generatedAt: new Date().toISOString(),
   };
 }

@@ -1,5 +1,4 @@
 import { useCallback, useState } from 'react';
-import type { ReactNode } from 'react';
 import {
   Button,
   Card,
@@ -12,93 +11,29 @@ import {
   Table,
   Tag,
   Tooltip,
-  Typography,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router';
 import type { TableColumnsType } from 'antd';
 import { adminApi, type AdminSessionDto } from '../../lib/api.js';
+import { useAuth } from '../../lib/auth.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
-import { describeError, EMPTY_TEXT, formatDateTime } from './lib.js';
+import { describeError, formatDateTime } from './lib.js';
 import { ErrorState, LoadingState, PageHeader, StaleDataAlert, useNotify } from './shared.js';
+import {
+  formatWindow,
+  SESSION_STATUS_META,
+  SessionWindowModal,
+  sessionActions,
+} from './sessionShared.js';
 
 /**
  * 场次管理（评议工作流第 0 步：一场评议一个场次）。
  *
- * 状态机：draft → voting → paused ⇄ voting → ended（终态，不可逆）。
- * - draft：开始投票；voting：暂停 / 结束；paused：继续 / 结束；ended：无操作。
- * - paused → voting 也走 start 接口（「继续投票」）。
- * 非法流转后端返回 409 INVALID_SESSION_TRANSITION，走统一的 describeError 错误提示路径。
- * 后端负责真正的状态机校验，前端按钮显隐只是体验层。
+ * 状态机操作与开放窗口编辑弹窗来自 sessionShared（与场次工作台共用，不各写一份）；
+ * 本页是列表形态：状态机按钮渲染为小号链接，行内另有「编辑窗口」与「进入工作台」。
  */
-
-/** 状态不靠颜色单独表意：文字才是表意手段，Tag 颜色只是辅助。 */
-const STATUS_META: Record<AdminSessionDto['status'], { text: string; color?: string }> = {
-  draft: { text: '未开始' },
-  voting: { text: '投票中', color: 'success' },
-  paused: { text: '已暂停', color: 'warning' },
-  ended: { text: '已结束' },
-};
-
-/** 各状态下的操作按钮：返回 undefined 表示该状态没有可用操作（ended 终态）。 */
-function statusActions(
-  status: AdminSessionDto['status'],
-  handlers: {
-    onStart: () => void;
-    onPause: () => void;
-    onEnd: () => void;
-    busy: boolean;
-  },
-): Array<{ key: string; node: ReactNode }> {
-  switch (status) {
-    case 'draft':
-      return [{ key: 'start', node: <Button size="small" type="link" style={{ padding: 0 }} loading={handlers.busy} onClick={handlers.onStart}>开始投票</Button> }];
-    case 'voting':
-      return [
-        { key: 'pause', node: <Button size="small" type="link" style={{ padding: 0 }} loading={handlers.busy} onClick={handlers.onPause}>暂停投票</Button> },
-        {
-          key: 'end',
-          node: (
-            <Popconfirm
-              title="结束本场投票？"
-              description="结束后不可恢复，本场次将无法再接收投票。"
-              okText="结束投票"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-              onConfirm={handlers.onEnd}
-            >
-              <Button size="small" type="link" danger style={{ padding: 0 }} loading={handlers.busy}>
-                结束投票
-              </Button>
-            </Popconfirm>
-          ),
-        },
-      ];
-    case 'paused':
-      return [
-        { key: 'start', node: <Button size="small" type="link" style={{ padding: 0 }} loading={handlers.busy} onClick={handlers.onStart}>继续投票</Button> },
-        {
-          key: 'end',
-          node: (
-            <Popconfirm
-              title="结束本场投票？"
-              description="结束后不可恢复，本场次将无法再接收投票。"
-              okText="结束投票"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-              onConfirm={handlers.onEnd}
-            >
-              <Button size="small" type="link" danger style={{ padding: 0 }} loading={handlers.busy}>
-                结束投票
-              </Button>
-            </Popconfirm>
-          ),
-        },
-      ];
-    case 'ended':
-      return [];
-  }
-}
 
 interface CreateForm {
   name: string;
@@ -109,12 +44,17 @@ export function AdminSessions() {
   const { data, error, loading, refresh } = usePolling(load, 0);
   const notify = useNotify();
   const { setSessionId } = useAdminSession();
+  const { can } = useAuth();
+  const navigate = useNavigate();
+  const canWrite = can('settings.write');
 
   const [form] = Form.useForm<CreateForm>();
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   /** 正在流转中的场次 id：只让被操作的行进入 loading，其他行照常可点 */
   const [actingId, setActingId] = useState<string | null>(null);
+  /** 正在编辑开放时间窗的场次；null 表示弹窗关闭 */
+  const [windowRow, setWindowRow] = useState<AdminSessionDto | null>(null);
 
   const sessions = data?.sessions ?? [];
 
@@ -143,7 +83,7 @@ export function AdminSessions() {
     setActingId(row.id);
     try {
       const result = await adminApi.sessions[action](row.id);
-      notify.success(`场次「${row.name}」${STATUS_META[result.session.status].text}`);
+      notify.success(`场次「${row.name}」${SESSION_STATUS_META[result.session.status].text}`);
       refresh();
     } catch (caught) {
       // 409 INVALID_SESSION_TRANSITION 等错误统一走既有错误提示路径
@@ -160,7 +100,15 @@ export function AdminSessions() {
       dataIndex: 'status',
       width: 120,
       render: (value: AdminSessionDto['status']) => (
-        <Tag color={STATUS_META[value].color}>{STATUS_META[value].text}</Tag>
+        <Tag color={SESSION_STATUS_META[value].color}>{SESSION_STATUS_META[value].text}</Tag>
+      ),
+    },
+    {
+      title: '开放时间窗',
+      key: 'window',
+      width: 240,
+      render: (_: unknown, row: AdminSessionDto) => (
+        <span className="tabular">{formatWindow(row.opensAt, row.closesAt)}</span>
       ),
     },
     {
@@ -178,25 +126,65 @@ export function AdminSessions() {
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 320,
       render: (_: unknown, row: AdminSessionDto) => {
-        const actions = statusActions(row.status, {
-          busy: actingId === row.id,
-          onStart: () => void transition(row, 'start'),
-          onPause: () => void transition(row, 'pause'),
-          onEnd: () => void transition(row, 'end'),
-        });
-        if (actions.length === 0) return <Typography.Text type="secondary">{EMPTY_TEXT}</Typography.Text>;
+        const actions = sessionActions(row.status);
         return (
-          <Space size={8}>
-            {actions.map((action) => (
-              <span key={action.key}>{action.node}</span>
-            ))}
+          <Space size={8} wrap>
+            {actions.map((action) =>
+              action.confirm ? (
+                <Popconfirm
+                  key={action.key}
+                  title={action.confirm.title}
+                  description={action.confirm.description}
+                  okText={action.confirm.okText}
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => void transition(row, action.key)}
+                >
+                  <Button
+                    size="small"
+                    type="link"
+                    danger={action.danger}
+                    style={{ padding: 0 }}
+                    loading={actingId === row.id}
+                  >
+                    {action.label}
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  key={action.key}
+                  size="small"
+                  type="link"
+                  style={{ padding: 0 }}
+                  loading={actingId === row.id}
+                  onClick={() => void transition(row, action.key)}
+                >
+                  {action.label}
+                </Button>
+              ),
+            )}
             <Tooltip title="设为当前场次，后台数据将按该场次展示">
               <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setSessionId(row.id)}>
                 设为当前
               </Button>
             </Tooltip>
+            {/* 行内操作：无权限时保留但禁用（整列消失会让表格看起来缺列） */}
+            {canWrite ? (
+              <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setWindowRow(row)}>
+                编辑窗口
+              </Button>
+            ) : (
+              <Tooltip title="无「修改开放时间与系统设置」权限">
+                <Button size="small" type="link" style={{ padding: 0 }} disabled>
+                  编辑窗口
+                </Button>
+              </Tooltip>
+            )}
+            <Button size="small" type="link" style={{ padding: 0 }} onClick={() => void navigate(`/admin/sessions/${row.id}`)}>
+              进入工作台
+            </Button>
           </Space>
         );
       },
@@ -275,6 +263,14 @@ export function AdminSessions() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* 开放时间窗编辑弹窗：与场次工作台页头共用同一组件 */}
+      <SessionWindowModal
+        session={windowRow}
+        open={windowRow !== null}
+        onClose={() => setWindowRow(null)}
+        onSaved={() => refresh()}
+      />
     </>
   );
 }

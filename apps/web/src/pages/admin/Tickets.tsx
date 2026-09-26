@@ -32,7 +32,6 @@ import { describeError, formatDateTime, splitByWeight } from './lib.js';
 import {
   ErrorState,
   LoadingState,
-  NextStep,
   PageHeader,
   StaleDataAlert,
   useNotify,
@@ -289,9 +288,14 @@ export function AdminTickets() {
   };
 
   const handleRevokeBulk = async (): Promise<void> => {
+    // 作废范围必须限定在场次内：没有场次上下文时不发起请求（工作台内不会发生）
+    if (!sessionId) {
+      notify.error('请先选择场次');
+      return;
+    }
     setBulkRevoking(true);
     try {
-      const result = await adminApi.tickets.revokeBulk(typeFilter || undefined, sessionId ?? undefined);
+      const result = await adminApi.tickets.revokeBulk(sessionId, typeFilter || undefined);
       setBulkOpen(false);
       notify.success(`已作废 ${result.revoked} 张`);
       // 码列表、未使用数量、票种统计都变了，一起刷新
@@ -728,7 +732,6 @@ export function AdminTickets() {
         />
       )}
 
-      <NextStep to="/admin/settings">开放时间</NextStep>
 
       <Modal
         title="按权重一键发码"

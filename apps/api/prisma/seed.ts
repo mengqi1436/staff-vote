@@ -129,7 +129,10 @@ async function ensureDefaultSession(): Promise<string> {
 
 async function seedTicketTypes(sessionId: string): Promise<void> {
   for (const item of DEFAULT_TICKET_TYPES) {
-    const existing = await prisma.ticketType.findUnique({ where: { code: item.code } });
+    // 票种编码在场次内唯一：查重按 (sessionId, code)，不同场次可各自建 A/B/C。
+    const existing = await prisma.ticketType.findUnique({
+      where: { sessionId_code: { sessionId, code: item.code } },
+    });
     if (existing) {
       console.log(`[seed] 票种 ${item.code} 已存在，跳过`);
       continue;

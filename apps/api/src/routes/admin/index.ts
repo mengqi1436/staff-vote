@@ -28,8 +28,8 @@ import { voteColumnsRouter } from './voteColumns.js';
  *                                                   （tickets.generate）
  *   /tickets/export    GET  → xlsx
  *   /tickets/:id/revoke POST → 作废单张未使用的码（tickets.revoke）
- *   /tickets/revoke-bulk POST { ticketTypeId? } → 一键作废该范围内全部未使用码；
- *                         used / revoked 不动，返回 { revoked }（tickets.revoke）
+ *   /tickets/revoke-bulk POST { sessionId, ticketTypeId? } → 一键作废该场次范围内
+ *                         全部未使用码；used / revoked 不动，返回 { revoked }（tickets.revoke）
  *   /ticket-batches    GET
  *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false）；
  *                         PATCH 同时负责问卷表头配置（questionnaireType / headerNote /
@@ -39,7 +39,7 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   /employees         GET POST PATCH DELETE   （写需 employees.write）
  *   /employees/import  POST  multipart xlsx/csv （employees.write）
  *   /criteria          GET POST PATCH DELETE   校验 max > min；含项点描述（criteria.write）
- *   /settings          GET PUT                 投票总开关、起止时间、系统标题（settings.write）
+ *   /settings          GET PUT                 系统标题（settings.write）；投票开放窗口按场次配置
  *   /stats/overview    GET  各票种发放/已用/剩余 + 各部门提交数（后台 5 秒轮询）
  *   /results           GET ?departmentId=      排名与明细
  *   /results/export.xlsx GET

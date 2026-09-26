@@ -1,7 +1,6 @@
 import { prisma } from '../db.js';
 import {
   evaluateVoteWindow,
-  toSettingMap,
   VOTE_CLOSED_MESSAGE,
   type VoteWindowState,
   type VoteWindowSession,
@@ -84,22 +83,36 @@ export interface SubmitItem {
 
 /**
  * 读取投票开放状态。
- * @param session 票所属场次（含 status）；不传时只按全局设置判定
- * @returns 开放标志、对职工显示的文案与起止时间
+ *
+ * 传入场次时按该场次精确判定；不传（/status 未带 sessionId）时聚合判定：
+ * 库中存在任一场次 status=voting 且在其窗口内即开放——多场部署下
+ * 投票首页不该因「没选场」而关死（聚合判定拿不到单一场次的时间，回传 null）。
+ *
+ * @param session 待判定的场次（含 status 与开放时间窗）；不传做聚合判定
+ * @returns 开放标志、对职工显示的文案与场次开放时间
  */
 export async function getVoteStatus(
   session?: VoteWindowSession | null,
 ): Promise<VoteWindowState> {
-  const rows = await prisma.setting.findMany({ select: { key: true, value: true } });
-  return evaluateVoteWindow(toSettingMap(rows), session);
+  if (session) return evaluateVoteWindow(session);
+
+  const candidates = await prisma.voteSession.findMany({
+    select: { status: true, opensAt: true, closesAt: true },
+  });
+  const now = new Date();
+  for (const row of candidates) {
+    const state = evaluateVoteWindow(row, now);
+    if (state.open) return state;
+  }
+  return { open: false, message: VOTE_CLOSED_MESSAGE, opensAt: null, closesAt: null };
 }
 
 /**
  * 解析 /status 查询里可选的场次。
  *
- * 显式指定 → 校验存在；未指定 → 库里恰有一场时用那一场（存量部署与测试的默认形态），
- * 零场或多场时返回 null（/status 是无鉴权端点，宽松回退为只按全局窗口判定，
- * 避免「多场部署下投票首页打不开」——精确的场次判定在登录后按票所属场次执行）。
+ * 显式指定 → 校验存在；未指定 → 库里恰有一场时用那一场（单场部署的时间窗
+ * 因此能回传给前端；恰一场时聚合判定与该场判定等价），零场或多场返回 null，
+ * 由 getVoteStatus 做聚合判定。
  *
  * @param sessionId 查询参数里的场次 ID，可空
  * @returns 场次行或 null
@@ -108,17 +121,19 @@ export async function resolveStatusSession(sessionId?: string): Promise<{
   id: string;
   name: string;
   status: string;
+  opensAt: Date | null;
+  closesAt: Date | null;
 } | null> {
   if (sessionId) {
     const found = await prisma.voteSession.findUnique({
       where: { id: sessionId },
-      select: { id: true, name: true, status: true },
+      select: { id: true, name: true, status: true, opensAt: true, closesAt: true },
     });
     if (!found) throw ApiError.badRequest('场次不存在', 'SESSION_NOT_FOUND');
     return found;
   }
   const rows = await prisma.voteSession.findMany({
-    select: { id: true, name: true, status: true },
+    select: { id: true, name: true, status: true, opensAt: true, closesAt: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   return rows.length === 1 ? rows[0]! : null;
@@ -138,8 +153,8 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
     where: { code },
     include: {
       ticketType: true,
-      // 票所属场次：开放判定与响应都要用（各场次数据隔离）。
-      session: { select: { id: true, name: true, status: true } },
+      // 票所属场次：开放判定（status + 场次时间窗）与响应都要用（各场次数据隔离）。
+      session: { select: { id: true, name: true, status: true, opensAt: true, closesAt: true } },
     },
   });
 
@@ -147,8 +162,8 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
   if (ticket.status === 'used') throw ApiError.unauthorized('该票据已使用', 'TICKET_USED');
   if (ticket.status === 'revoked') throw ApiError.unauthorized('该票据已作废', 'TICKET_REVOKED');
 
-  // 开放 = 全局窗口 + 本场次处于 voting。
-  const status = await getVoteStatus(ticket.session);
+  // 开放 = 本场次处于 voting 且当前时间在场次时间窗内。
+  const status = evaluateVoteWindow(ticket.session);
   if (!status.open) throw ApiError.forbidden(VOTE_CLOSED_MESSAGE, 'VOTE_CLOSED');
 
   const departments = await prisma.department.findMany({
@@ -166,7 +181,11 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
       name: ticket.ticketType.name,
       weightPercent: ticket.ticketType.weightPercent,
     },
-    session: ticket.session,
+    session: {
+      id: ticket.session.id,
+      name: ticket.session.name,
+      status: ticket.session.status,
+    },
     departments,
   };
 }
@@ -242,14 +261,17 @@ export async function submitVote(
   items: SubmitItem[],
 ): Promise<void> {
   // 登录后窗口可能被管理员关闭，提交前必须重新判定，否则"关闭投票"形同虚设。
-  // 场次判定用票所属场次：draft / paused / ended 一律拒绝（403 VOTE_CLOSED）。
+  // 场次判定用票所属场次的 status 与时间窗：未开放一律拒绝（403 VOTE_CLOSED）。
   const ticketRow = await prisma.ticket.findUnique({
     where: { id: ticket.sub },
-    select: { sessionId: true, session: { select: { status: true } } },
+    select: {
+      sessionId: true,
+      session: { select: { status: true, opensAt: true, closesAt: true } },
+    },
   });
   // 令牌签名有效但票已被删：按已使用处理，不再继续任何校验。
   if (!ticketRow) throw ApiError.conflict('该票据已使用，不能重复提交', 'TICKET_USED');
-  const status = await getVoteStatus(ticketRow.session);
+  const status = evaluateVoteWindow(ticketRow.session);
   if (!status.open) throw ApiError.forbidden(VOTE_CLOSED_MESSAGE, 'VOTE_CLOSED');
 
   // 部门必须属于票所在场次：跨场次提交在查询条件里直接落空（404）。

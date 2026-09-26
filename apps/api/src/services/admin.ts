@@ -39,6 +39,9 @@ export interface VoteSessionDto {
   status: SessionStatusValue;
   startAt: string | null;
   endedAt: string | null;
+  /** 开放时间窗：空 = 不限制开始 / 长期开放 */
+  opensAt: string | null;
+  closesAt: string | null;
   createdAt: string;
 }
 
@@ -53,6 +56,8 @@ export async function listSessions(): Promise<{ sessions: VoteSessionDto[] }> {
       status: row.status,
       startAt: toIso(row.startAt),
       endedAt: toIso(row.endedAt),
+      opensAt: toIso(row.opensAt),
+      closesAt: toIso(row.closesAt),
       createdAt: row.createdAt.toISOString(),
     })),
   };
@@ -100,7 +105,71 @@ export async function createSession(
     status: created.status,
     startAt: toIso(created.startAt),
     endedAt: toIso(created.endedAt),
+    opensAt: toIso(created.opensAt),
+    closesAt: toIso(created.closesAt),
     createdAt: created.createdAt.toISOString(),
+  };
+}
+
+/**
+ * 更新场次：名称与开放时间窗（PATCH 语义）。
+ *
+ *   - 字段缺省（undefined）= 不改；显式 null = 清空（该侧恢复不限制）；
+ *   - opensAt 与 closesAt 均非空时校验 opensAt < closesAt，违反 400；
+ *   - 名称沿用 createSession 的查重模式：重名 409 SESSION_EXISTS（更新时排除自身）；
+ *   - ended 场次同样可改时间窗：历史场次为下一期复用窗口是正常操作。
+ *
+ * @param id 场次 ID
+ * @param input 待更新字段
+ * @param operator 操作者用户名，写入 AuditLog
+ */
+export async function updateSession(
+  id: string,
+  input: { name?: string; opensAt?: string | null; closesAt?: string | null },
+  operator: string,
+): Promise<VoteSessionDto> {
+  const current = await prisma.voteSession.findUnique({ where: { id } });
+  if (!current) throw ApiError.notFound('场次不存在');
+
+  const data: { name?: string; opensAt?: Date | null; closesAt?: Date | null } = {};
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    const existing = await prisma.voteSession.findUnique({ where: { name } });
+    if (existing && existing.id !== id) {
+      throw ApiError.conflict(`场次「${name}」已存在`, 'SESSION_EXISTS');
+    }
+    data.name = name;
+  }
+  if (input.opensAt !== undefined) {
+    data.opensAt = input.opensAt === null ? null : new Date(input.opensAt);
+  }
+  if (input.closesAt !== undefined) {
+    data.closesAt = input.closesAt === null ? null : new Date(input.closesAt);
+  }
+
+  const opensAt = data.opensAt !== undefined ? data.opensAt : current.opensAt;
+  const closesAt = data.closesAt !== undefined ? data.closesAt : current.closesAt;
+  // 两侧都设了时间却把顺序写反，会让投票永远无法开放，这是最容易犯的配置错。
+  if (opensAt && closesAt && opensAt.getTime() >= closesAt.getTime()) {
+    throw ApiError.badRequest('开放开始时间必须早于结束时间', 'VOTE_WINDOW_INVALID');
+  }
+
+  const updated = await prisma.voteSession.update({ where: { id }, data });
+  await writeAudit('session.update', {
+    name: updated.name,
+    opensAt: toIso(updated.opensAt),
+    closesAt: toIso(updated.closesAt),
+    operator,
+  });
+  return {
+    id: updated.id,
+    name: updated.name,
+    status: updated.status,
+    startAt: toIso(updated.startAt),
+    endedAt: toIso(updated.endedAt),
+    opensAt: toIso(updated.opensAt),
+    closesAt: toIso(updated.closesAt),
+    createdAt: updated.createdAt.toISOString(),
   };
 }
 
@@ -141,6 +210,8 @@ export async function transitionSession(
     status: updated.status,
     startAt: toIso(updated.startAt),
     endedAt: toIso(updated.endedAt),
+    opensAt: toIso(updated.opensAt),
+    closesAt: toIso(updated.closesAt),
     createdAt: updated.createdAt.toISOString(),
   };
 }
@@ -233,9 +304,6 @@ export interface TicketBatchDto {
 }
 
 export interface SettingsDto {
-  'vote.open': string;
-  'vote.startAt': string;
-  'vote.endAt': string;
   'system.title': string;
 }
 
@@ -363,7 +431,10 @@ export async function createTicketType(
 ): Promise<TicketTypeDto> {
   const sessionId = await resolveSessionId(input.sessionId);
   const code = input.code.trim();
-  const existing = await prisma.ticketType.findUnique({ where: { code } });
+  // 票种编码在场次内唯一：同码可用于不同场次。
+  const existing = await prisma.ticketType.findUnique({
+    where: { sessionId_code: { sessionId, code } },
+  });
   if (existing) throw ApiError.conflict(`票种编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
 
   const enabled = input.enabled ?? true;
@@ -401,7 +472,10 @@ export async function updateTicketType(
 
   if (patch.code !== undefined && patch.code.trim() !== current.code) {
     const code = patch.code.trim();
-    const conflict = await prisma.ticketType.findUnique({ where: { code } });
+    // 场次内查重：改名撞上同场次其他票种才冲突。
+    const conflict = await prisma.ticketType.findUnique({
+      where: { sessionId_code: { sessionId: current.sessionId, code } },
+    });
     if (conflict) throw ApiError.conflict(`票种编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
   }
 
@@ -665,21 +739,26 @@ export async function revokeTicket(id: string, operator: string): Promise<Ticket
 }
 
 export interface RevokeTicketsBulkInput {
-  /** 只作废该票种的码；不传表示全部票种 */
+  /** 作废限定在该场次；多场次下不带场次的一键作废一律拒绝（400） */
+  sessionId: string;
+  /** 只作废该票种的码；不传表示该场次全部票种 */
   ticketTypeId?: string;
 }
 
 /**
- * 一键作废未使用的随机码。
+ * 一键作废某场次内未使用的随机码。
  *
  * 一条 `updateMany` 带 `status = 'unused'` 条件即原子完成：与并发核销天然互斥 ——
  * 已被核销的码在语句执行时不再匹配，不会被改回 revoked（作废已核销的码会凭空
  * 毁掉一张有效票）。因此这里不做「先查再改」，也不返回被跳过的数量。
  *
+ * 作废范围必须限定在单个场次：多场次下各场次数据隔离，误作废历史场次的有效票
+ * 无法挽回，因此 sessionId 必传。
+ *
  * 不存在的票种 id 不报 404：那只是「没有匹配的码」，返回 0 即可，
  * 前端拿到 0 也不会做任何危险动作。
  *
- * @param input 作废范围；`ticketTypeId` 不传即全部票种
+ * @param input 作废范围（场次必填；`ticketTypeId` 不传即该场次全部票种）
  * @param operator 操作者用户名，写入 AuditLog
  * @returns 实际作废数量
  */
@@ -688,12 +767,17 @@ export async function revokeTicketsBulk(
   operator: string,
 ): Promise<{ revoked: number }> {
   const updated = await prisma.ticket.updateMany({
-    where: { status: 'unused', ticketTypeId: input.ticketTypeId },
+    where: {
+      status: 'unused',
+      sessionId: input.sessionId,
+      ticketTypeId: input.ticketTypeId,
+    },
     data: { status: 'revoked' },
   });
 
   await writeAudit('ticket.revoke_bulk', {
-    scope: input.ticketTypeId ? 'ticketType' : 'all',
+    scope: input.ticketTypeId ? 'ticketType' : 'session',
+    sessionId: input.sessionId,
     ticketTypeId: input.ticketTypeId ?? null,
     count: updated.count,
     operator,
@@ -1356,13 +1440,8 @@ export async function disableVoteColumn(id: string, operator: string): Promise<v
 
 const DEFAULT_SETTING_MAP = new Map(DEFAULT_SETTINGS.map((item) => [item.key, item.value]));
 
-/** 四个设置项的键名元组：用元组而不是 Object.values，键名才能收敛成字面量联合类型。 */
-const SETTINGS_KEY_LIST = [
-  SETTING_KEYS.voteOpen,
-  SETTING_KEYS.voteStartAt,
-  SETTING_KEYS.voteEndAt,
-  SETTING_KEYS.systemTitle,
-] as const;
+/** 设置项的键名元组：用元组而不是 Object.values，键名才能收敛成字面量联合类型。 */
+const SETTINGS_KEY_LIST = [SETTING_KEYS.systemTitle] as const;
 
 function settingValue(map: Map<string, string>, key: string): string {
   return map.get(key) ?? DEFAULT_SETTING_MAP.get(key) ?? '';
@@ -1372,15 +1451,12 @@ function settingValue(map: Map<string, string>, key: string): string {
  * 读取全部设置。
  *
  * 库里缺行时回落到默认值：设置项由 seed 写入，但测试库或新部署可能还没跑 seed，
- * 此时返回「投票关闭」比返回 undefined 让前端崩掉要好。
+ * 此时返回默认标题比返回 undefined 让前端崩掉要好。
  */
 export async function getSettings(): Promise<SettingsDto> {
   const rows = await prisma.setting.findMany();
   const map = new Map(rows.map((row) => [row.key, row.value]));
   return {
-    [SETTING_KEYS.voteOpen]: settingValue(map, SETTING_KEYS.voteOpen),
-    [SETTING_KEYS.voteStartAt]: settingValue(map, SETTING_KEYS.voteStartAt),
-    [SETTING_KEYS.voteEndAt]: settingValue(map, SETTING_KEYS.voteEndAt),
     [SETTING_KEYS.systemTitle]: settingValue(map, SETTING_KEYS.systemTitle),
   };
 }
@@ -1400,18 +1476,6 @@ export async function updateSettings(
     if (value === undefined) continue;
     merged[key] = value;
     changed.push(key);
-  }
-
-  // 两侧都设了时间却把顺序写反，会让投票永远无法开放，这是最容易犯的配置错。
-  // 只在本次确实改了时间时才校验，避免库里已有历史脏数据时连改标题都被拒。
-  const touchesWindow =
-    patch[SETTING_KEYS.voteStartAt] !== undefined || patch[SETTING_KEYS.voteEndAt] !== undefined;
-  if (touchesWindow && merged[SETTING_KEYS.voteStartAt] && merged[SETTING_KEYS.voteEndAt]) {
-    const start = new Date(merged[SETTING_KEYS.voteStartAt]);
-    const end = new Date(merged[SETTING_KEYS.voteEndAt]);
-    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && start >= end) {
-      throw ApiError.badRequest('开放起始时间必须早于结束时间', 'VOTE_WINDOW_INVALID');
-    }
   }
 
   if (changed.length > 0) {

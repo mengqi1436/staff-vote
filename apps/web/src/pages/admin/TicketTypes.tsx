@@ -23,7 +23,6 @@ import { describeError, summarizeWeights } from './lib.js';
 import {
   ErrorState,
   LoadingState,
-  NextStep,
   PageHeader,
   StaleDataAlert,
   useNotify,
@@ -454,7 +453,6 @@ export function AdminTicketTypes() {
             />
           </Card>
 
-          <NextStep to="/admin/tickets">随机码发放</NextStep>
         </>
       ) : loading ? (
         <LoadingState />

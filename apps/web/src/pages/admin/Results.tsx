@@ -10,7 +10,6 @@ import { EMPTY_TEXT, formatDateTime } from './lib.js';
 import {
   ErrorState,
   LoadingState,
-  NextStep,
   PageHeader,
   StaleDataAlert,
 } from './shared.js';
@@ -286,7 +285,6 @@ export function AdminResults() {
         </Card>
       ) : null}
 
-      <NextStep to="/admin/results/print">打印打分表</NextStep>
     </>
   );
 }

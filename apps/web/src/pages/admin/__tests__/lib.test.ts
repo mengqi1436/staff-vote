@@ -1,13 +1,10 @@
-import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../../lib/api.js';
 import {
   describeLoginError,
-  evaluateVoteWindow,
   formatDateTime,
   splitByWeight,
   summarizeWeights,
-  voteWindowConditions,
 } from '../lib.js';
 
 describe('summarizeWeights', () => {
@@ -94,72 +91,6 @@ describe('splitByWeight', () => {
 
   it('空票种列表返回空数组', () => {
     expect(splitByWeight(10, [])).toEqual([]);
-  });
-});
-
-describe('evaluateVoteWindow', () => {
-  const base = { 'vote.open': 'true', 'vote.startAt': '', 'vote.endAt': '' };
-  const now = dayjs('2026-09-19T12:00:00+08:00');
-
-  it('总开关关闭时不开放', () => {
-    expect(evaluateVoteWindow({ ...base, 'vote.open': 'false' }, now)).toEqual({
-      open: false,
-      reason: '投票总开关已关闭',
-    });
-  });
-
-  it('开关打开且未设起止时间时开放', () => {
-    expect(evaluateVoteWindow(base, now)).toEqual({ open: true, reason: '' });
-  });
-
-  it('未到开始时间不开放', () => {
-    const state = evaluateVoteWindow({ ...base, 'vote.startAt': '2026-09-20T08:00:00+08:00' }, now);
-    expect(state.open).toBe(false);
-    expect(state.reason).toContain('尚未到开始时间');
-  });
-
-  it('已过结束时间不开放', () => {
-    const state = evaluateVoteWindow({ ...base, 'vote.endAt': '2026-09-18T18:00:00+08:00' }, now);
-    expect(state.open).toBe(false);
-    expect(state.reason).toContain('已过结束时间');
-  });
-
-  it('时间窗内开放（含边界）', () => {
-    expect(
-      evaluateVoteWindow(
-        { ...base, 'vote.startAt': '2026-09-19T12:00:00+08:00', 'vote.endAt': '2026-09-19T12:00:00+08:00' },
-        now,
-      ).open,
-    ).toBe(true);
-  });
-});
-
-describe('voteWindowConditions', () => {
-  const base = { 'vote.open': 'true', 'vote.startAt': '', 'vote.endAt': '' };
-  const now = dayjs('2026-09-19T12:00:00+08:00');
-
-  it('逐条返回三行条件，全部满足时 met 全真', () => {
-    const rows = voteWindowConditions(base, now);
-    expect(rows).toHaveLength(3);
-    expect(rows.every((row) => row.met)).toBe(true);
-  });
-
-  it('总开关关闭时仅第一行不满足，reason 与 evaluateVoteWindow 同源', () => {
-    const rows = voteWindowConditions({ ...base, 'vote.open': 'false' }, now);
-    expect(rows.map((row) => row.met)).toEqual([false, true, true]);
-    expect(rows[0]?.reason).toBe('投票总开关已关闭');
-  });
-
-  it('未到开始时间时第二行不满足', () => {
-    const rows = voteWindowConditions({ ...base, 'vote.startAt': '2026-09-20T08:00:00+08:00' }, now);
-    expect(rows.map((row) => row.met)).toEqual([true, false, true]);
-    expect(rows[1]?.reason).toContain('尚未到开始时间');
-  });
-
-  it('已过结束时间时第三行不满足', () => {
-    const rows = voteWindowConditions({ ...base, 'vote.endAt': '2026-09-18T18:00:00+08:00' }, now);
-    expect(rows.map((row) => row.met)).toEqual([true, true, false]);
-    expect(rows[2]?.reason).toContain('已过结束时间');
   });
 });
 

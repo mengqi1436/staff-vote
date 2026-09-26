@@ -58,7 +58,7 @@ function reply(status: number, payload: unknown) {
 }
 
 function statusBody(open: boolean) {
-  return { open, message: open ? '' : '当前未开放投票', startAt: null, endAt: null };
+  return { open, message: open ? '' : '当前未开放投票', opensAt: null, closesAt: null };
 }
 
 function renderGate(path: string) {
@@ -332,7 +332,7 @@ describe('成功页（Done）', () => {
 describe('未开放时的区分（Gate）', () => {
   it('未开始时说明开始时间，仍然不渲染输入框', async () => {
     const startAt = new Date(Date.now() + 3 * 3600_000).toISOString();
-    fetchMock.mockResolvedValueOnce(reply(200, { open: false, message: '', startAt, endAt: null }));
+    fetchMock.mockResolvedValueOnce(reply(200, { open: false, message: '', opensAt: startAt, closesAt: null }));
     renderGate('/');
 
     expect(await screen.findByText('当前未开放投票')).toBeInTheDocument();
@@ -343,7 +343,7 @@ describe('未开放时的区分（Gate）', () => {
 
   it('已结束时说明结束时间', async () => {
     const endAt = new Date(Date.now() - 3 * 3600_000).toISOString();
-    fetchMock.mockResolvedValueOnce(reply(200, { open: false, message: '', startAt: null, endAt }));
+    fetchMock.mockResolvedValueOnce(reply(200, { open: false, message: '', opensAt: null, closesAt: endAt }));
     renderGate('/');
 
     expect(await screen.findByText(/投票已于 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 结束，感谢参与/)).toBeInTheDocument();

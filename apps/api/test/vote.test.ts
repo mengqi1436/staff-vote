@@ -25,7 +25,7 @@ process.env.DATABASE_URL = testDatabaseUrl;
 
 const { createApp } = await import('../src/app.js');
 const { createPrismaClient, prisma: appPrisma } = await import('../src/db.js');
-const { SETTING_KEYS, VOTE_CLOSED_MESSAGE } = await import('../src/lib/settings.js');
+const { VOTE_CLOSED_MESSAGE } = await import('../src/lib/settings.js');
 const { signAdminToken, verifyVoteToken } = await import('../src/lib/token.js');
 const { createTestSession } = await import('./session-fixtures.js');
 
@@ -34,7 +34,6 @@ const app = createApp();
 const prisma = createPrismaClient(testDatabaseUrl);
 
 const tag = randomUUID().replaceAll('-', '').slice(0, 8).toUpperCase();
-const WINDOW_KEYS = [SETTING_KEYS.voteOpen, SETTING_KEYS.voteStartAt, SETTING_KEYS.voteEndAt];
 const MISSING_ID = '00000000-0000-7000-8000-000000000000';
 
 interface Fixture {
@@ -189,27 +188,27 @@ async function createFixture(): Promise<Fixture> {
 }
 
 const fixture = await createFixture();
-/** 夹具建立前的设置原值，测试结束后恢复，避免给同库的其他测试留下"投票开着"的状态。 */
-const savedWindowSettings = await prisma.setting.findMany({ where: { key: { in: WINDOW_KEYS } } });
 
 let ticketSeq = 0;
 let loginSeq = 0;
 
-/** 直接改设置表：不经过管理端接口，避免依赖另一个 teammate 正在实现的功能。 */
+/**
+ * 直接改夹具场次的开放窗口与状态：不经过管理端接口，避免依赖其他套件的功能。
+ * 窗口判定全部走场次字段（opens_at / closes_at / status），不再有全局开关——
+ * open=false 用 paused 表达（场次未开放），窗口用 opensAt / closesAt 表达。
+ */
 async function setVoteWindow(
   open: boolean,
-  window: { startAt?: string; endAt?: string } = {},
+  window: { opensAt?: string | null; closesAt?: string | null } = {},
 ): Promise<void> {
-  const values: Array<[string, string]> = [
-    [SETTING_KEYS.voteOpen, open ? 'true' : 'false'],
-    [SETTING_KEYS.voteStartAt, window.startAt ?? ''],
-    [SETTING_KEYS.voteEndAt, window.endAt ?? ''],
-  ];
-  await Promise.all(
-    values.map(([key, value]) =>
-      prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } }),
-    ),
-  );
+  await prisma.voteSession.update({
+    where: { id: fixture.sessionId },
+    data: {
+      status: open ? 'voting' : 'paused',
+      opensAt: window.opensAt ?? null,
+      closesAt: window.closesAt ?? null,
+    },
+  });
 }
 
 /** 建一张孤立票据（自带批次），让每个用例从"未使用的码"出发，互不消耗。 */
@@ -317,19 +316,6 @@ afterAll(async () => {
     where: { id: { in: [fixture.sessionId, fixture.placeholderSessionId] } },
   });
 
-  for (const key of WINDOW_KEYS) {
-    const original = savedWindowSettings.find((row) => row.key === key);
-    if (original) {
-      await prisma.setting.upsert({
-        where: { key },
-        create: { key, value: original.value },
-        update: { value: original.value },
-      });
-    } else {
-      await prisma.setting.deleteMany({ where: { key } });
-    }
-  }
-
   await prisma.$disconnect();
   await appPrisma.$disconnect();
 });
@@ -343,7 +329,7 @@ describe('GET /api/vote/status', () => {
     expect(res.status).toBe(200);
     expect(res.body.open).toBe(true);
     expect(res.body.message).toBe('');
-    // 本夹具场次存在 → 库中 ≥2 场，未带 sessionId 时只按全局窗口判定，session 为 null。
+    // 本夹具场次存在 → 库中 ≥2 场，未带 sessionId 时做聚合判定（session 为 null）。
     expect(res.body.session).toBeNull();
   });
 
@@ -368,7 +354,7 @@ describe('GET /api/vote/status', () => {
     expect(res.body.error.code).toBe('SESSION_NOT_FOUND');
   });
 
-  it('场次暂停时即使全局开放也判定为关闭', async () => {
+  it('场次暂停时判定为关闭', async () => {
     await setVoteWindow(true);
     await prisma.voteSession.update({
       where: { id: fixture.sessionId },
@@ -398,15 +384,35 @@ describe('GET /api/vote/status', () => {
     expect(res.body.message).toBe(VOTE_CLOSED_MESSAGE);
   });
 
-  it('总开关打开但未到起始时间时仍视为关闭，并回传计划开始时间', async () => {
-    const startAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    await setVoteWindow(true, { startAt });
+  it('未到场次开放开始时间时视为关闭，并回传计划开始时间', async () => {
+    const opensAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await setVoteWindow(true, { opensAt });
+
+    const res = await request(app).get('/api/vote/status').query({ sessionId: fixture.sessionId });
+
+    expect(res.body.open).toBe(false);
+    expect(res.body.opensAt).toBe(opensAt);
+    expect(res.body.message).toBe(VOTE_CLOSED_MESSAGE);
+  });
+
+  it('已过场次开放结束时间时视为关闭，并回传结束时间', async () => {
+    const closesAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await setVoteWindow(true, { closesAt });
+
+    const res = await request(app).get('/api/vote/status').query({ sessionId: fixture.sessionId });
+
+    expect(res.body.open).toBe(false);
+    expect(res.body.closesAt).toBe(closesAt);
+    expect(res.body.message).toBe(VOTE_CLOSED_MESSAGE);
+  });
+
+  it('库中任一场次开放即判定开放（聚合判定）', async () => {
+    // 占位场次保持 draft：夹具场次 voting 且窗口不限 → 未带 sessionId 也开放。
+    await setVoteWindow(true);
 
     const res = await request(app).get('/api/vote/status');
 
-    expect(res.body.open).toBe(false);
-    expect(res.body.startAt).toBe(startAt);
-    expect(res.body.message).toBe(VOTE_CLOSED_MESSAGE);
+    expect(res.body.open).toBe(true);
   });
 });
 
@@ -491,7 +497,7 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
     expect(after?.status).toBe('unused');
   });
 
-  it('全局开放但场次暂停/结束 → 403，票据不被消耗', async () => {
+  it('场次暂停/结束 → 403，票据不被消耗', async () => {
     await setVoteWindow(true);
     const ticket = await createTicket();
     await prisma.voteSession.update({

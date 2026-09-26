@@ -66,7 +66,18 @@ export function renderWithAuth(ui: ReactElement, permissions: string[] = ALL_PER
     ...DEFAULT_SESSION_STATE,
     sessionId,
     sessions: sessionId
-      ? [{ id: sessionId, name: '测试场次', status: 'draft' as const, startAt: null, endedAt: null, createdAt: '' }]
+      ? [
+          {
+            id: sessionId,
+            name: '测试场次',
+            status: 'draft' as const,
+            opensAt: null,
+            closesAt: null,
+            startAt: null,
+            endedAt: null,
+            createdAt: '',
+          },
+        ]
       : [],
   };
   return render(

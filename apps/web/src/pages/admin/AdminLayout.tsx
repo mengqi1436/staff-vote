@@ -2,18 +2,10 @@ import { useEffect, useMemo } from 'react';
 import { Button, Layout, Menu, Select, Spin, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import {
-  ApartmentOutlined,
-  BarChartOutlined,
-  DashboardOutlined,
-  FieldTimeOutlined,
   LogoutOutlined,
-  OrderedListOutlined,
   PartitionOutlined,
-  PieChartOutlined,
-  ProfileOutlined,
-  QrcodeOutlined,
+  SettingOutlined,
   SafetyCertificateOutlined,
-  TeamOutlined,
 } from '@ant-design/icons';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { adminApi } from '../../lib/api.js';
@@ -21,11 +13,10 @@ import { useAuth } from '../../lib/auth.js';
 import { AdminSessionProvider, useAdminSession } from '../../lib/sessionContext.js';
 
 /**
- * 后台外壳：登录态守卫 + 按评议工作流分组的侧边导航 + 退出登录。
+ * 后台外壳：登录态守卫 + 侧边导航 + 退出登录。
  *
- * 菜单按「评议准备 → 发票与票种 → 评议执行 → 评议收尾」的工作流分组
- * （antd Menu type: 'group'），第一次组织评议的管理员从上往下走一遍即可；
- * 末尾的「系统管理」不属于评议流程，单独成组。
+ * 管理页已整合为「场次工作台」（/admin/sessions/:id），侧栏只剩三个入口：
+ * 场次管理（列表与工作台）、系统设置、账号权限；评议配置都在工作台的页签里。
  * 视觉遵循 Apple 风契约 v1：浅色磨砂侧栏 + sticky 半透明顶栏，
  * 只动材质与样式值，不引入自造组件。
  *
@@ -37,101 +28,31 @@ import { AdminSessionProvider, useAdminSession } from '../../lib/sessionContext.
 
 /** 各路由的页面标题：页头展示当前页，与菜单文案一致。 */
 const PAGE_TITLES: Record<string, string> = {
-  '/admin': '概览',
   '/admin/sessions': '场次管理',
-  '/admin/departments': '部门管理',
-  '/admin/questionnaire': '问卷配置',
-  '/admin/employees': '职工名单',
-  '/admin/criteria': '评分项点',
-  '/admin/ticket-types': '票种权重',
-  '/admin/tickets': '随机码',
-  '/admin/settings': '开放时间与系统设置',
-  '/admin/results': '结果与导出',
+  '/admin/settings': '系统设置',
   '/admin/admins': '账号与权限',
+  '/admin/sessions/:id': '场次工作台',
 };
 
-/** 侧边导航：顶部独立「概览」，其下按评议工作流分四组。 */
+/** 工作台路由：/admin/sessions/<场次 id>。 */
+const WORKSPACE_PATH = /^\/admin\/sessions\/[^/]+$/;
+
+/** 侧边导航：三个入口平铺，评议配置全部在场次工作台的页签里。 */
 const MENU_ITEMS: MenuProps['items'] = [
-  { key: '/admin', icon: <DashboardOutlined />, label: <Link to="/admin">概览</Link> },
   {
-    type: 'group',
-    label: '评议准备',
-    children: [
-      {
-        key: '/admin/sessions',
-        icon: <PartitionOutlined />,
-        label: <Link to="/admin/sessions">场次管理</Link>,
-      },
-      {
-        key: '/admin/departments',
-        icon: <ApartmentOutlined />,
-        label: <Link to="/admin/departments">部门管理</Link>,
-      },
-      {
-        key: '/admin/questionnaire',
-        icon: <ProfileOutlined />,
-        label: <Link to="/admin/questionnaire">问卷配置</Link>,
-      },
-      {
-        key: '/admin/employees',
-        icon: <TeamOutlined />,
-        label: <Link to="/admin/employees">职工名单</Link>,
-      },
-      {
-        key: '/admin/criteria',
-        icon: <OrderedListOutlined />,
-        label: <Link to="/admin/criteria">评分项点</Link>,
-      },
-    ],
+    key: '/admin/sessions',
+    icon: <PartitionOutlined />,
+    label: <Link to="/admin/sessions">场次管理</Link>,
   },
   {
-    type: 'group',
-    label: '发票与票种',
-    children: [
-      {
-        key: '/admin/ticket-types',
-        icon: <PieChartOutlined />,
-        label: <Link to="/admin/ticket-types">票种权重</Link>,
-      },
-      {
-        key: '/admin/tickets',
-        icon: <QrcodeOutlined />,
-        label: <Link to="/admin/tickets">随机码</Link>,
-      },
-    ],
+    key: '/admin/settings',
+    icon: <SettingOutlined />,
+    label: <Link to="/admin/settings">系统设置</Link>,
   },
   {
-    type: 'group',
-    label: '评议执行',
-    children: [
-      {
-        key: '/admin/settings',
-        icon: <FieldTimeOutlined />,
-        label: <Link to="/admin/settings">开放时间</Link>,
-      },
-    ],
-  },
-  {
-    type: 'group',
-    label: '评议收尾',
-    children: [
-      {
-        key: '/admin/results',
-        icon: <BarChartOutlined />,
-        label: <Link to="/admin/results">结果与导出</Link>,
-      },
-    ],
-  },
-  {
-    type: 'group',
-    label: '系统管理',
-    children: [
-      {
-        key: '/admin/admins',
-        icon: <SafetyCertificateOutlined />,
-        label: <Link to="/admin/admins">账号与权限</Link>,
-      },
-    ],
+    key: '/admin/admins',
+    icon: <SafetyCertificateOutlined />,
+    label: <Link to="/admin/admins">账号与权限</Link>,
   },
 ];
 
@@ -141,10 +62,11 @@ const MENU_ITEMS: MenuProps['items'] = [
  * 切换后当前场次 id 存入 SessionContext（并持久化到 localStorage），
  * 各管理端页面的取数函数依赖 sessionId，会自动按新场次重新拉取。
  * 场次接口不可用或还没有任何场次时选择器不出现（单场行为，不需要选择）。
+ * 场次工作台的路由即场次，页签数据跟着路由走，顶栏不显示选择器。
  */
-function SessionPicker() {
+function SessionPicker({ visible }: { visible: boolean }) {
   const { sessionId, setSessionId, sessions, loading } = useAdminSession();
-  if (!loading && sessions.length === 0) return null;
+  if (!visible || (!loading && sessions.length === 0)) return null;
   return (
     <Select
       style={{ width: 200 }}
@@ -169,16 +91,15 @@ export function AdminLayout() {
     if (!loading && !admin) void navigate('/admin/login', { replace: true });
   }, [loading, admin, navigate]);
 
-  // 当前选中项：/admin 精确匹配（否则任何子页都会点亮概览），其余按前缀匹配
-  const selectedKey = useMemo(() => {
-    const { pathname } = location;
-    if (pathname === '/admin' || pathname === '/admin/') return '/admin';
-    return (
+  // 当前选中项：其余按前缀匹配（工作台路由 /admin/sessions/:id 高亮「场次管理」）
+  const selectedKey = useMemo(
+    () =>
       Object.keys(PAGE_TITLES)
-        .filter((key) => key !== '/admin')
-        .find((key) => pathname.startsWith(key)) ?? '/admin'
-    );
-  }, [location]);
+        .filter((key) => !key.includes(':'))
+        .find((key) => location.pathname.startsWith(key)) ?? '/admin/sessions',
+    [location],
+  );
+  const isWorkspace = WORKSPACE_PATH.test(location.pathname);
 
   if (!admin) {
     return (
@@ -267,9 +188,9 @@ export function AdminLayout() {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <span style={{ fontSize: 16, fontWeight: 600 }}>
-                {PAGE_TITLES[selectedKey] ?? '后台管理'}
+                {isWorkspace ? PAGE_TITLES['/admin/sessions/:id'] : (PAGE_TITLES[selectedKey] ?? '后台管理')}
               </span>
-              <SessionPicker />
+              <SessionPicker visible={!isWorkspace} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ color: token.colorTextSecondary }}>
