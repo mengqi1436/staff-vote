@@ -54,7 +54,7 @@ let viewerAgent: ReturnType<typeof request.agent>;
 
 let sequence = 0;
 
-/** 用例临时建的场次，afterAll 统一清理。 */
+/** 用例临时建的场次，beforeEach 恢复隔离、afterAll 兜底清理。 */
 const extraSessionIds: string[] = [];
 
 function nextSeq(): number {
@@ -198,6 +198,10 @@ describeDb('一键作废随机码', () => {
 
   beforeEach(async () => {
     await clearTicketFixtures();
+    if (extraSessionIds.length > 0) {
+      await prisma.voteSession.deleteMany({ where: { id: { in: extraSessionIds } } });
+      extraSessionIds.length = 0;
+    }
   });
 
   afterAll(async () => {
