@@ -34,7 +34,9 @@ createRoot(container).render(
           不必覆盖：antd 派生它们取的是各自色板第 9 档深档（genColorMapToken），对
           同族浅底（colorInfoBg / colorWarningBg）本就远超 AA
         - colorError #d70015（Apple 系统红深档）：默认 #ff4d4f 作「删除/作废」等
-          文字色只有 3.3:1；对 colorErrorBg #ffe7e6 约 4.6:1，无需再加深
+          文字色只有 3.3:1；对 colorErrorBg #ffe7e6 约 4.6:1，无需再加深。
+          colorErrorHover #c00f1e：antd 派生的悬停档（色板第 5 档 #E32431）作
+          danger 链接悬停文字落在表格行 hover 灰底上只有约 4.4:1，取深一档
         - components.Menu.groupTitleColor：侧栏分组标题，antd 默认
           colorTextDescription（rgba(0,0,0,0.45)）对浅灰底只有约 3.3:1
         - borderRadius 10（Apple 卡片式圆角）：antd 会派生小控件圆角 */}
@@ -50,6 +52,7 @@ createRoot(container).render(
           colorBgLayout: '#f5f5f7',
           colorInfo: '#0066cc',
           colorError: '#d70015',
+          colorErrorHover: '#c00f1e',
           borderRadius: 10,
         },
         components: {

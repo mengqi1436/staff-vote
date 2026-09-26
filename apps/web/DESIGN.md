@@ -77,7 +77,7 @@ components:
 - `colorLink`：`#0066cc`，与主色同值（antd 6 的链接色不跟随 `colorPrimary`，需显式指定）；`colorLinkHover` 取更深一档 `#0055aa`——antd 派生的默认悬停色偏浅，落在浅底上不足 4.5:1。普通 `<a>`（react-router `Link`）的静止 / hover / active 三态由 `colorLink` / `colorLinkHover` / `colorLinkActive` 给出，不要在页面里内联覆盖链接色。
 - `components.Menu.groupTitleColor`：`rgba(0, 0, 0, 0.65)`。antd 默认 `colorTextDescription`（`rgba(0, 0, 0, 0.45)`）落在浅色侧栏上只有约 3.3:1。
 - `colorInfoText` / `colorWarningText` 不覆盖：antd 派生它们取的是各自色板第 9 档深档（`genColorMapToken`），对同族浅底（`colorInfoBg` / `colorWarningBg`）本就远超 WCAG AA。
-- `colorError`：`#d70015`（Apple 系统红深档）。
+- `colorError`：`#d70015`（Apple 系统红深档），`colorErrorHover` 显式取深一档 `#c00f1e`——antd 派生的悬停档（色板第 5 档 `#E32431`）作 danger 链接悬停文字落在表格行 hover 灰底上只有约 4.4:1。
 - 其余状态色沿用 antd 语义（success `#52c41a` / warning `#faad14` / info `#0066cc`（跟随主色，避免残留 antd 默认蓝））。
 - 唯一约束：**状态不靠颜色单独表意**，停用/作废等必须同时有文字。
 
