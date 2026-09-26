@@ -147,7 +147,7 @@ function StaticNotice({ tone, title, children }: { tone: 'warning' | 'info'; tit
         gap: 4,
       }}
     >
-      <Typography.Text strong style={{ color: warning ? token.colorWarning : token.colorInfo }}>
+      <Typography.Text strong style={{ color: warning ? token.colorWarningText : token.colorInfoText }}>
         {title}
       </Typography.Text>
       {children}

@@ -11,7 +11,7 @@
  * 上一轮的 LedgerSection / LedgerNotes / Figure 已随「年鉴」主题删除；
  * 口径说明直接用 Alert type="info" 或 Typography.Text type="secondary"。
  */
-import { App as AntApp, Alert, Button, Result, Skeleton, Space } from 'antd';
+import { App as AntApp, Alert, Button, Result, Skeleton, Space, theme } from 'antd';
 import { Link, useNavigate } from 'react-router';
 import type { ReactNode } from 'react';
 import { ApiError } from '../../lib/api.js';
@@ -127,9 +127,12 @@ export function PageHeader({
  * 让第一次组织评议的管理员不用自己想「接下来该去哪」。
  */
 export function NextStep({ to, children }: { to: string; children: ReactNode }) {
+  const { token } = theme.useToken();
   return (
     <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid rgba(0, 0, 0, 0.06)' }}>
-      <Link to={to}>下一步：{children} →</Link>
+      <Link to={to} style={{ color: token.colorLink }}>
+        下一步：{children} →
+      </Link>
     </div>
   );
 }
