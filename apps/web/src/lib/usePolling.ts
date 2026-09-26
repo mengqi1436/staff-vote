@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 /**
  * 轮询取数。
  *
- * 后台概览需要「实时」看到发码与提交进度，用轮询即可：
+ * 后台统计需要「实时」看到发码与提交进度，用轮询即可：
  * 5 秒粒度足够，且不需要在 Nginx 上为 SSE 加额外配置与长连接保活。
  *
  * 刻意不使用 window.setInterval：请求慢于间隔时 interval 会堆积请求。

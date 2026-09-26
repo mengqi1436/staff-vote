@@ -241,11 +241,11 @@ staff-vote/
 | `Department` | name, sortOrder, enabled | 唯一名 |
 | `Employee` | departmentId, name, employeeNo?, sortOrder, enabled | 打分表的行；`employeeNo` 唯一，为接口对接预留 |
 | `Criterion` | departmentId, name, minScore, maxScore, sortOrder, enabled | 打分表的列，默认 0/100，整数 |
-| `TicketType` | code, name, weightPercent, sortOrder, enabled | 保存时校验启用票种权重合计 = 100 |
+| `TicketType` | code, name, weightPercent, sortOrder, enabled | code 在**场次内**唯一；保存时校验启用票种权重合计 = 100 |
 | `Ticket` | code(唯一), ticketTypeId, batchId, status, usedAt | 只记状态，不记投向 |
 | `TicketBatch` | ticketTypeId, count, createdAt, operator | 发放批次 |
 | `ScoreSheet` | departmentId, ticketTypeId, submittedAt | 无 ticketId、无 IP、无 UA |
-| `ScoreItem` | sheetId, employeeId, criterionId, score(Int) | 唯一 (sheetId, employeeId, criterionId) |
+| `ScoreItem` | sheetId, voteColumnId, criterionId, score(Int) | 唯一 (sheetId, voteColumnId, criterionId) |
 | `Setting` | key(PK), value | 系统标题（投票开关与开放时间窗已下沉到场次 `VoteSession`） |
 | `AuditLog` | action, detail(Json), createdAt | 发码、改权重、改开放时间留痕 |
 
@@ -265,6 +265,7 @@ staff-vote/
 | 分组 | 端点 |
 |---|---|
 | 认证 | `POST /login`、`POST /logout`、`GET /me` |
+| 场次 | `GET/POST /sessions`、`PATCH /sessions/:id`、`POST /sessions/:id/start` / `pause` / `end`（状态机流转，非法流转 409） |
 | 票种 | `GET/POST/PATCH/DELETE /ticket-types` |
 | 发码 | `POST /tickets/generate`、`GET /tickets`、`GET /tickets/export`、`POST /tickets/:id/revoke` |
 | 批次 | `GET /ticket-batches` |

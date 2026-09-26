@@ -122,7 +122,7 @@ export function PageHeader({
 
 /**
  * 轮询页面在「已有数据但最近一次刷新失败」时的提示条。
- * 概览页 5 秒一轮，偶发失败不该清空屏幕，只提示数据可能不是最新。
+ * 统计页签 5 秒一轮，偶发失败不该清空屏幕，只提示数据可能不是最新。
  */
 export function StaleDataAlert({ error, onRetry }: { error: Error; onRetry: () => void }) {
   return (

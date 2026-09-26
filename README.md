@@ -132,7 +132,7 @@ staff-vote/
 - **防锁死**：系统必须始终保留至少一个「已启用且拥有 `admins.manage`」的账号，
   停用/删除/降级最后一个这样的账号会被 409 拒绝 —— 否则没人能再管理权限。
 - 账号被停用或删除后，其**尚未过期的会话令牌立即失效**（鉴权每次请求查库，不是把权限写进令牌）。
-- 管理入口：后台「系统管理 → 账号与权限」(`/admin/admins`)，两个页签分别管账号与角色权限。
+- 管理入口：后台侧栏「账号与权限」(`/admin/admins`)，两个页签分别管账号与角色权限。
 
 新增一个危险操作时三处一起改：后端挂 `requirePermission`、前端用 `useAuth().can()` 门控、权限码加进目录并重跑 seed。
 
@@ -148,11 +148,11 @@ pnpm db:drift            # 退出码 0：实际库与 schema.prisma 无漂移
 > 后端测试跑在 `TEST_DATABASE_URL` 指向的独立测试库上，**不会污染开发库**。
 > 该库默认不创建；要跑测试时，在 `sql/00_roles_and_databases.sql` 里取消 `staff_test`
 > 的注释建库，并执行一次 `prisma migrate deploy`。
-> 未设置 `TEST_DATABASE_URL` 时：接口套件（vote / admin / permission-gate / rbac / revoke-bulk）
-> 会**跳过并打印提示**，单元套件（scoring / code / password）照常全绿；
-> 而端到端套件（`test/e2e.test.ts`）会**直接失败并报「缺少 TEST_DATABASE_URL」** ——
-> 这是有意的：它在导入 src 之前就要拦下，否则会连上开发库并清空业务表。
-> 因此没有测试库时 `pnpm -r test` 预期为「部分跳过 + 端到端失败」，这是环境状态而不是代码缺陷。
+> 未设置 `TEST_DATABASE_URL` 时：接口套件（admin / permission-gate / rbac / revoke-bulk /
+> sessions / auth-context）会**跳过并打印提示**，单元套件（scoring / code / password）照常全绿；
+> 而 `vote.test.ts` 与端到端套件（`test/e2e.test.ts`）会**直接失败并报「缺少 TEST_DATABASE_URL」** ——
+> 这是有意的：它们在导入 src 之前就要拦下，否则会连上开发库并清空业务表。
+> 因此没有测试库时 `pnpm -r test` 预期为「部分跳过 + 这两个文件失败」，这是环境状态而不是代码缺陷。
 
 ## 部署
 

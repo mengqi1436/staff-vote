@@ -105,7 +105,7 @@ async function seedDemo(cookie) {
   }
 }
 
-/** 发一批码并让其中几张"已使用"，好让概览与发码页有真实分布。 */
+/** 发一批码并让其中几张"已使用"，好让统计与发码页有真实分布。 */
 async function seedTickets(cookie) {
   const stats = await api('/admin/stats/overview', { cookie });
   if ((stats.body?.totals?.issued ?? 0) > 0) {
