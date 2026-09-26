@@ -339,11 +339,13 @@ describe('场次工作台', () => {
     await user.click(screen.getByRole('tab', { name: '部门' }));
     await waitFor(() => expect(screen.queryByText('各票种发放与使用')).toBeNull());
 
-    // 切回重新挂载并重新取数
+    // 切回重新挂载并重新取数：与切走前的调用次数比对增量，不写死绝对次数，
+    // 避免与 stats 的 5 秒轮询（慢环境下可能已多触发一次）竞争
+    const callsBeforeReturn = vi.mocked(adminApi.stats.overview).mock.calls.length;
     await user.click(screen.getByRole('tab', { name: '统计' }));
     expect(await screen.findByText('各票种发放与使用')).toBeInTheDocument();
     await waitFor(() =>
-      expect(vi.mocked(adminApi.stats.overview)).toHaveBeenCalledTimes(2),
+      expect(vi.mocked(adminApi.stats.overview).mock.calls.length).toBeGreaterThan(callsBeforeReturn),
     );
   }, 20_000);
 

@@ -225,7 +225,7 @@ staff-vote/
 ├─ apps/web/
 │  ├─ src/{main.tsx,App.tsx,theme.ts,lib/{api.ts,usePolling.ts}}
 │  ├─ src/pages/vote/{Gate,Sheet,Done}.tsx
-│  ├─ src/pages/admin/{Login,Dashboard,TicketTypes,Tickets,Departments,Employees,Criteria,Settings,Results,PrintSheet}.tsx
+│  ├─ src/pages/admin/{Login,Sessions,SessionWorkspace,TicketTypes,Tickets,Departments,Employees,Criteria,Settings,Results,PrintSheet}.tsx
 │  ├─ src/components/vote/ScoreTable.tsx
 │  └─ index.html / vite.config.ts
 └─ deploy/{nginx.conf,staff-vote-api.service,README.md}
