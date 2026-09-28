@@ -7,7 +7,8 @@ import { prisma } from '../src/db.js';
  * 由外键 ON DELETE SET NULL 自动置空，随后按职务顺序重新指派。
  *
  * 规则：
- *   - 每个部门生成 8–12 名职工，姓名取自常见姓名池（跨部门错开），工号全局唯一；
+ *   - 每个部门生成 8–12 名职工，姓名取自常见姓名池（跨部门错开）；
+ *   - 性别、年龄、职称为示例值，从索引推导，保证同批数据稳定可复现；
  *   - 个人问卷（person）的启用职务列按列顺序依次指派一名职工（「职务与姓名」完整可打印）；
  *     车间问卷的「得分」列不指派人。
  *
@@ -26,6 +27,9 @@ const NAME_POOL = [
 
 /** 车间问卷的得分列是评分口径不是人，不指派被评人。 */
 const NON_PERSON_COLUMN_NAMES = new Set(['得分']);
+
+/** 示例职称池（与姓名池一样按索引错开取用）。 */
+const TITLE_POOL = ['高级工程师', '工程师', '助理工程师', '技师', '高级技师', '政工师', '经济师'];
 
 async function main(): Promise<void> {
   const departments = await prisma.department.findMany({
@@ -48,8 +52,9 @@ async function main(): Promise<void> {
       departmentId: dept.id,
       sessionId: dept.sessionId,
       name: NAME_POOL[(deptIndex * 7 + i) % NAME_POOL.length] as string,
-      // 工号全局唯一：两位部门序号 + 三位部门内序号
-      employeeNo: `${String(deptIndex + 1).padStart(2, '0')}${String(i + 1).padStart(3, '0')}`,
+      gender: i % 2 === 0 ? '男' : '女',
+      age: 26 + ((deptIndex * 5 + i * 3) % 30),
+      title: TITLE_POOL[(deptIndex + i) % TITLE_POOL.length],
       sortOrder: i + 1,
     }));
     await prisma.employee.createMany({ data: rows });

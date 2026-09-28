@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Descriptions,
+  Dropdown,
   Form,
   Input,
   InputNumber,
@@ -17,9 +18,9 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
-import { ApiError, adminApi, type EmployeeDto, type ImportFeedback } from '../../lib/api.js';
+import { ApiError, adminApi, downloadFile, type EmployeeDto, type ImportFeedback } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { EMPTY_TEXT, describeError } from './lib.js';
@@ -33,7 +34,9 @@ import {
 
 interface EmployeeForm {
   name: string;
-  employeeNo: string;
+  gender: string | null;
+  age: number | null;
+  title: string | null;
   sortOrder: number;
 }
 
@@ -51,8 +54,8 @@ const IMPORT_ERROR_COLUMNS: TableColumnsType<{ row: number; message: string }> =
 /**
  * 职工名单（打分表的行，评议工作流第 2 步），按部门维护。
  *
- * 名单来源：后台手工维护 + Excel/CSV 导入（外部人事接口本期不对接）。
- * employeeNo 是将来对接外部接口时按 upsert 的键，可选但建议填写。
+ * 名单来源：后台手工维护 + Excel/CSV 导入；可整表导出 xlsx（与导入模板同列序，可再导入）。
+ * 信息字段只有「姓名、性别、年龄、职称」；导入按「部门 + 姓名」匹配同一个人。
  * 列约定、行号口径等说明（产品原则 4）用 Alert 保留在导入卡片内。
  */
 export function AdminEmployees() {
@@ -81,6 +84,7 @@ export function AdminEmployees() {
   const [saving, setSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportFeedback | null>(null);
   // 后端 403 的文案要能在界面读出来：页面内用 Alert 摆出来，其余错误仍走全局提示
   const [denied, setDenied] = useState<string | null>(null);
@@ -105,7 +109,7 @@ export function AdminEmployees() {
   const openCreate = (): void => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ name: '', employeeNo: '', sortOrder: (data?.length ?? 0) + 1 });
+    form.setFieldsValue({ name: '', gender: null, age: null, title: '', sortOrder: (data?.length ?? 0) + 1 });
     setModalOpen(true);
   };
 
@@ -113,7 +117,9 @@ export function AdminEmployees() {
     setEditing(row);
     form.setFieldsValue({
       name: row.name,
-      employeeNo: row.employeeNo ?? '',
+      gender: row.gender,
+      age: row.age,
+      title: row.title ?? '',
       sortOrder: row.sortOrder,
     });
     setModalOpen(true);
@@ -132,7 +138,9 @@ export function AdminEmployees() {
     }
     const payload = {
       name: values.name,
-      employeeNo: values.employeeNo ? values.employeeNo : null,
+      gender: values.gender ?? null,
+      age: values.age ?? null,
+      title: values.title ? values.title : null,
       sortOrder: values.sortOrder,
     };
     setSaving(true);
@@ -173,6 +181,37 @@ export function AdminEmployees() {
     }
   };
 
+  /** 下载导入模板：表头与列约定说明同口径；CSV 带 BOM，Excel 双击打开不乱码。 */
+  const downloadTemplate = (): void => {
+    const csv = '\uFEFF部门,姓名,性别,年龄,职称\n办公室,张三,男,35,高级工程师\n';
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = '职工名单导入模板.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  /** 下载 xlsx 版模板：后端用与名单导出同一套生成逻辑。 */
+  const handleTemplateXlsx = async (): Promise<void> => {
+    try {
+      await downloadFile(adminApi.employees.importTemplateUrl());
+    } catch (caught) {
+      handleFailure(caught, '模板下载失败，请重试');
+    }
+  };
+
+  const templateMenu = {
+    items: [
+      { key: 'xlsx', label: 'Excel 模板（.xlsx）' },
+      { key: 'csv', label: 'CSV 模板（.csv）' },
+    ],
+    onClick: ({ key }: { key: string }): void => {
+      if (key === 'csv') downloadTemplate();
+      else void handleTemplateXlsx();
+    },
+  };
+
   const handleImport = async (file: File): Promise<void> => {
     setImporting(true);
     try {
@@ -189,15 +228,30 @@ export function AdminEmployees() {
     }
   };
 
+  /** 导出当前部门的名单 xlsx（含部门列，导出件可直接再导入）。 */
+  const handleExport = async (): Promise<void> => {
+    setExporting(true);
+    try {
+      await downloadFile(adminApi.employees.exportUrl(departmentId));
+    } catch (caught) {
+      handleFailure(caught, '导出失败，请重试');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const columns: TableColumnsType<EmployeeDto> = [
-    { title: '姓名', dataIndex: 'name', width: 160 },
+    { title: '姓名', dataIndex: 'name', width: 140 },
+    { title: '性别', dataIndex: 'gender', width: 72, render: (value: string | null) => value ?? EMPTY_TEXT },
     {
-      title: '工号',
-      dataIndex: 'employeeNo',
-      width: 140,
+      title: '年龄',
+      dataIndex: 'age',
+      width: 72,
+      align: 'right',
       className: 'tabular',
-      render: (value: string | null) => value ?? EMPTY_TEXT,
+      render: (value: number | null) => value ?? EMPTY_TEXT,
     },
+    { title: '职称', dataIndex: 'title', width: 150, render: (value: string | null) => value ?? EMPTY_TEXT },
     {
       title: '排序',
       dataIndex: 'sortOrder',
@@ -247,7 +301,7 @@ export function AdminEmployees() {
             <span>
               <Popconfirm
                 title="从名单中移除该职工？"
-                description="删除即停用（软删除）：历史评分保留可读，可随时再启用。"
+                description="移除即停用：历史评分保留可查，可随时再启用。"
                 okText="移除"
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
@@ -315,7 +369,22 @@ export function AdminEmployees() {
       {error && !data ? <ErrorState error={error} onRetry={refresh} /> : null}
 
       {data ? (
-        <Card title="本部门名单" extra={`共 ${data.length} 人（含已停用 ${disabledCount} 人）`}>
+        <Card
+          title="本部门名单"
+          extra={
+            <Space size={12}>
+              <span>共 {data.length} 人（含已停用 {disabledCount} 人）</span>
+              <Button
+                icon={<DownloadOutlined />}
+                loading={exporting}
+                disabled={!departmentId}
+                onClick={() => void handleExport()}
+              >
+                导出 Excel
+              </Button>
+            </Space>
+          }
+        >
           {/* 名单口径（产品原则 4）：内容保留，形式改为 Alert */}
           <Alert
             type="info"
@@ -326,7 +395,7 @@ export function AdminEmployees() {
               <ul style={{ margin: 0, paddingLeft: 20 }}>
                 <li>排序数字小的排在打分表上方（行顺序）。</li>
                 <li>「停用」的职工不出现在投票入口的打分表，历史评分保留，可随时再启用。</li>
-                <li>工号是识别同一个人的键：导入时优先按工号匹配；留空的行按「部门 + 姓名」匹配。</li>
+                <li>导出只含启用职工；导出件与导入模板同列序，改完可直接再导入选人。</li>
               </ul>
             }
           />
@@ -354,19 +423,24 @@ export function AdminEmployees() {
         extra={
           // 主操作：无权限时不渲染导入入口
           canWrite ? (
-            <Upload
-              accept=".xlsx,.csv"
-              showUploadList={false}
-              disabled={importing}
-              beforeUpload={(file) => {
-                void handleImport(file);
-                return false; // 阻止 antd 自动上传，由 adminApi.employees.import 处理
-              }}
-            >
-              <Button icon={<UploadOutlined />} loading={importing}>
-                导入 Excel/CSV
-              </Button>
-            </Upload>
+            <Space>
+              <Dropdown menu={templateMenu}>
+                <Button icon={<DownloadOutlined />}>模板下载</Button>
+              </Dropdown>
+              <Upload
+                accept=".xlsx,.csv"
+                showUploadList={false}
+                disabled={importing}
+                beforeUpload={(file) => {
+                  void handleImport(file);
+                  return false; // 阻止 antd 自动上传，由 adminApi.employees.import 处理
+                }}
+              >
+                <Button icon={<UploadOutlined />} loading={importing}>
+                  导入 Excel/CSV
+                </Button>
+              </Upload>
+            </Space>
           ) : null
         }
       >
@@ -375,13 +449,13 @@ export function AdminEmployees() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          title="列顺序固定：部门,姓名,工号（可空）"
+          title="列顺序固定：部门,姓名,性别,年龄,职称（后三列可空）"
           description={
             <ul style={{ margin: 0, paddingLeft: 20 }}>
               <li>支持 .xlsx 与 .csv；首行可以是表头（首列为「部门」或 department 时按表头跳过）。</li>
               <li>第 1 列「部门」必填：后台不存在的部门名会按此名自动创建。</li>
               <li>第 2 列「姓名」必填：职工姓名，最多 64 字。</li>
-              <li>第 3 列「工号」可空：有工号按工号匹配；留空按「部门 + 姓名」匹配。</li>
+              <li>第 3～5 列「性别、年龄、职称」可空；同部门同姓名视为同一人，再次导入会更新这三个字段。</li>
               <li>单行失败不会中断整份文件：其余行照常写入，「失败」行不写入，逐行原因见下方明细表。</li>
               <li>「跳过」指整行为空的行：既不计入新增，也不算失败。</li>
               <li>失败明细里的行号是文件中的行号（从 1 起，含表头行）。</li>
@@ -465,8 +539,21 @@ export function AdminEmployees() {
           <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
             <Input placeholder="职工姓名" maxLength={64} />
           </Form.Item>
-          <Form.Item name="employeeNo" label="工号" extra="可选，用于将来对接外部人事接口时识别同一个人">
-            <Input placeholder="留空表示不填" maxLength={64} />
+          <Form.Item name="gender" label="性别">
+            <Select
+              allowClear
+              placeholder="选择性别"
+              options={[
+                { value: '男', label: '男' },
+                { value: '女', label: '女' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="age" label="年龄">
+            <InputNumber min={0} max={150} precision={0} placeholder="留空表示不填" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="title" label="职称">
+            <Input placeholder="如：高级工程师" maxLength={50} />
           </Form.Item>
           <Form.Item name="sortOrder" label="排序" extra="数字小的排在前面" style={{ marginBottom: 0 }}>
             <InputNumber min={0} precision={0} style={{ width: '100%' }} />
