@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
+  App as AntApp,
   Button,
   Card,
   Empty,
@@ -11,16 +12,14 @@ import {
   Select,
   Table,
   Tabs,
-  Tag,
   Tooltip,
   Typography,
   theme,
 } from 'antd';
-import { DownloadOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
 import {
   adminApi,
-  type TicketAssignment,
   type TicketBatchDto,
   type TicketDto,
   type TicketTypeDto,
@@ -28,7 +27,7 @@ import {
 import { usePolling } from '../../lib/usePolling.js';
 import { useAuth } from '../../lib/auth.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
-import { describeError, formatDateTime, splitByWeight } from './lib.js';
+import { describeError, formatDateTime } from './lib.js';
 import {
   ErrorState,
   LoadingState,
@@ -37,21 +36,9 @@ import {
   useNotify,
 } from './shared.js';
 
-interface GenerateForm {
-  ticketTypeId: string;
-  count: number;
-  /** 选配领码人（可选）：只对表单里选中的票种生效 */
-  assignees?: string[];
-}
+/** 「不限定（全部部门）」的哨兵值；不用空串——rc-select 对空 value 的选中语义不可靠。 */
+const ALL_DEPARTMENTS = '__ALL__';
 
-/** 状态不靠颜色单独表意：文字才是表意手段，Tag 颜色只是辅助。 */
-const STATUS_META: Record<TicketDto['status'], { text: string; color?: string }> = {
-  unused: { text: '未使用' },
-  used: { text: '已使用', color: 'success' },
-  revoked: { text: '已作废', color: 'error' },
-};
-
-type PlanRow = { id: string; count: number; type: TicketTypeDto | undefined };
 type CodePairRow = {
   key: number;
   left: { no: number; code: string };
@@ -62,8 +49,7 @@ type CodePairRow = {
  * 随机码发放与查询（评议工作流「发票与票种」组，第 5 步）。
  *
  * 一码一票：投票人凭码进入投票入口，提交后码即作废。
- * 发码支持两种方式：单票种指定数量，或按启用票种的权重占比一键拆分总数量
- * ——后者是常规操作（保证各票种票数结构与权重一致），因此单独做成一键入口。
+ * 发码按票种单独进行：选票种、填数量、一次一批，各票种数量自由掌握。
  *
  * 随机码是敏感材料：导出按钮旁边常驻提示，不默认全量下载。
  * 新生成的一批码在码表块上做一次 400ms 的浅底淡出（信息性动效：告诉管理员
@@ -77,21 +63,22 @@ export function AdminTickets() {
   const ticketTypes = usePolling(loadTicketTypes, 0);
   const enabledTypes = (ticketTypes.data ?? []).filter((type) => type.enabled);
 
-  const [status, setStatus] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
+  // 匿名边界（设计要求第 1 条「不记名投票」）：明细固定只拉未使用的码，
+  // 已使用/已作废的码不进入管理员视野 —— 能看到「哪个码已核销」就能反推投票到人。
   const loadTickets = useCallback(
     () =>
       adminApi.tickets.list({
         page,
         pageSize,
-        status: status || undefined,
+        status: 'unused',
         ticketTypeId: typeFilter || undefined,
         sessionId: sessionId ?? undefined,
       }),
-    [page, pageSize, status, typeFilter, sessionId],
+    [page, pageSize, typeFilter, sessionId],
   );
   const tickets = usePolling(loadTickets, 0);
 
@@ -114,18 +101,12 @@ export function AdminTickets() {
   const loadBatches = useCallback(() => adminApi.batches.list({ sessionId }), [sessionId]);
   const batches = usePolling(loadBatches, 0);
 
-  // 该场次职工名单：选配领码人的候选池（列表不按部门过滤——发码人自己按姓名找）
-  const loadEmployees = useCallback(
-    () => adminApi.employees.list(undefined, sessionId ?? undefined),
-    [sessionId],
-  );
-  const employees = usePolling(loadEmployees, 0);
-  const employeeOptions = (employees.data ?? []).map((item) => ({
-    value: item.id,
-    label: item.employeeNo ? `${item.name}（${item.employeeNo}）` : item.name,
-  }));
+  // 发码选项：本场次全部启用部门（发码绑定按「启用」口径，停用部门后端也会拒绝）
+  const loadDepartments = useCallback(() => adminApi.departments.list({ sessionId }), [sessionId]);
+  const departments = usePolling(loadDepartments, 0);
 
   const notify = useNotify();
+  const { modal } = AntApp.useApp();
   const { can } = useAuth();
   /** 发码与作废是两条独立权限：各管各的按钮，互不牵连。 */
   const canGenerate = can('tickets.generate');
@@ -133,17 +114,17 @@ export function AdminTickets() {
   /** 数量还没拿到前不显示「没有未使用码」，避免把加载中误报成没有。 */
   const unusedKnown = unusedTotal.data !== null;
   const unusedCount = unusedTotal.data?.total ?? 0;
-  const [form] = Form.useForm<GenerateForm>();
-  // 选配领码人只对表单里选中的票种生效：没选票种前先禁用多选框
-  const watchedTypeId = Form.useWatch('ticketTypeId', form);
+  /** 各票种本批发放数量（票种 id → 张数）；不填 = 该票种本批不发。 */
+  const [counts, setCounts] = useState<Record<string, number | undefined>>({});
+  /**
+   * 本批发码的评议部门：null = 未选（必选，防静默发出万能码）；
+   * '__ALL__' 哨兵 = 显式选择「不限定（全部部门）」，提交前还要过一次确认弹窗。
+   */
+  const [departmentId, setDepartmentId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generatedCodes, setGeneratedCodes] = useState<string[] | null>(null);
   /** 本批码表块的一次性浅底标记：挂载时亮起，下一帧熄灭，由 400ms 过渡淡出。 */
   const [freshCodes, setFreshCodes] = useState(false);
-
-  const [weightOpen, setWeightOpen] = useState(false);
-  const [weightTotal, setWeightTotal] = useState(100);
-  const [weightGenerating, setWeightGenerating] = useState(false);
 
   useEffect(() => {
     if (!generatedCodes || generatedCodes.length === 0) {
@@ -159,21 +140,6 @@ export function AdminTickets() {
     value: type.id,
     label: `${type.name}（${type.code}，权重 ${type.weightPercent}%）${type.enabled ? '' : ' · 已停用'}`,
   }));
-  // 发码下拉只列启用票种：直接从 enabledTypes 派生，不对 typeOptions 做 filter+some（O(n²)）
-  const enabledTypeOptions = enabledTypes.map((type) => ({
-    value: type.id,
-    label: `${type.name}（${type.code}，权重 ${type.weightPercent}%）`,
-  }));
-
-  const weightPlan = splitByWeight(
-    weightTotal,
-    enabledTypes.map((type) => ({ id: type.id, weightPercent: type.weightPercent })),
-  );
-  const planRows: PlanRow[] = weightPlan.map((row) => ({
-    id: row.id,
-    count: row.count,
-    type: enabledTypes.find((type) => type.id === row.id),
-  }));
 
   /** 本次生成的码按两栏排布，便于打印后逐行核对。 */
   const codes = generatedCodes ?? [];
@@ -184,57 +150,40 @@ export function AdminTickets() {
     right: { no: index + codesHalf + 1, code: codes[index + codesHalf] ?? '' },
   }));
 
-  const handleGenerate = async (): Promise<void> => {
-    let values: GenerateForm;
-    try {
-      values = await form.validateFields();
-    } catch {
+  /** 评议部门选项：显式「不限定」哨兵 + 本场次启用部门（选中「不限定」提交需确认）。 */
+  const departmentOptions = [
+    { value: ALL_DEPARTMENTS, label: '不限定（全部部门）' },
+    ...(departments.data ?? [])
+      .filter((dept) => dept.enabled)
+      .map((dept) => ({ value: dept.id, label: dept.name })),
+  ];
+
+  /** 一次生成所有填了数量的票种；逐票种调用，中途失败时已生成的码照样交给管理员。 */
+  const runGenerate = async (deptId: string | undefined): Promise<void> => {
+    const rows = enabledTypes
+      .map((type) => ({ type, count: counts[type.id] ?? 0 }))
+      .filter((row) => row.count > 0);
+    if (!rows.length) {
+      notify.error('请先在要发放的票种行里填写数量');
       return;
     }
     setGenerating(true);
-    try {
-      // 选配了领码人时按契约带 assignments：生成时绑定领码人（仅对本次选中的票种生效）
-      const assignments: TicketAssignment[] | undefined =
-        values.assignees && values.assignees.length > 0
-          ? [{ ticketTypeId: values.ticketTypeId, employeeIds: values.assignees }]
-          : undefined;
-      const result = await adminApi.tickets.generate(values.ticketTypeId, values.count, {
-        sessionId: sessionId ?? undefined,
-        assignments,
-      });
-      setGeneratedCodes(result.codes);
-      notify.success(`已生成 ${result.count} 个随机码`);
-      tickets.refresh();
-      batches.refresh();
-    } catch (caught) {
-      notify.error(describeError(caught));
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const handleGenerateByWeight = async (): Promise<void> => {
-    const rows = planRows.filter((row) => row.count > 0);
-    if (!rows.length) {
-      notify.error('没有可发放的数量，请先检查票种权重配置');
-      return;
-    }
-    setWeightGenerating(true);
     const made: string[] = [];
     try {
       for (const row of rows) {
-        const result = await adminApi.tickets.generate(row.id, row.count, {
+        const result = await adminApi.tickets.generate(row.type.id, row.count, {
           sessionId: sessionId ?? undefined,
+          departmentId: deptId,
         });
         made.push(...result.codes);
       }
       setGeneratedCodes(made);
-      setWeightOpen(false);
-      notify.success(`已按权重生成 ${made.length} 个随机码`);
+      setCounts({});
+      setDepartmentId(null);
+      notify.success(`已生成 ${made.length} 个随机码`);
       tickets.refresh();
       batches.refresh();
     } catch (caught) {
-      // 逐票种调用，可能前面几个票种已经成功了：把已生成的码照样交给管理员，不能丢
       notify.error(`${describeError(caught)}${made.length ? `（已成功生成 ${made.length} 个，请先导出）` : ''}`);
       if (made.length) {
         setGeneratedCodes(made);
@@ -242,8 +191,30 @@ export function AdminTickets() {
         batches.refresh();
       }
     } finally {
-      setWeightGenerating(false);
+      setGenerating(false);
     }
+  };
+
+  /**
+   * 发码入口：先过评议部门这道必选闸（防静默发出万能码）。
+   * 「不限定」是显式选项，选中提交时再用确认弹窗二次警示，确认后才不带 departmentId。
+   */
+  const handleGenerate = (): void => {
+    if (departmentId === null) {
+      notify.error('请先选择本批随机码可评议的部门');
+      return;
+    }
+    if (departmentId === ALL_DEPARTMENTS) {
+      modal.confirm({
+        title: '不限定部门发码',
+        content: '不限定部门发出的随机码可评议全部部门，确认继续？',
+        okText: '继续生成',
+        cancelText: '取消',
+        onOk: () => void runGenerate(undefined),
+      });
+      return;
+    }
+    void runGenerate(departmentId);
   };
 
   const handleRevoke = async (row: TicketDto): Promise<void> => {
@@ -252,6 +223,7 @@ export function AdminTickets() {
       notify.success('该随机码已作废');
       tickets.refresh();
       unusedTotal.refresh();
+      ticketTypes.refresh();
     } catch (caught) {
       notify.error(describeError(caught));
     }
@@ -309,6 +281,13 @@ export function AdminTickets() {
     }
   };
 
+  /**
+   * 明细列：只描述「发放对账」需要的信息（码、票种、生成时间、作废操作）。
+   *
+   * 刻意没有状态列与使用时间列：列表本身只含未使用的码，而单码核销状态的任何
+   * 展示都会破坏不记名投票（设计要求第 1 条）—— 使用进度只在「票种使用统计」
+   * 里以聚合计数披露。同理不提供行内「导出答卷」：按码取答卷等于按码查投票。
+   */
   const ticketColumns: TableColumnsType<TicketDto> = [
     {
       title: '随机码',
@@ -323,34 +302,18 @@ export function AdminTickets() {
       render: (_: unknown, row: TicketDto) => `${row.ticketType.name}（${row.ticketType.code}）`,
     },
     {
-      title: '状态',
-      dataIndex: 'status',
-      width: 110,
-      render: (value: TicketDto['status']) => (
-        <Tag color={STATUS_META[value].color}>{STATUS_META[value].text}</Tag>
-      ),
-    },
-    {
       title: '生成时间',
       dataIndex: 'createdAt',
       width: 150,
       render: (value: string) => <span className="tabular">{formatDateTime(value)}</span>,
     },
     {
-      title: '使用时间',
-      dataIndex: 'usedAt',
-      width: 150,
-      render: (value: string | null) => <span className="tabular">{formatDateTime(value)}</span>,
-    },
-    {
       title: '操作',
       key: 'actions',
-      width: 88,
+      width: 90,
       fixed: 'right',
       render: (_: unknown, row: TicketDto) =>
-        row.status !== 'unused' ? (
-          <Typography.Text type="secondary">-</Typography.Text>
-        ) : canRevoke ? (
+        canRevoke ? (
           <Popconfirm
             title="作废该随机码？"
             description="作废后无法再用于登录投票。"
@@ -374,6 +337,58 @@ export function AdminTickets() {
     },
   ];
 
+  /**
+   * 票种使用统计列：使用情况只到票种级聚合（已发放/已使用/未使用/已作废），
+   * 这是管理员能看到的唯一核销进度口径。
+   */
+  const typeStatsColumns: TableColumnsType<TicketTypeDto> = [
+    {
+      title: '票种',
+      key: 'name',
+      render: (_: unknown, row: TicketTypeDto) => `${row.name}（${row.code}）`,
+    },
+    {
+      title: '已发放',
+      key: 'issued',
+      width: 110,
+      align: 'right',
+      render: (_: unknown, row: TicketTypeDto) => (
+        <span className="tabular">{row.issuedCount ?? '-'}</span>
+      ),
+    },
+    {
+      title: '已使用',
+      key: 'used',
+      width: 110,
+      align: 'right',
+      render: (_: unknown, row: TicketTypeDto) => (
+        <span className="tabular">{row.usedCount ?? '-'}</span>
+      ),
+    },
+    {
+      title: '未使用',
+      key: 'unused',
+      width: 110,
+      align: 'right',
+      render: (_: unknown, row: TicketTypeDto) => (
+        <span className="tabular">{row.unusedCount ?? '-'}</span>
+      ),
+    },
+    {
+      title: '已作废',
+      key: 'revoked',
+      width: 110,
+      align: 'right',
+      render: (_: unknown, row: TicketTypeDto) => {
+        const revoked =
+          row.issuedCount !== undefined && row.usedCount !== undefined && row.unusedCount !== undefined
+            ? row.issuedCount - row.usedCount - row.unusedCount
+            : null;
+        return <span className="tabular">{revoked ?? '-'}</span>;
+      },
+    },
+  ];
+
   const batchColumns: TableColumnsType<TicketBatchDto> = [
     {
       title: '批次号',
@@ -388,6 +403,13 @@ export function AdminTickets() {
       render: (_: unknown, row: TicketBatchDto) => `${row.ticketType.name}（${row.ticketType.code}）`,
     },
     {
+      title: '评议部门',
+      key: 'department',
+      width: 140,
+      render: (_: unknown, row: TicketBatchDto) =>
+        row.departmentName ?? <Typography.Text type="secondary">全部部门</Typography.Text>,
+    },
+    {
       title: '数量',
       dataIndex: 'count',
       width: 96,
@@ -400,30 +422,6 @@ export function AdminTickets() {
       dataIndex: 'createdAt',
       width: 150,
       render: (value: string) => <span className="tabular">{formatDateTime(value)}</span>,
-    },
-  ];
-
-  const planColumns: TableColumnsType<PlanRow> = [
-    {
-      title: '票种',
-      key: 'name',
-      render: (_: unknown, row: PlanRow) =>
-        row.type ? `${row.type.name}（${row.type.code}）` : row.id,
-    },
-    {
-      title: '权重',
-      key: 'weight',
-      width: 84,
-      align: 'right',
-      render: (_: unknown, row: PlanRow) =>
-        row.type ? <span className="tabular">{row.type.weightPercent}%</span> : '-',
-    },
-    {
-      title: '将发放',
-      dataIndex: 'count',
-      width: 96,
-      align: 'right',
-      render: (value: number) => <span className="tabular">{value} 张</span>,
     },
   ];
 
@@ -469,85 +467,126 @@ export function AdminTickets() {
           style={{ marginBottom: 16 }}
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
-              <li>单票种单次最多发放 2000 个，超过请分多次发放，或改用「按权重一键发码」按权重拆分。</li>
-              <li>可选「选配领码人」：按票别勾选本场次职工后，生成的随机码绑定领码人，「统计」页签可见已投票人员名单。</li>
-              <li>生成的码即刻生效，可在下方随机码明细中按状态核对；请及时导出或打印发放给投票人。</li>
-              <li>一码一票：一个码只能登录一次、只评一个部门，提交即核销，不可修改。</li>
+              <li>几种启用的票种就有几行：在要发放的票种行里填数量，一次生成；留空的行不发。</li>
+              <li>评议部门必选：本批随机码只能评议所选部门；如确需不限部门，选择「不限定（全部部门）」并确认。</li>
+              <li>生成的码即刻生效，可在下方「未使用随机码」中核对；请及时导出或打印发放给投票人。</li>
+              <li>一码一票：一个码只能登录一次、只评一个部门，提交即核销，不可修改；码只能在所属场次使用。</li>
             </ul>
           }
         />
-        <Form<GenerateForm> form={form} layout="inline" onFinish={() => void handleGenerate()}>
-          <Form.Item name="ticketTypeId" rules={[{ required: true, message: '请选择票种' }]}>
-            <Select
-              style={{ width: 300 }}
-              placeholder="选择票种"
-              aria-label="选择票种"
-              options={enabledTypeOptions}
-              loading={ticketTypes.loading}
-            />
-          </Form.Item>
-          <Form.Item name="count" rules={[{ required: true, message: '请输入数量' }]} initialValue={100}>
-            <InputNumber min={1} max={2000} precision={0} placeholder="数量" style={{ width: 140 }} />
-          </Form.Item>
+        <Table<TicketTypeDto>
+          rowKey="id"
+          size="small"
+          loading={ticketTypes.loading}
+          dataSource={enabledTypes}
+          pagination={false}
+          columns={[
+            {
+              title: '票种',
+              key: 'name',
+              render: (_: unknown, row: TicketTypeDto) =>
+                `${row.name}（${row.code} · 权重 ${row.weightPercent}%）`,
+            },
+            {
+              title: '本批发放数量',
+              width: 200,
+              align: 'right',
+              render: (_: unknown, row: TicketTypeDto) => (
+                <InputNumber
+                  min={0}
+                  max={2000}
+                  precision={0}
+                  value={counts[row.id]}
+                  placeholder="不填则不发"
+                  aria-label={`「${row.name}」发放数量`}
+                  onChange={(value) => setCounts((prev) => ({ ...prev, [row.id]: value ?? undefined }))}
+                  style={{ width: 140 }}
+                />
+              ),
+            },
+          ]}
+          locale={{ emptyText: '没有启用的票种，请先到「票种权重」页签配置' }}
+        />
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 12,
+            marginBottom: 12,
+          }}
+        >
+          <Typography.Text>评议部门</Typography.Text>
+          <Select
+            style={{ width: 260 }}
+            placeholder="请选择本批可评议的部门"
+            aria-label="评议部门"
+            value={departmentId ?? undefined}
+            loading={departments.loading}
+            onChange={(value) => setDepartmentId(value)}
+            options={departmentOptions}
+            notFoundContent={departments.loading ? '加载中…' : '本场次还没有启用部门'}
+          />
+        </div>
+        <div style={{ marginTop: 12 }}>
           {canGenerate ? (
-            <Form.Item
-              name="assignees"
-              label="选配领码人"
-              extra="可选。按票别勾选本场次职工后，生成的随机码将绑定领码人；不勾选即匿名发码。"
-            >
-              <Select
-                mode="multiple"
-                style={{ minWidth: 320 }}
-                placeholder="按票别选配职工（可选）"
-                aria-label="选配领码人"
-                options={employeeOptions}
-                disabled={!watchedTypeId}
-                loading={employees.loading}
-                maxTagCount="responsive"
-                allowClear
-              />
-            </Form.Item>
-          ) : null}
-          {canGenerate ? (
-            <>
-              <Form.Item>
-                <Button type="primary" htmlType="submit" loading={generating}>
-                  生成随机码
-                </Button>
-              </Form.Item>
-              <Form.Item>
-                <Button
-                  icon={<ThunderboltOutlined />}
-                  disabled={!enabledTypes.length}
-                  onClick={() => setWeightOpen(true)}
-                >
-                  按权重一键发码
-                </Button>
-              </Form.Item>
-            </>
+            <Button type="primary" loading={generating} onClick={handleGenerate}>
+              生成随机码
+            </Button>
           ) : null}
           {canRevoke ? (
-            <Form.Item>
-              <Button
-                danger
-                loading={bulkPreparing}
-                disabled={!unusedKnown || unusedCount === 0}
-                onClick={() => void openBulkConfirm()}
-              >
-                一键作废未使用码
-              </Button>
-            </Form.Item>
+            <Button
+              danger
+              loading={bulkPreparing}
+              disabled={!unusedKnown || unusedCount === 0}
+              onClick={() => void openBulkConfirm()}
+              style={{ marginLeft: 8 }}
+            >
+              一键作废未使用码
+            </Button>
           ) : null}
           {canRevoke && unusedKnown && unusedCount === 0 ? (
-            <Form.Item>
-              <Typography.Text type="secondary">当前筛选下没有未使用码</Typography.Text>
-            </Form.Item>
+            <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+              当前筛选下没有未使用码
+            </Typography.Text>
           ) : null}
-        </Form>
+        </div>
       </Card>
 
       <Card
-        title="随机码明细"
+        title="票种使用统计"
+        style={{ marginBottom: 16 }}
+        extra={
+          <Typography.Text type="secondary">单位：张</Typography.Text>
+        }
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          description={
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li>
+                匿名原则（不记名投票）：单个随机码是否已核销不可查询、不可导出，使用进度只提供票种级汇总。
+              </li>
+              <li>口径：已发放＝已生成的随机码数；已使用＝已提交投票并核销的码数；已作废＝人工作废的码数；未使用＝已发放 − 已使用 − 已作废。</li>
+            </ul>
+          }
+        />
+        <Table<TicketTypeDto>
+          rowKey="id"
+          size="small"
+          loading={ticketTypes.loading}
+          columns={typeStatsColumns}
+          dataSource={ticketTypes.data ?? []}
+          pagination={false}
+          locale={{ emptyText: '还没有票种，请先到「票种权重」页签配置' }}
+        />
+      </Card>
+
+      <Card
+        title="未使用随机码"
         extra={
           <>
             <Button
@@ -561,12 +600,12 @@ export function AdminTickets() {
             <Button
               icon={<DownloadOutlined />}
               href={adminApi.tickets.exportUrl({
-                status: status || undefined,
+                status: 'unused',
                 ticketTypeId: typeFilter || undefined,
                 sessionId: sessionId ?? undefined,
               })}
             >
-              导出当前筛选
+              导出未使用码
             </Button>
           </>
         }
@@ -578,12 +617,10 @@ export function AdminTickets() {
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               <li>
-                状态口径：未使用＝可登录投票；已使用＝已提交并核销，不可恢复；已作废＝人工作废，不可再登录。
+                本表只显示未使用的码，用于发放对账；已使用与已作废的码不再列出，单码核销状态不可查询。
               </li>
-              <li>一码一票由后端原子核销，前端提示只是提示；已使用与已作废的码都不可恢复。</li>
-              <li>
-                数据来源：随机码列表接口，按状态与票种筛选后分页返回；作废与发码后自动刷新。
-              </li>
+              <li>使用进度只提供票种级汇总，见上方「票种使用统计」——这是匿名投票的硬边界。</li>
+              <li>数据来源：未使用随机码列表，按票种筛选后分页显示；发码与作废后自动刷新。</li>
               <li>
                 导出的 Excel 含完整随机码，属于敏感材料：仅在有发放需要时导出，不要默认全量下载或长期留存。
               </li>
@@ -601,21 +638,6 @@ export function AdminTickets() {
           }}
         >
           <Typography.Text type="secondary">筛选</Typography.Text>
-          <Select
-            style={{ width: 140 }}
-            value={status}
-            aria-label="按状态筛选"
-            onChange={(value) => {
-              setStatus(value);
-              setPage(1);
-            }}
-            options={[
-              { value: '', label: '全部状态' },
-              { value: 'unused', label: '未使用' },
-              { value: 'used', label: '已使用' },
-              { value: 'revoked', label: '已作废' },
-            ]}
-          />
           <Select
             style={{ width: 200 }}
             value={typeFilter}
@@ -652,9 +674,9 @@ export function AdminTickets() {
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
-                  tickets.data && tickets.data.total === 0 && !status && !typeFilter
+                  tickets.data && tickets.data.total === 0 && !typeFilter
                     ? '还没有发放任何随机码，请在上方批量发码'
-                    : '当前筛选条件下没有随机码'
+                    : '当前筛选条件下没有未使用的随机码'
                 }
               />
             ),
@@ -675,10 +697,7 @@ export function AdminTickets() {
         style={{ marginBottom: 16 }}
         description={
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            <li>
-              每调用一次发码接口产生一个批次；「按权重一键发码」会为每个票种各生成一个批次，
-              因此一次操作可能出现多条记录。
-            </li>
+            <li>每发放一次随机码产生一个批次，一次操作对应一条批次记录。</li>
             <li>数量为该批次生成的随机码数；操作人取自当前登录管理员，用于审计留痕。</li>
             <li>批次号此处显示前 8 位；发码总数与明细以「随机码」页签为准。</li>
           </ul>
@@ -708,7 +727,7 @@ export function AdminTickets() {
     <>
       <PageHeader
         title="随机码发放"
-        description="一码一票：投票人凭码进入投票入口，提交后该码即作废。可作废未使用的码，但已使用与已作废的码不可恢复。"
+        description="一码一票：投票人凭码进入投票入口，提交后该码即核销。匿名原则下单码使用状态不可查询，使用进度只提供票种级统计；未使用的码可作废，已核销的码不可恢复。"
       />
 
       {ticketTypes.error && !ticketTypes.data ? (
@@ -732,58 +751,6 @@ export function AdminTickets() {
         />
       )}
 
-
-      <Modal
-        title="按权重一键发码"
-        open={weightOpen}
-        onCancel={() => setWeightOpen(false)}
-        onOk={() => void handleGenerateByWeight()}
-        confirmLoading={weightGenerating}
-        okText="开始发放"
-        cancelText="取消"
-      >
-        <Typography.Paragraph type="secondary">
-          按启用票种的权重占比拆分总数量，各票种数量之和恰好等于总数（余数给小数部分最大的票种）。
-        </Typography.Paragraph>
-        <Form layout="vertical">
-          <Form.Item label="总发放数量">
-            <InputNumber
-              min={1}
-              max={2000}
-              precision={0}
-              value={weightTotal}
-              onChange={(value) => setWeightTotal(value ?? 0)}
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
-        </Form>
-        <Table<PlanRow>
-          rowKey="id"
-          size="small"
-          columns={planColumns}
-          dataSource={planRows}
-          pagination={false}
-          locale={{
-            emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="没有启用的票种，请先到「票种与权重」页配置"
-              />
-            ),
-          }}
-        />
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginTop: 16 }}
-          description={
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              <li>单次每个票种最多 2000 个；总数超过上限时会被占满上限的票种截断，请分批发放。</li>
-              <li>仅启用的票种参与分配，停用票种不计入；票种权重合计为 0 时不会分配出任何码。</li>
-            </ul>
-          }
-        />
-      </Modal>
 
       <Modal
         title="一键作废未使用码"

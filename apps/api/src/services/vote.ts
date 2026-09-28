@@ -166,8 +166,14 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
   const status = evaluateVoteWindow(ticket.session);
   if (!status.open) throw ApiError.forbidden(VOTE_CLOSED_MESSAGE, 'VOTE_CLOSED');
 
+  // 部门绑定：绑定码只返回被绑定的部门（停用则自然查不出 → 空数组，Gate 有零部门兜底）；
+  // NULL = 不限定，保持「万能码」语义返回全部启用部门（存量码兼容）。
   const departments = await prisma.department.findMany({
-    where: { enabled: true, sessionId: ticket.sessionId },
+    where: {
+      enabled: true,
+      sessionId: ticket.sessionId,
+      ...(ticket.departmentId ? { id: ticket.departmentId } : {}),
+    },
     // sortOrder 相同时用 id 兜底，保证顺序稳定：管理端调整排序时表格不应跳动。
     orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     select: { id: true, name: true },
@@ -193,16 +199,30 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
 /**
  * 取某部门的打分表骨架。
  * 停用部门与不存在的部门同样返回 404：软删除的数据对外就当不存在。
+ * 部门必须属于票所在场次：跨场次的 departmentId 在查询条件里直接落空（404），
+ * 一个码只能看到并使用自己场次的打分表。
  *
  * 表形与参考表一致：行 = 评价项点（含描述），列 = 被评列（职务 / 得分），
  * 外加表头的附件号、标题与表尾填写说明。
  *
- * @param departmentId 部门 ID
+ * @param ticketId 投票令牌载荷里的票据 ID（用于锁定场次）
+ * @param departmentId 被评部门
  * @returns 部门、问卷表头文案、项点行与被评列，均只含启用项并按 sortOrder 升序
  */
-export async function getVoteSheet(departmentId: string): Promise<VoteSheetResult> {
+export async function getVoteSheet(ticketId: string, departmentId: string): Promise<VoteSheetResult> {
+  const ticket = await prisma.ticket.findUnique({
+    where: { id: ticketId },
+    select: { sessionId: true, departmentId: true },
+  });
+  if (!ticket) throw ApiError.conflict('该票据已使用，不能重复提交', 'TICKET_USED');
+
+  // 部门绑定强校验：绑定码只能取绑定部门的打分表。
+  if (ticket.departmentId && ticket.departmentId !== departmentId) {
+    throw ApiError.forbidden('该随机码仅限评议指定部门', 'TICKET_DEPARTMENT_MISMATCH');
+  }
+
   const department = await prisma.department.findFirst({
-    where: { id: departmentId, enabled: true },
+    where: { id: departmentId, enabled: true, sessionId: ticket.sessionId },
     select: {
       id: true,
       name: true,
@@ -266,6 +286,7 @@ export async function submitVote(
     where: { id: ticket.sub },
     select: {
       sessionId: true,
+      departmentId: true,
       session: { select: { status: true, opensAt: true, closesAt: true } },
     },
   });
@@ -273,6 +294,11 @@ export async function submitVote(
   if (!ticketRow) throw ApiError.conflict('该票据已使用，不能重复提交', 'TICKET_USED');
   const status = evaluateVoteWindow(ticketRow.session);
   if (!status.open) throw ApiError.forbidden(VOTE_CLOSED_MESSAGE, 'VOTE_CLOSED');
+
+  // 部门绑定强校验：绑定码只能提交到绑定部门，非绑定部门一律 403。
+  if (ticketRow.departmentId && ticketRow.departmentId !== departmentId) {
+    throw ApiError.forbidden('该随机码仅限评议指定部门', 'TICKET_DEPARTMENT_MISMATCH');
+  }
 
   // 部门必须属于票所在场次：跨场次提交在查询条件里直接落空（404）。
   const department = await prisma.department.findFirst({
@@ -356,6 +382,19 @@ export async function submitVote(
         submittedAt,
       },
       select: { id: true },
+    });
+
+    // 按随机码导出答卷的受控映射，仅 results.export 权限的导出路径读取，
+    // 评分与统计链路不使用本表（score_sheets 本身仍不含任何票据标识）。
+    // ON CONFLICT DO NOTHING：正常流程一码只提交成功一次，此处的幂等只是兜底，
+    // 同一码的第二次提交会在上面的核销步骤就被拒绝、整个事务回滚。
+    await tx.sheetTicketMap.createMany({
+      data: {
+        ticketId: ticket.sub,
+        sheetId: sheet.id,
+        sessionId: ticketRow.sessionId,
+      },
+      skipDuplicates: true,
     });
 
     await tx.scoreItem.createMany({

@@ -10,7 +10,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
-  TICKET_STATUS_LABELS,
   generateTickets,
   listTicketBatches,
   listTickets,
@@ -18,26 +17,28 @@ import {
   resolveSessionId,
   revokeTicket,
   revokeTicketsBulk,
-  type TicketStatusValue,
 } from '../../services/admin.js';
-import { buildTicketsWorkbook, fileStamp, sendWorkbook, workbookToBuffer } from '../../lib/xlsx.js';
+import { loadTicketAnswerExport } from '../../services/results.js';
+import {
+  buildAnswerSheetWorkbook,
+  buildTicketsWorkbook,
+  fileStamp,
+  sendWorkbook,
+  workbookToBuffer,
+} from '../../lib/xlsx.js';
 import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
 
-// 从 LABELS 派生而非再写一遍字面量：状态集合的单一真源在 Prisma 生成的枚举，
-// LABELS 的 Record<TicketStatusValue, string> 类型保证 keys 恰好覆盖全部状态。
-const TICKET_STATUSES = Object.keys(TICKET_STATUS_LABELS) as [TicketStatusValue, ...TicketStatusValue[]];
-
+// 匿名边界（设计要求第 1 条「不记名投票」）：列表与导出都不接受 status 条件 ——
+// 查询一律由服务层固定为只出「未使用」的码，管理员无法按「已使用」筛选来反推谁投了票。
 const ListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(20),
-  status: z.enum(TICKET_STATUSES).optional(),
   ticketTypeId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
 });
 
 const ExportQuerySchema = z.object({
-  status: z.enum(TICKET_STATUSES).optional(),
   ticketTypeId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
 });
@@ -46,15 +47,8 @@ const GenerateSchema = z.object({
   sessionId: z.string().min(1).optional(),
   ticketTypeId: z.string().min(1),
   count: z.number().int().min(1).max(2000),
-  /** 可选的领码人指定：按序写入 assigneeId（发放留痕）。 */
-  assignments: z
-    .array(
-      z.object({
-        ticketTypeId: z.string().min(1),
-        employeeIds: z.array(z.string().min(1)).min(1),
-      }),
-    )
-    .optional(),
+  /** 评议部门绑定；缺省 = 不限定（持码人可评全部部门）。 */
+  departmentId: z.string().uuid().optional(),
 });
 
 /** 一键作废的范围：场次必传（误作废历史场次的有效票无法挽回）；
@@ -76,20 +70,17 @@ ticketsRouter.get('/', async (req, res) => {
   res.json(await listTickets({ ...query, sessionId: await resolveSessionId(query.sessionId) }));
 });
 
-/** 导出随机码清单（列：随机码、票种、状态、核销时间、批次、创建时间）。 */
+/** 导出随机码清单（发放对账材料，仅未使用的码；列：随机码、票种、批次、创建时间）。 */
 ticketsRouter.get('/export', async (req, res) => {
   const filter = ExportQuerySchema.parse(req.query);
   const rows = await listTicketsForExport({
     ...filter,
     sessionId: await resolveSessionId(filter.sessionId),
   });
-  // 状态用中文，导出件是给人看的，不是给程序解析的。
   const workbook = buildTicketsWorkbook(
     rows.map((row) => ({
       code: row.code,
       ticketType: `${row.ticketType.code} ${row.ticketType.name}`.trim(),
-      status: TICKET_STATUS_LABELS[row.status],
-      usedAt: row.usedAt,
       batchId: row.batchId,
       createdAt: row.createdAt,
     })),
@@ -98,10 +89,10 @@ ticketsRouter.get('/export', async (req, res) => {
 });
 
 ticketsRouter.post('/generate', requirePermission('tickets.generate'), async (req, res) => {
-  const { ticketTypeId, count, sessionId, assignments } = GenerateSchema.parse(req.body);
+  const { ticketTypeId, count, sessionId, departmentId } = GenerateSchema.parse(req.body);
   const result = await generateTickets(ticketTypeId, count, operatorOf(req), {
     sessionId,
-    assignments,
+    departmentId,
   });
   res.json(result);
 });
@@ -119,6 +110,23 @@ ticketsRouter.post('/revoke-bulk', requirePermission('tickets.revoke'), async (r
 ticketsRouter.post('/:id/revoke', requirePermission('tickets.revoke'), async (req, res) => {
   const { id } = IdParamSchema.parse(req.params);
   res.json(await revokeTicket(id, operatorOf(req)));
+});
+
+/**
+ * 按随机码导出答卷（附件8 形态，results.export 门内）。
+ *
+ * 这是 sheet_ticket_map 受控映射的两个读取方之一（另一个是整场导出的答卷汇总）：
+ * 评分与统计链路不 join 该映射，匿名边界不变 —— 这里是管理员凭 results.export
+ * 权限做的受控导出，而非投票数据的常规读取路径。
+ */
+ticketsRouter.get('/:id/export.xlsx', requirePermission('results.export'), async (req, res) => {
+  const { id } = IdParamSchema.parse(req.params);
+  const answer = await loadTicketAnswerExport(id);
+  sendWorkbook(
+    res,
+    `答卷-${answer.departmentName}-${fileStamp(answer.submittedAt)}.xlsx`,
+    await workbookToBuffer(buildAnswerSheetWorkbook(answer)),
+  );
 });
 
 export const ticketBatchesRouter: Router = Router();

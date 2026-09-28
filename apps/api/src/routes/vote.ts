@@ -109,11 +109,11 @@ voteRouter.post('/session', voteLoginLimiter, async (req, res) => {
   res.json(await createVoteSession(normalizeCode(code)));
 });
 
-/** 取某部门的打分表骨架（行 = 职工，列 = 项点）。 */
+/** 取某部门的打分表骨架（行 = 职工，列 = 项点）；场次由票锁定，跨场次一律 404。 */
 voteRouter.get('/sheet', voteAuth, async (req, res) => {
   const departmentId = typeof req.query.departmentId === 'string' ? req.query.departmentId.trim() : '';
   if (!departmentId) throw ApiError.badRequest('缺少 departmentId');
-  res.json(await getVoteSheet(departmentId));
+  res.json(await getVoteSheet(req.voteTicket!.sub, departmentId));
 });
 
 /** 提交打分并核销该码，一码一票。 */
