@@ -150,12 +150,10 @@ async function createDepartment(name: string): Promise<{ id: string; name: strin
   return res.body as { id: string; name: string };
 }
 
-async function createEmployee(departmentId: string, name: string, employeeNo?: string) {
-  const res = await agent
-    .post('/api/admin/employees')
-    .send({ departmentId, name, employeeNo: employeeNo ?? null });
+async function createEmployee(departmentId: string, name: string) {
+  const res = await agent.post('/api/admin/employees').send({ departmentId, name });
   expect(res.status).toBe(200);
-  return res.body as { id: string; name: string; employeeNo: string | null };
+  return res.body as { id: string; name: string };
 }
 
 async function createCriterion(
@@ -688,12 +686,19 @@ describeDb('管理端接口', () => {
       data: { status: 'used', usedAt: new Date() },
     });
 
-    const used = await agent.get(`/api/admin/tickets?status=used&ticketTypeId=${typeA.id}`);
-    expect(used.body.total).toBe(1);
-    expect(used.body.items[0].usedAt).toBeTruthy();
+    // 匿名边界（设计要求第 1 条「不记名投票」）：列表固定只返回未使用的码，
+    // status 条件被忽略 —— 管理员无法按「已使用」筛选来反推哪些码已核销。
+    const afterUse = await agent.get(`/api/admin/tickets?ticketTypeId=${typeA.id}`);
+    expect(afterUse.body.total).toBe(2);
 
-    const invalid = await agent.get('/api/admin/tickets?status=unknown');
-    expect(invalid.status).toBe(400);
+    const usedFiltered = await agent.get(`/api/admin/tickets?status=used&ticketTypeId=${typeA.id}`);
+    expect(usedFiltered.body.total).toBe(2);
+    expect(
+      usedFiltered.body.items.every((item: { status: string }) => item.status === 'unused'),
+    ).toBe(true);
+
+    const unknownStatus = await agent.get('/api/admin/tickets?status=unknown');
+    expect(unknownStatus.status).toBe(200);
   });
 
   it('作废仅限未使用的码，重复作废与作废已核销都是 409', async () => {
@@ -754,12 +759,11 @@ describeDb('管理端接口', () => {
 
     const workbook = await getWorkbook(`/api/admin/tickets/export?ticketTypeId=${typeA.id}`);
     const table = readTable(workbook.getWorksheet('随机码清单'), '随机码');
-    expect(table.header).toEqual(['随机码', '票种', '状态', '核销时间', '批次', '创建时间']);
+    expect(table.header).toEqual(['随机码', '票种', '批次', '创建时间']);
     expect(table.rows).toHaveLength(3);
     expect(table.rows[0]?.[1]).toContain(typeA.code);
-    expect(table.rows[0]?.[2]).toBe('未使用');
 
-    // 状态用中文：核销一张后导出件里的状态随之变化
+    // 匿名边界：核销后该码从导出件消失，status 条件被忽略 —— 导出件只含未使用的码
     const [ticket] = await prisma.ticket.findMany({ where: { ticketTypeId: typeA.id }, take: 1 });
     await prisma.ticket.update({
       where: { id: ticket?.id },
@@ -769,9 +773,7 @@ describeDb('管理端接口', () => {
       `/api/admin/tickets/export?ticketTypeId=${typeA.id}&status=used`,
     );
     const usedRows = readTable(afterUsed.getWorksheet('随机码清单'), '随机码').rows;
-    expect(usedRows).toHaveLength(1);
-    expect(usedRows[0]?.[2]).toBe('已核销');
-    expect(usedRows[0]?.[3]).not.toBe('');
+    expect(usedRows).toHaveLength(2);
   });
 
   // ---------------------------------------------------------------------------
@@ -881,21 +883,25 @@ describeDb('管理端接口', () => {
     expect((await prisma.department.findUnique({ where: { id } }))?.questionnaireType).toBe('workshop');
   });
 
-  it('职工 CRUD：按部门过滤、工号唯一、改派与软删除', async () => {
+  it('职工 CRUD：按部门过滤、信息字段与软删除', async () => {
     const department = await createDepartment(`${TAG}部门-职工`);
     const other = await createDepartment(`${TAG}部门-其他`);
-    const employeeNo = `${TAG}E001`;
 
-    const created = await createEmployee(department.id, '张三', employeeNo);
-    expect(created).toMatchObject({ name: '张三', employeeNo, departmentId: department.id });
+    const created = await createEmployee(department.id, '张三');
+    expect(created).toMatchObject({ name: '张三', departmentId: department.id });
 
-    const duplicate = await agent
+    const profiled = await agent
       .post('/api/admin/employees')
-      .send({ departmentId: other.id, name: '李四', employeeNo });
-    expect(duplicate.status).toBe(409);
-    expect(duplicate.body.error.code).toBe('EMPLOYEE_NO_EXISTS');
+      .send({ departmentId: other.id, name: '李四', gender: '女', age: 35, title: '高级工程师' });
+    expect(profiled.status).toBe(200);
+    expect(profiled.body).toMatchObject({ gender: '女', age: 35, title: '高级工程师' });
 
-    await createEmployee(other.id, '王五');
+    const badAge = await agent
+      .post('/api/admin/employees')
+      .send({ departmentId: department.id, name: '王五', age: 200 });
+    expect(badAge.status).toBe(400);
+
+    await createEmployee(other.id, '赵六');
 
     const filtered = await agent.get(`/api/admin/employees?departmentId=${department.id}`);
     expect(filtered.body).toHaveLength(1);
@@ -919,6 +925,19 @@ describeDb('管理端接口', () => {
       .send({ departmentId: 'not-exist', name: '赵六' });
     expect(unknownDepartment.status).toBe(400);
     expect((await agent.patch('/api/admin/employees/not-exist').send({ name: 'x' })).status).toBe(404);
+  });
+
+  it('名单导出与导入模板返回 xlsx', async () => {
+    const department = await createDepartment(`${TAG}部门-导出`);
+    await createEmployee(department.id, '张三');
+
+    const exported = await agent.get(`/api/admin/employees/export?departmentId=${department.id}`);
+    expect(exported.status).toBe(200);
+    expect(exported.headers['content-type']).toContain('spreadsheetml');
+
+    const template = await agent.get('/api/admin/employees/import-template.xlsx');
+    expect(template.status).toBe(200);
+    expect(template.headers['content-type']).toContain('spreadsheetml');
   });
 
   it('项点必须为整数且 maxScore > minScore（创建与修改都校验）', async () => {
@@ -1013,10 +1032,31 @@ describeDb('管理端接口', () => {
     });
     expect(await prisma.voteColumn.count({ where: { id: twin.id } })).toBe(1);
 
-    // 打分表只取启用列：停用的被评列从投票端彻底消失，而不是留成空表头
+    // 打分表只取启用列：停用的被评列从投票端彻底消失，而不是留成空表头。
+    // 打分表按票锁场次：先造一张该部门所在场次的真实票再签投票令牌。
+    const deptRow = await prisma.department.findUniqueOrThrow({ where: { id: department.id } });
+    const sheetType = await prisma.ticketType.create({
+      data: {
+        sessionId: deptRow.sessionId,
+        code: `${TAG}TP${Date.now()}`,
+        name: `${TAG}打分表票种`,
+        weightPercent: 100,
+      },
+    });
+    const sheetBatch = await prisma.ticketBatch.create({
+      data: { sessionId: deptRow.sessionId, ticketTypeId: sheetType.id, count: 1, operator: 'test' },
+    });
+    const sheetTicket = await prisma.ticket.create({
+      data: {
+        code: `${TAG}SH${Date.now()}`,
+        ticketTypeId: sheetType.id,
+        batchId: sheetBatch.id,
+        sessionId: deptRow.sessionId,
+      },
+    });
     const sheet = await request(app)
       .get(`/api/vote/sheet?departmentId=${department.id}`)
-      .set('Authorization', `Bearer ${signVoteToken('soft-delete-check', 'soft-delete-check')}`);
+      .set('Authorization', `Bearer ${signVoteToken(sheetTicket.id, sheetType.id)}`);
     expect(sheet.status).toBe(200);
     expect((sheet.body.voteColumns as Array<{ name: string }>).map((row) => row.name)).toEqual([
       '党支部书记',
@@ -1118,14 +1158,14 @@ describeDb('管理端接口', () => {
   // 名单导入
   // ---------------------------------------------------------------------------
 
-  it('CSV 导入按「部门 + 工号」upsert，重复导入只更新', async () => {
+  it('CSV 导入按「部门 + 姓名」upsert，重复导入只更新', async () => {
     const departmentA = `${TAG}部门-导入A`;
     const departmentB = `${TAG}部门-导入B`;
     const csv = [
-      '部门,姓名,工号',
-      `${departmentA},张三,${TAG}I001`,
-      `${departmentA},李四,${TAG}I002`,
-      `${departmentB},王五,`,
+      '部门,姓名,性别,年龄,职称',
+      `${departmentA},张三,男,35,高级工程师`,
+      `${departmentA},李四,女,28,工程师`,
+      `${departmentB},王五,,,`,
     ].join('\n');
 
     const first = await agent
@@ -1140,30 +1180,35 @@ describeDb('管理端接口', () => {
       departmentsCreated: 2,
       errors: [],
     });
-    expect(await prisma.employee.count({ where: { employeeNo: { startsWith: TAG } } })).toBe(2);
+    expect(await prisma.employee.count({ where: { department: { name: { startsWith: TAG } } } })).toBe(3);
 
     const second = await agent
       .post('/api/admin/employees/import')
       .attach('file', Buffer.from(csv, 'utf8'), 'roster.csv');
     expect(second.body).toMatchObject({ created: 0, updated: 3, departmentsCreated: 0 });
-    expect(await prisma.employee.count({ where: { employeeNo: { startsWith: TAG } } })).toBe(2);
 
-    // 工号是唯一键：工号相同但部门变化时更新原行，不新建
-    const moved = await agent
+    // 同部门同名视为同一人：再次导入只更新信息字段，不新建
+    const refreshed = await agent
       .post('/api/admin/employees/import')
-      .attach('file', Buffer.from(`部门,姓名,工号\n${departmentB},张三,${TAG}I001`, 'utf8'), 'move.csv');
-    expect(moved.body).toMatchObject({ created: 0, updated: 1 });
-    const departmentBRow = await prisma.department.findFirstOrThrow({ where: { name: departmentB } });
-    expect(await prisma.employee.count({ where: { departmentId: departmentBRow.id } })).toBe(2);
+      .attach(
+        'file',
+        Buffer.from(`部门,姓名,性别,年龄,职称\n${departmentA},张三,男,36,正高级工程师`, 'utf8'),
+        'update.csv',
+      );
+    expect(refreshed.body).toMatchObject({ created: 0, updated: 1 });
+    const zhang = await prisma.employee.findFirstOrThrow({
+      where: { name: '张三', department: { name: departmentA } },
+    });
+    expect(zhang).toMatchObject({ gender: '男', age: 36, title: '正高级工程师' });
   });
 
   it('xlsx 导入并逐行报告脏数据', async () => {
     const department = `${TAG}部门-导入X`;
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('名单');
-    sheet.addRow(['部门', '姓名', '工号']);
-    sheet.addRow([department, '赵六', `${TAG}I100`]);
-    sheet.addRow(['', '无部门的人', '']);
+    sheet.addRow(['部门', '姓名', '性别', '年龄', '职称']);
+    sheet.addRow([department, '赵六', '男', 40, '技师']);
+    sheet.addRow(['', '无部门的人', '', '', '']);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
     const res = await agent.post('/api/admin/employees/import').attach('file', buffer, 'roster.xlsx');

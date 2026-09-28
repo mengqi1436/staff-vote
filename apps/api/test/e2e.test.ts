@@ -63,6 +63,7 @@ beforeAll(async () => {
   // 清空测试库。删除顺序遵守外键依赖（子表在前）。
   await prisma.scoreItem.deleteMany();
   await prisma.scoreSheet.deleteMany();
+  await prisma.sheetTicketMap.deleteMany();
   await prisma.ticket.deleteMany();
   await prisma.ticketBatch.deleteMany();
   await prisma.employee.deleteMany();
@@ -76,6 +77,8 @@ beforeAll(async () => {
   // 场次最后删（业务表全部清空后外键已无引用），保证本文件从「零场次」开始，
   // 之后建的场次是库里唯一一场，各创建类接口不带 sessionId 也能自动解析。
   await prisma.voteSession.deleteMany();
+  // 全局部门字典：场次删完后再清（RESTRICT 外键），从头开始不残留
+  await prisma.orgDepartment.deleteMany();
 
   // 账号必须带角色：管理端写接口（发码、配置）都要求权限码，无角色账号等价只读。
   // createRole 是幂等的，重复跑不会撞唯一约束。
@@ -110,6 +113,7 @@ afterAll(async () => {
   // 第二场次及其业务数据还在库里，直接删场次会被 RESTRICT 挡住并中断清理。
   await prisma.scoreItem.deleteMany();
   await prisma.scoreSheet.deleteMany();
+  await prisma.sheetTicketMap.deleteMany();
   await prisma.ticket.deleteMany();
   await prisma.ticketBatch.deleteMany();
   await prisma.employee.deleteMany();
@@ -122,6 +126,7 @@ afterAll(async () => {
   // 清掉本文件建的场次并补回默认场次：后续文件（permission-gate 等）依赖
   // 「库里恰有一场」才能自动解析 sessionId。
   await prisma.voteSession.deleteMany();
+  await prisma.orgDepartment.deleteMany();
   await ensureDefaultSession(prisma);
   await prisma.$disconnect();
 });
@@ -138,22 +143,21 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.token).toBeUndefined();
   });
 
-  it('1b. 创建场次并启动（draft → voting），非法流转被拒', async () => {
-    const started = await admin.post(`/api/admin/sessions/${sessionId}/start`);
-    expect(started.status).toBe(200);
-    expect(started.body.session.status).toBe('voting');
-    expect(started.body.session.startAt).toBeTruthy();
-    expect(started.body.session.endedAt).toBeNull();
-
-    // voting → start 不是合法流转（已是 voting）
-    const again = await admin.post(`/api/admin/sessions/${sessionId}/start`);
-    expect(again.status).toBe(409);
-    expect(again.body.error.code).toBe('INVALID_SESSION_TRANSITION');
+  it('1b. 未配置完整的场次不能 start（完整性校验），配置先行的前置由此确立', async () => {
+    // 主场次此刻只有票种（beforeAll 建的 A/B/C，权重合计 100），
+    // 缺部门（连带项点/被评列）与随机码 → 409，detail 给出缺项清单
+    const incomplete = await admin.post(`/api/admin/sessions/${sessionId}/start`);
+    expect(incomplete.status).toBe(409);
+    expect(incomplete.body.error.code).toBe('SESSION_INCOMPLETE');
+    expect(incomplete.body.error.detail).toEqual([
+      '尚未配置启用部门：至少需要一个启用部门',
+      '尚未发放随机码：至少需要一张未使用的随机码',
+    ]);
 
     const list = await admin.get('/api/admin/sessions');
     expect(list.status).toBe(200);
     const row = list.body.sessions.find((s: { id: string }) => s.id === sessionId);
-    expect(row?.status).toBe('voting');
+    expect(row?.status).toBe('draft');
   });
 
   it('2. 配置部门、职工名单与被评列（打分表的列）', async () => {
@@ -164,10 +168,10 @@ describe('端到端：职工素质评议完整流程', () => {
     // 职工名单仍在后台维护（统计里的 employeeCount 用它），但不再参与打分
     const e1 = await admin
       .post('/api/admin/employees')
-      .send({ departmentId, name: '张伟', employeeNo: 'T001', sortOrder: 0 });
+      .send({ departmentId, name: '张伟', gender: '男', age: 41, title: '高级工程师', sortOrder: 0 });
     const e2 = await admin
       .post('/api/admin/employees')
-      .send({ departmentId, name: '李静', employeeNo: 'T002', sortOrder: 1 });
+      .send({ departmentId, name: '李静', gender: '女', age: 35, title: '工程师', sortOrder: 1 });
     expect(e1.status).toBe(200);
     expect(e2.status).toBe(200);
 
@@ -230,11 +234,8 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(bad.status).toBeLessThan(500);
   });
 
-  it('6. 非开放时段：暂停场次后投票状态为关闭，登录被拒', async () => {
-    const paused = await admin.post(`/api/admin/sessions/${sessionId}/pause`);
-    expect(paused.status).toBe(200);
-    expect(paused.body.session.status).toBe('paused');
-
+  it('6. 非开放时段（场次未 start）：投票状态为关闭，登录被拒', async () => {
+    // 场次仍是 draft（用例 1b 被完整性校验拦下），本来就不开放
     const status = await request(app).get('/api/vote/status');
     expect(status.status).toBe(200);
     expect(status.body.open).toBe(false);
@@ -251,11 +252,18 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(denied.body.error.message).toBe('当前未开放投票');
   });
 
-  it('7. 开放投票后批量发码', async () => {
-    // paused → start 恢复 voting：开放窗口按场次控制，不再有全局开关
+  it('7. 配置齐全后 start 开放投票，再批量发码', async () => {
+    // 用例 2/3 已配齐部门/项点/被评列，用例 6 已发一张 A 码：四类完整性条件满足
     const res = await admin.post(`/api/admin/sessions/${sessionId}/start`);
     expect(res.status).toBe(200);
     expect(res.body.session.status).toBe('voting');
+    expect(res.body.session.startAt).toBeTruthy();
+    expect(res.body.session.endedAt).toBeNull();
+
+    // voting → start 不是合法流转（已是 voting）
+    const again = await admin.post(`/api/admin/sessions/${sessionId}/start`);
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe('INVALID_SESSION_TRANSITION');
 
     const status = await request(app).get('/api/vote/status');
     expect(status.body.open).toBe(true);
@@ -487,7 +495,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(detailText).toContain('工作业绩');
   });
 
-  it('16. 随机码清单可导出', async () => {
+  it('16. 随机码清单可导出（匿名边界：只含未使用的码）', async () => {
     const res = await admin
       .get('/api/admin/tickets/export')
       .responseType('blob');
@@ -501,11 +509,20 @@ describe('端到端：职工素质评议完整流程', () => {
     const sheet = workbook.worksheets[0];
     expect(sheet).toBeTruthy();
 
+    // 匿名边界（设计要求第 1 条）：此时前面的用例已核销部分码，
+    // 导出件只含「未使用」的码 —— 已核销的码不再出现在任何管理员可下载的清单里。
     const codes = sheet
       ?.getSheetValues()
       .flat()
       .filter((v): v is string => typeof v === 'string' && /^[A-HJ-NP-Z2-9]{8}$/.test(v));
-    expect(codes && codes.length).toBeGreaterThanOrEqual(2);
+    expect(codes && codes.length).toBeGreaterThanOrEqual(1);
+
+    const headerRow = sheet?.getRow(1).values;
+    const header = Array.isArray(headerRow)
+      ? headerRow.filter((v): v is string => typeof v === 'string').join('|')
+      : '';
+    expect(header).not.toContain('状态');
+    expect(header).not.toContain('核销时间');
   });
 
   it('17. 暂停场次后状态回到未开放', async () => {
@@ -518,33 +535,39 @@ describe('端到端：职工素质评议完整流程', () => {
     await admin.post(`/api/admin/sessions/${sessionId}/start`);
   });
 
-  it('18. 多场次流程：建场 → start → 发码（留痕）→ 完整提交 → pause 拒登录 → end 终态', async () => {
-    // 建第二场次并启动
-    const created = await admin.post('/api/admin/sessions').send({ name: 'e2e-第二场次' });
+  it('18. 多场次流程：建场 → 配置 → 发码（留痕）→ start → 完整提交 → pause 拒登录 → end 终态', async () => {
+    // 全局部门字典 + 向导契约建第二场次（opensAt 取过去时间，不卡投票开放窗口）
+    const orgB = await admin.post('/api/admin/org-departments').send({ name: 'e2e-字典车间' });
+    expect(orgB.status).toBe(200);
+    const created = await admin.post('/api/admin/sessions').send({
+      name: 'e2e-第二场次',
+      orgDepartmentId: orgB.body.department.id,
+      opensAt: new Date(Date.now() - 60_000).toISOString(),
+    });
     expect(created.status).toBe(200);
     sessionBId = created.body.session.id;
     expect(created.body.session.status).toBe('draft');
-    const started = await admin.post(`/api/admin/sessions/${sessionBId}/start`);
-    expect(started.status).toBe(200);
+    // 向导按所选字典部门自动在场内插入同名部门
+    expect(created.body.session.orgDepartmentName).toBe('e2e-字典车间');
 
-    // 第二场次自己的一套配置（数据与主场次隔离）
-    const deptB = await admin
-      .post('/api/admin/departments')
-      .send({ sessionId: sessionBId, name: '第二场次车间' });
-    expect(deptB.status).toBe(200);
+    // 第二场次的问卷配置：直接在向导自动插入的那条场内部门上配
+    // （完整性校验要求每个启用部门都有项点与被评列，空部门会卡住 start）
+    const departmentB = await prisma.department.findFirstOrThrow({
+      where: { sessionId: sessionBId, name: 'e2e-字典车间' },
+    });
     const colB = await admin
       .post('/api/admin/vote-columns')
-      .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '车间主任' });
+      .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '车间主任' });
     const criterionB = await admin
       .post('/api/admin/criteria')
-      .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '安全', minScore: 0, maxScore: 100 });
+      .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '安全', minScore: 0, maxScore: 100 });
     expect(colB.status).toBe(200);
     expect(criterionB.status).toBe(200);
 
     // 第二场次的职工与领码留痕：发码时把码指定给职工
     const empB = await admin
       .post('/api/admin/employees')
-      .send({ sessionId: sessionBId, departmentId: deptB.body.id, name: '王五' });
+      .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '王五' });
     expect(empB.status).toBe(200);
 
     // 票种 code 场次内唯一（同码可用于不同场次）；第二场次用独立编码 D 以区分语义；
@@ -559,15 +582,18 @@ describe('端到端：职工素质评议完整流程', () => {
       sessionId: sessionBId,
       ticketTypeId: typeBRow.id,
       count: 2,
-      // 两张码都指定给王五：一张用于提交核销，一张留给 pause 后的登录拒绝用例
-      assignments: [{ ticketTypeId: typeBRow.id, employeeIds: [empB.body.id, empB.body.id] }],
     });
     expect(gen.status).toBe(200);
+    // 码不记名：发放不绑定领码人
     const generatedTicket = await prisma.ticket.findUniqueOrThrow({
       where: { code: gen.body.codes[0] },
-      include: { assignee: { select: { name: true } } },
     });
-    expect(generatedTicket.assignee?.name).toBe('王五');
+    expect(generatedTicket.assigneeId).toBeNull();
+
+    // 配置齐（部门/项点/被评列/票种/码）后 start：draft → voting
+    const started = await admin.post(`/api/admin/sessions/${sessionBId}/start`);
+    expect(started.status).toBe(200);
+    expect(started.body.session.status).toBe('voting');
 
     // 登录：场次 B voting 且窗口不限（主场次状态与它无关）
     const loginB = await request(app).post('/api/vote/session').send({ code: gen.body.codes[0] });
@@ -575,7 +601,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(loginB.body.session.id).toBe(sessionBId);
     // 第二场次的部门列表只含自己的部门
     expect((loginB.body.departments as Array<{ id: string }>).map((d) => d.id)).toEqual([
-      deptB.body.id,
+      departmentB.id,
     ]);
 
     // 完整提交（1 列 × 1 项点 = 1 格）
@@ -583,21 +609,14 @@ describe('端到端：职工素质评议完整流程', () => {
       .post('/api/vote/submit')
       .set('Authorization', `Bearer ${loginB.body.token}`)
       .send({
-        departmentId: deptB.body.id,
+        departmentId: departmentB.id,
         items: [{ voteColumnId: colB.body.id, criterionId: criterionB.body.id, score: 85 }],
       });
     expect(submitB.status).toBe(200);
 
-    // 统计：留痕口径可见领码人姓名，评分数据仍匿名
+    // 统计：发放/使用口径可见（码不记名，无领码人留痕）
     const overview = await admin.get(`/api/admin/stats/overview?sessionId=${sessionBId}`);
     expect(overview.status).toBe(200);
-    const ticketRow = overview.body.tickets.find(
-      (t: { ticketTypeId: string }) => t.ticketTypeId === typeBRow.id,
-    );
-    expect(ticketRow.assignedCount).toBe(2);
-    expect(ticketRow.usedByAssignee).toEqual([
-      { employeeId: empB.body.id, employeeName: '王五', count: 1 },
-    ]);
 
     // pause 后：新登录被拒（用一张未使用的码，避免"码已核销"抢在场次校验前面）
     const paused = await admin.post(`/api/admin/sessions/${sessionBId}/pause`);
@@ -620,7 +639,7 @@ describe('端到端：职工素质评议完整流程', () => {
 
     // 第二场次的结果导出包含票别明细 sheet（本场次只有一张表也要能导出）
     const exportB = await admin
-      .get(`/api/admin/results/export.xlsx?departmentId=${deptB.body.id}`)
+      .get(`/api/admin/results/export.xlsx?departmentId=${departmentB.id}`)
       .responseType('blob');
     expect(exportB.status).toBe(200);
     const wb = new ExcelJS.Workbook();
@@ -629,7 +648,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(wb.worksheets.map((sheet) => sheet.name)).toContain('票别合计明细');
 
     // 清理第二场次：先清它的业务数据（外键 RESTRICT）
-    const deptIds = [deptB.body.id];
+    const deptIds = [departmentB.id];
     await prisma.scoreItem.deleteMany({
       where: { sheet: { departmentId: { in: deptIds } } },
     });

@@ -6,6 +6,8 @@ import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 // 后台页面用 useAuth() 判权限，独立渲染必须注入身份上下文（默认给全部权限）
 import { renderWithAuth } from '../../../test-utils.js';
+// 断言接口调用参数用（走 vi.mock 的 mock 版本）
+import { adminApi } from '../../../lib/api.js';
 
 /**
  * 十个后台页面的渲染冒烟测试。
@@ -246,7 +248,7 @@ vi.mock('../../../lib/api.js', async () => {
       },
       employees: {
         list: vi.fn(async () => [
-          { id: 'e1', name: '张三', employeeNo: '001', sortOrder: 1, enabled: true },
+          { id: 'e1', name: '张三', gender: '男', age: 35, title: '高级工程师', sortOrder: 1, enabled: true },
         ]),
       },
       criteria: {
@@ -387,9 +389,10 @@ describe('后台页面渲染', () => {
     renderPage(<AdminEmployees />);
 
     expect(await screen.findByText('张三')).toBeInTheDocument();
+    expect(await screen.findByText('模板下载')).toBeInTheDocument();
     expect(await screen.findByText('导入 Excel/CSV')).toBeInTheDocument();
-    // 导入列约定说明（部门,姓名,工号）
-    expect(await screen.findByText(/列顺序固定：部门,姓名,工号/)).toBeInTheDocument();
+    // 导入列约定说明（部门,姓名,性别,年龄,职称）
+    expect(await screen.findByText(/列顺序固定：部门,姓名,性别,年龄,职称/)).toBeInTheDocument();
   });
 
   it('项点页渲染列配置与归一化口径说明', async () => {
@@ -423,6 +426,8 @@ describe('后台页面渲染', () => {
     expect(await screen.findByText(/共收到 1 张提交表/)).toBeInTheDocument();
     // Button 带 href 时渲染成 a 标签，角色是 link 而不是 button
     expect(screen.getByRole('link', { name: /导\s*出\s*Excel/ })).toBeInTheDocument();
+    // 整场整合导出需要场次上下文：未选场次时按钮存在但禁用
+    expect(screen.getByRole('button', { name: /整场整合导出/ })).toBeDisabled();
     // 口径说明（产品原则 4）：info Alert 写清票种加权与归一化口径
     // （页头描述也含「票种加权后的原始分」短语，断言用口径条目全句避免多重匹配）
     expect(await screen.findByText(/表中各项得分为「票种加权后的原始分」/)).toBeInTheDocument();
@@ -447,6 +452,15 @@ describe('后台页面渲染', () => {
     expect(styles).toContain('break-inside');
   });
 
+  it('打印页把场次查询串透传给 results.list（防串场次）', async () => {
+    renderPage(<AdminPrintSheet />, '/admin/results/print?departmentId=d1&sessionId=s9');
+
+    await screen.findByText('职工素质评议打分表');
+    await waitFor(() =>
+      expect(vi.mocked(adminApi.results.list)).toHaveBeenCalledWith('d1', 's9'),
+    );
+  });
+
   it('票种页可打开新增弹窗（弹窗内的表单只有打开时才渲染）', async () => {
     const user = userEvent.setup();
     renderPage(<AdminTicketTypes />);
@@ -455,16 +469,6 @@ describe('后台页面渲染', () => {
 
     expect(await screen.findByLabelText(/代码/)).toBeInTheDocument();
     expect(await screen.findByLabelText(/权重/)).toBeInTheDocument();
-  });
-
-  it('发码页可打开按权重发码弹窗并给出各票种拆分预览', async () => {
-    const user = userEvent.setup();
-    renderPage(<AdminTickets />);
-
-    await user.click(await screen.findByRole('button', { name: /按权重一键发码/ }));
-
-    expect(await screen.findByText('将发放')).toBeInTheDocument();
-    expect(await screen.findByText(/拆分总数量/)).toBeInTheDocument();
   });
 
   it('发码页可切换到发放批次页签', async () => {

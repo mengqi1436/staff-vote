@@ -49,39 +49,6 @@ export function summarizeWeights(
 }
 
 /**
- * 按权重把总数量拆分到各票种，保证拆分结果之和恰好等于 total。
- *
- * 先按精确值向下取整，再把余数按小数部分从大到小逐个补足
- * （Array#sort 稳定，小数部分相同时保持传入顺序）。
- */
-export function splitByWeight<T extends { id: string; weightPercent: number }>(
-  total: number,
-  types: T[],
-): Array<{ id: string; count: number }> {
-  const zero = types.map((type) => ({ id: type.id, count: 0 }));
-  if (!Number.isFinite(total) || total <= 0 || types.length === 0) return zero;
-
-  const totalWeight = types.reduce((sum, type) => sum + type.weightPercent, 0);
-  if (totalWeight <= 0) return zero;
-
-  const quota = total / totalWeight;
-  const rows = types.map((type) => {
-    const exact = quota * type.weightPercent;
-    const base = Math.floor(exact);
-    return { id: type.id, count: base, frac: exact - base };
-  });
-
-  let rest = total - rows.reduce((sum, row) => sum + row.count, 0);
-  for (const row of [...rows].sort((a, b) => b.frac - a.frac)) {
-    if (rest <= 0) break;
-    row.count += 1;
-    rest -= 1;
-  }
-
-  return rows.map((row) => ({ id: row.id, count: row.count }));
-}
-
-/**
  * 统一提取错误文案：后端 zod 字段明细拼在消息后面，
  * 让管理员一眼知道是哪个字段不合法，而不是只看「请求失败」。
  * SESSION_REQUIRED（多场时未选场次）单独给指引文案，落到「请先选择场次」这一个动作上。

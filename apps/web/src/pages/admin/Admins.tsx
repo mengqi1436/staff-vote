@@ -475,7 +475,7 @@ function RbacPanel() {
       }
     >
       <Typography.Paragraph type="secondary">
-        权限按模块分组勾选；保存后立即生效 —— 后端每个请求都重新查库取权限，
+        权限按模块分组勾选；保存后立即生效 —— 每次操作都按最新权限执行，
         相关账号不必重新登录。内置角色可以改名称与权限，但不允许删除。
       </Typography.Paragraph>
       <Table<RoleDto>

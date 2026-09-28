@@ -42,25 +42,54 @@ export interface VoteSessionDto {
   /** 开放时间窗：空 = 不限制开始 / 长期开放 */
   opensAt: string | null;
   closesAt: string | null;
+  /** 所属全局部门（字典）。null = 历史场次，无字典来源。 */
+  orgDepartmentId: string | null;
+  orgDepartmentName: string | null;
   createdAt: string;
+  /** draft 场次开始投票前的阻塞缺项（中文清单）；非空 = 不能开始。非 draft 恒为空。 */
+  startBlockers: string[];
 }
+
+/** 场次行 → DTO 的统一出口，list/create/update/transition 四处共用。 */
+async function toSessionDto(row: {
+  id: string;
+  name: string;
+  status: SessionStatusValue;
+  startAt: Date | null;
+  endedAt: Date | null;
+  opensAt: Date | null;
+  closesAt: Date | null;
+  orgDepartmentId: string | null;
+  orgDepartment: { name: string } | null;
+  createdAt: Date;
+}): Promise<VoteSessionDto> {
+  const dto: VoteSessionDto = {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    startAt: toIso(row.startAt),
+    endedAt: toIso(row.endedAt),
+    opensAt: toIso(row.opensAt),
+    closesAt: toIso(row.closesAt),
+    orgDepartmentId: row.orgDepartmentId,
+    orgDepartmentName: row.orgDepartment?.name ?? null,
+    createdAt: row.createdAt.toISOString(),
+    startBlockers: [],
+  };
+  // draft 才有「开始投票」这个动作，也才需要阻塞清单；与 start 接口的校验同源。
+  if (dto.status === 'draft') dto.startBlockers = await checkSessionCompleteness(row.id);
+  return dto;
+}
+
+/** 场次查询的公共 include：带出字典部门名。 */
+const SESSION_INCLUDE = { orgDepartment: { select: { name: true } } } as const;
 
 export async function listSessions(): Promise<{ sessions: VoteSessionDto[] }> {
   const rows = await prisma.voteSession.findMany({
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: SESSION_INCLUDE,
   });
-  return {
-    sessions: rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      status: row.status,
-      startAt: toIso(row.startAt),
-      endedAt: toIso(row.endedAt),
-      opensAt: toIso(row.opensAt),
-      closesAt: toIso(row.closesAt),
-      createdAt: row.createdAt.toISOString(),
-    })),
-  };
+  return { sessions: await Promise.all(rows.map(toSessionDto)) };
 }
 
 /**
@@ -89,26 +118,60 @@ export async function resolveSessionId(explicit?: string): Promise<string> {
   throw ApiError.badRequest('当前存在多个场次，请指定 sessionId', 'SESSION_REQUIRED');
 }
 
+/**
+ * 新建场次（向导第一步「基本信息」的提交）。
+ *
+ * 一个事务内完成两件事：
+ *   1. 建 vote_sessions（名称 + 字典部门 + 开放时间窗）；
+ *   2. 按所选字典部门自动在场内 departments 插入一条同名部门
+ *      （questionnaireType 默认 person）——向导第二步的问卷网格立即可用，
+ *      管理员不必再手工建场内部门。
+ *
+ * 校验：
+ *   - 名称重名 409 SESSION_EXISTS；
+ *   - 字典部门不存在 404 ORG_DEPARTMENT_NOT_FOUND；
+ *   - opensAt 与 closesAt 均非空时必须前者早于后者，违反 422 VOTE_WINDOW_INVALID
+ *     （与 updateSession 同一条规则；closesAt 缺省 = 永久开放）。
+ */
 export async function createSession(
-  input: { name: string },
+  input: { name: string; orgDepartmentId: string; opensAt: string; closesAt?: string | null },
   operator: string,
 ): Promise<VoteSessionDto> {
   const name = input.name.trim();
   const existing = await prisma.voteSession.findUnique({ where: { name } });
   if (existing) throw ApiError.conflict(`场次「${name}」已存在`, 'SESSION_EXISTS');
 
-  const created = await prisma.voteSession.create({ data: { name } });
-  await writeAudit('session.create', { name, operator });
-  return {
-    id: created.id,
-    name: created.name,
-    status: created.status,
-    startAt: toIso(created.startAt),
-    endedAt: toIso(created.endedAt),
+  const department = await prisma.orgDepartment.findUnique({
+    where: { id: input.orgDepartmentId },
+  });
+  if (!department) throw ApiError.notFound('全局部门不存在', 'ORG_DEPARTMENT_NOT_FOUND');
+
+  const opensAt = new Date(input.opensAt);
+  const closesAt = input.closesAt == null ? null : new Date(input.closesAt);
+  // 与 updateSession 相同的窗口规则：两侧都设了时间却把顺序写反，投票永远无法开放。
+  if (opensAt && closesAt && opensAt.getTime() >= closesAt.getTime()) {
+    throw ApiError.unprocessable('开放开始时间必须早于结束时间', 'VOTE_WINDOW_INVALID');
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    const session = await tx.voteSession.create({
+      data: { name, orgDepartmentId: department.id, opensAt, closesAt },
+      include: SESSION_INCLUDE,
+    });
+    await tx.department.create({
+      data: { sessionId: session.id, name: department.name },
+    });
+    return session;
+  });
+
+  await writeAudit('session.create', {
+    name,
+    orgDepartment: department.name,
     opensAt: toIso(created.opensAt),
     closesAt: toIso(created.closesAt),
-    createdAt: created.createdAt.toISOString(),
-  };
+    operator,
+  });
+  return await toSessionDto(created);
 }
 
 /**
@@ -154,28 +217,27 @@ export async function updateSession(
     throw ApiError.badRequest('开放开始时间必须早于结束时间', 'VOTE_WINDOW_INVALID');
   }
 
-  const updated = await prisma.voteSession.update({ where: { id }, data });
+  const updated = await prisma.voteSession.update({
+    where: { id },
+    data,
+    include: SESSION_INCLUDE,
+  });
   await writeAudit('session.update', {
     name: updated.name,
     opensAt: toIso(updated.opensAt),
     closesAt: toIso(updated.closesAt),
     operator,
   });
-  return {
-    id: updated.id,
-    name: updated.name,
-    status: updated.status,
-    startAt: toIso(updated.startAt),
-    endedAt: toIso(updated.endedAt),
-    opensAt: toIso(updated.opensAt),
-    closesAt: toIso(updated.closesAt),
-    createdAt: updated.createdAt.toISOString(),
-  };
+  return await toSessionDto(updated);
 }
 
 /**
  * 场次状态机流转：draft→start→voting；voting⇄pause；voting|paused→end→ended。
  * ended 终态不可逆。首次 start 写 startAt（恢复不覆盖），end 写 endedAt。
+ *
+ * draft→voting（start）前先做完整性校验：缺项时 409 SESSION_INCOMPLETE，
+ * detail 为中文缺项清单（前端「继续配置」入口直接展示）。paused→voting 的恢复
+ * 不再校验 —— 恢复是回到暂停前的状态，中途临时停掉一个项点不该卡死整场投票。
  */
 export async function transitionSession(
   id: string,
@@ -194,6 +256,13 @@ export async function transitionSession(
     );
   }
 
+  if (action === 'start' && current.status === 'draft') {
+    const issues = await checkSessionCompleteness(id);
+    if (issues.length > 0) {
+      throw new ApiError(409, 'SESSION_INCOMPLETE', '场次配置不完整，无法开始投票', issues);
+    }
+  }
+
   const updated = await prisma.voteSession.update({
     where: { id },
     data: {
@@ -202,18 +271,64 @@ export async function transitionSession(
       startAt: action === 'start' && !current.startAt ? new Date() : undefined,
       endedAt: action === 'end' ? new Date() : undefined,
     },
+    include: SESSION_INCLUDE,
   });
   await writeAudit(`session.${action}`, { name: current.name, operator });
-  return {
-    id: updated.id,
-    name: updated.name,
-    status: updated.status,
-    startAt: toIso(updated.startAt),
-    endedAt: toIso(updated.endedAt),
-    opensAt: toIso(updated.opensAt),
-    closesAt: toIso(updated.closesAt),
-    createdAt: updated.createdAt.toISOString(),
-  };
+  return await toSessionDto(updated);
+}
+
+/**
+ * 场次开始投票前的完整性校验（四类缺项，全部查出而不是查到第一个就停，
+ * 管理员一次就能看到所有要补的地方）：
+ *   1. 启用部门 ≥1；
+ *   2. 每个启用部门的启用项点 ≥1 且启用被评列 ≥1；
+ *   3. 启用票种 ≥1 且启用票种 weightPercent 合计 = 100；
+ *   4. 未使用随机码 ≥1。
+ *
+ * @returns 中文缺项清单；空数组 = 配置完整
+ */
+async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
+  const issues: string[] = [];
+
+  const departments = await prisma.department.findMany({
+    where: { sessionId, enabled: true },
+    select: { id: true, name: true },
+  });
+  if (departments.length === 0) {
+    issues.push('尚未配置启用部门：至少需要一个启用部门');
+  }
+  for (const department of departments) {
+    const [criteriaCount, columnCount] = await Promise.all([
+      prisma.criterion.count({ where: { departmentId: department.id, enabled: true } }),
+      prisma.voteColumn.count({ where: { departmentId: department.id, enabled: true } }),
+    ]);
+    if (criteriaCount === 0) {
+      issues.push(`部门「${department.name}」尚未配置启用项点：至少需要一个启用项点`);
+    }
+    if (columnCount === 0) {
+      issues.push(`部门「${department.name}」尚未配置启用被评列：至少需要一个启用被评列`);
+    }
+  }
+
+  const ticketTypes = await prisma.ticketType.findMany({
+    where: { sessionId, enabled: true },
+    select: { code: true, weightPercent: true },
+  });
+  if (ticketTypes.length === 0) {
+    issues.push('尚未配置启用票种：至少需要一个启用票种');
+  } else {
+    const weightSum = ticketTypes.reduce((sum, type) => sum + type.weightPercent, 0);
+    if (weightSum !== 100) {
+      issues.push(`启用票种权重合计为 ${weightSum}%，必须等于 100%`);
+    }
+  }
+
+  const unusedCount = await prisma.ticket.count({ where: { sessionId, status: 'unused' } });
+  if (unusedCount === 0) {
+    issues.push('尚未发放随机码：至少需要一张未使用的随机码');
+  }
+
+  return issues;
 }
 
 export interface TicketTypeDto {
@@ -268,7 +383,9 @@ export interface EmployeeDto {
   id: string;
   departmentId: string;
   name: string;
-  employeeNo: string | null;
+  gender: string | null;
+  age: number | null;
+  title: string | null;
   sortOrder: number;
   enabled: boolean;
 }
@@ -301,6 +418,9 @@ export interface TicketBatchDto {
   operator: string;
   createdAt: string;
   ticketType: { id: string; code: string; name: string };
+  /** 评议部门绑定；null = 不限定（可评全部部门）。 */
+  departmentId: string | null;
+  departmentName: string | null;
 }
 
 export interface SettingsDto {
@@ -529,14 +649,8 @@ export interface GenerateTicketsResult {
   codes: string[];
 }
 
-/** 发码时的领码人指定：employeeIds 按顺序对应生成的随机码（发放留痕）。 */
-export interface TicketAssignmentInput {
-  ticketTypeId: string;
-  employeeIds: string[];
-}
-
 /**
- * 批量发码。
+ * 批量发码（单票种指定数量）。
  *
  * 批次与随机码在同一事务里写入：批次记录了发放数量，若两者不一致会留下
  * 无法对账的孤儿批次。写码时用批次数量与插入行数比对兜底。
@@ -545,14 +659,13 @@ export interface TicketAssignmentInput {
  * @param count 发码数量
  * @param operator 操作者用户名
  * @param options.sessionId 场次（可空 → 单场自动 / 多场 400 SESSION_REQUIRED）
- * @param options.assignments 可选的领码人指定：按序写入 assigneeId（发放留痕，
- *        票仍不记名——评分数据不含票据标识）。职工必须属于同一场次。
+ * @param options.departmentId 评议部门绑定（可空 → 不限定，持码人可评全部部门）
  */
 export async function generateTickets(
   ticketTypeId: string,
   count: number,
   operator: string,
-  options: { sessionId?: string; assignments?: TicketAssignmentInput[] } = {},
+  options: { sessionId?: string; departmentId?: string } = {},
 ): Promise<GenerateTicketsResult> {
   const sessionId = await resolveSessionId(options.sessionId);
   const ticketType = await prisma.ticketType.findUnique({ where: { id: ticketTypeId } });
@@ -562,48 +675,34 @@ export async function generateTickets(
   }
   if (!ticketType.enabled) throw ApiError.conflict('票种已停用，不能继续发码', 'TICKET_TYPE_DISABLED');
 
-  // 领码人按 assignments 顺序平铺，与生成的码一一对应。
-  let assigneeIds: string[] = [];
-  if (options.assignments && options.assignments.length > 0) {
-    for (const assignment of options.assignments) {
-      if (assignment.ticketTypeId !== ticketTypeId) {
-        throw ApiError.badRequest('assignments 中的票种与发码票种不一致', 'SESSION_MISMATCH');
-      }
-      assigneeIds = assigneeIds.concat(assignment.employeeIds);
+  // 部门绑定校验：必须属于本场次且启用中。
+  const departmentId = options.departmentId ?? null;
+  if (departmentId) {
+    const department = await prisma.department.findUnique({ where: { id: departmentId } });
+    if (!department || department.sessionId !== sessionId) {
+      throw ApiError.badRequest('部门不属于该场次，不能绑定发码', 'DEPARTMENT_NOT_IN_SESSION');
     }
-    if (assigneeIds.length !== count) {
-      throw ApiError.badRequest(
-        `领码人数量（${assigneeIds.length}）与发码数量（${count}）不一致`,
-        'ASSIGNMENT_COUNT_MISMATCH',
-      );
-    }
-    const employees = await prisma.employee.findMany({
-      where: { id: { in: assigneeIds } },
-      select: { id: true, sessionId: true },
-    });
-    const employeeById = new Map(employees.map((row) => [row.id, row]));
-    for (const employeeId of assigneeIds) {
-      const employee = employeeById.get(employeeId);
-      if (!employee) throw ApiError.badRequest('领码人不存在', 'ASSIGNEE_NOT_FOUND');
-      if (employee.sessionId !== sessionId) {
-        throw ApiError.badRequest('领码人必须属于同一场次', 'SESSION_MISMATCH');
-      }
+    if (!department.enabled) {
+      throw ApiError.conflict('部门已停用，不能绑定发码', 'DEPARTMENT_DISABLED');
     }
   }
+  // TOCTOU 窗口（已知并接受）：此处校验通过后、事务写入前部门若被停用，
+  // 这批码仍会带上该部门；后果仅是持码人在 Gate 看到空问卷（部门已停用查不出），
+  // 不会越权评议其它部门，故不为此加锁。
 
   const codes = generateUniqueCodes(count);
 
   const result = await prisma.$transaction(async (tx) => {
     const batch = await tx.ticketBatch.create({
-      data: { ticketTypeId, sessionId, count: codes.length, operator },
+      data: { ticketTypeId, sessionId, departmentId, count: codes.length, operator },
     });
     const inserted = await tx.ticket.createMany({
-      data: codes.map((code, index) => ({
+      data: codes.map((code) => ({
         code,
         ticketTypeId,
         batchId: batch.id,
         sessionId,
-        assigneeId: assigneeIds[index] ?? null,
+        departmentId,
       })),
     });
     if (inserted.count !== codes.length) {
@@ -618,16 +717,159 @@ export async function generateTickets(
     code: ticketType.code,
     count: result.count,
     batchId: result.batchId,
-    assigned: assigneeIds.length,
     operator,
+    departmentId,
   });
   return { batchId: result.batchId, count: result.count, codes };
+}
+
+// -----------------------------------------------------------------------------
+// 票别分配（新建场次向导第三步的聚合提交）
+// -----------------------------------------------------------------------------
+
+/** ticket-plan 的单行：编码/名称/权重/数量。 */
+export interface TicketPlanRow {
+  code: string;
+  name: string;
+  weightPercent: number;
+  /** ≥0；>0 自动建批次发码，=0 只建票种不发码 */
+  count: number;
+}
+
+export interface TicketPlanResult {
+  ticketTypes: TicketTypeDto[];
+  /** 本次实际发码的批次（不返回明文码，明文码只经打印/下载路径出现） */
+  generated: Array<{ ticketTypeId: string; batchId: string; count: number }>;
+}
+
+/**
+ * 一次性提交场次的「启用票种全集」并发码（向导第三步，也可用于整体重排）。
+ *
+ * 语义（与前端票别分配表一一对应）：
+ *   - 本次提交的 types 数组就是该场次的启用票种全集，数组顺序即 sortOrder；
+ *     现有未列入者置 enabled=false（软停用，历史数据可读）；
+ *   - 逐票种按 (sessionId, code) upsert：命中则更新 name/weightPercent/排序，
+ *     未命中则新建；
+ *   - 启用票种权重合计必须 = 100，否则 422 WEIGHT_SUM（整批拒绝，不留中间态）；
+ *   - 已产生答卷的启用票种必须仍在提交集合中：它一旦被移出（等效于改码或删除），
+ *     已有答卷的票别归属就断了，409 TICKET_TYPE_HAS_SHEETS；
+ *   - count > 0 的票种自动建 TicketBatch 并生成随机码（同 generateTickets 的
+ *     事务写法：批次与码一起写、行数比对兜底）；count = 0 只建票种不发码。
+ *
+ * 全部写入在同一个事务里：向导的第三步要么整批成功，要么整批回滚。
+ */
+export async function applyTicketPlan(
+  sessionId: string,
+  input: { types: TicketPlanRow[] },
+  operator: string,
+): Promise<TicketPlanResult> {
+  const session = await prisma.voteSession.findUnique({ where: { id: sessionId } });
+  if (!session) throw ApiError.notFound('场次不存在');
+
+  // 权重合计是对「提交后启用票种全集」的要求，提交前就能算完，不占事务。
+  const weightSum = input.types.reduce((sum, row) => sum + row.weightPercent, 0);
+  if (weightSum !== 100) {
+    throw ApiError.unprocessable(
+      `启用票种权重合计必须等于 100%，当前为 ${weightSum}%`,
+      'WEIGHT_SUM',
+    );
+  }
+
+  const codes = input.types.map((row) => row.code);
+
+  const existing = await prisma.ticketType.findMany({ where: { sessionId } });
+  const existingByCode = new Map(existing.map((row) => [row.code, row]));
+
+  // 已产生答卷的启用票种必须列入本次集合：移出集合等效于改码/删除该票别。
+  const hasSheets = await prisma.scoreSheet.groupBy({
+    by: ['ticketTypeId'],
+    where: { sessionId, ticketTypeId: { in: existing.map((row) => row.id) } },
+    _count: { _all: true },
+  });
+  const sheetCountByTypeId = new Map(hasSheets.map((row) => [row.ticketTypeId, row._count._all]));
+  for (const row of existing) {
+    if (row.enabled && (sheetCountByTypeId.get(row.id) ?? 0) > 0 && !codes.includes(row.code)) {
+      throw ApiError.conflict(
+        `票种 ${row.code}（${row.name}）已有答卷，不能从票别集合中移除或改码`,
+        'TICKET_TYPE_HAS_SHEETS',
+      );
+    }
+  }
+
+  const generated = await prisma.$transaction(async (tx) => {
+    const batches: Array<{ ticketTypeId: string; batchId: string; count: number }> = [];
+
+    for (const [index, row] of input.types.entries()) {
+      const match = existingByCode.get(row.code);
+      const ticketTypeId = match
+        ? match.id
+        : (
+            await tx.ticketType.create({
+              data: {
+                sessionId,
+                code: row.code,
+                name: row.name,
+                weightPercent: row.weightPercent,
+                sortOrder: index,
+              },
+            })
+          ).id;
+
+      if (match) {
+        await tx.ticketType.update({
+          where: { id: match.id },
+          data: {
+            name: row.name,
+            weightPercent: row.weightPercent,
+            sortOrder: index,
+            enabled: true,
+          },
+        });
+      }
+
+      if (row.count > 0) {
+        // 与 generateTickets 相同的事务写法：批次与码一起写入，行数比对兜底
+        // （随机码理论不撞库，真撞上整体回滚，不留数量对不上的批次）。
+        const batchCodes = generateUniqueCodes(row.count);
+        const batch = await tx.ticketBatch.create({
+          data: { ticketTypeId, sessionId, count: batchCodes.length, operator },
+        });
+        const inserted = await tx.ticket.createMany({
+          data: batchCodes.map((code) => ({ code, ticketTypeId, batchId: batch.id, sessionId })),
+        });
+        if (inserted.count !== batchCodes.length) {
+          throw new Error(
+            `随机码生成冲突：期望 ${batchCodes.length} 条，实际写入 ${inserted.count} 条`,
+          );
+        }
+        batches.push({ ticketTypeId, batchId: batch.id, count: inserted.count });
+      }
+    }
+
+    // 本次集合之外的现有票种全部软停用（含原本停用的，updateMany 幂等）。
+    await tx.ticketType.updateMany({
+      where: { sessionId, code: { notIn: codes } },
+      data: { enabled: false },
+    });
+
+    return batches;
+  });
+
+  await writeAudit('ticket_plan.apply', {
+    sessionId,
+    types: input.types.map((row) => `${row.code}:${row.weightPercent}%×${row.count}`).join(','),
+    operator,
+  });
+
+  return {
+    ticketTypes: await listTicketTypes(sessionId),
+    generated,
+  };
 }
 
 export interface TicketListQuery {
   page: number;
   pageSize: number;
-  status?: TicketStatusValue;
   ticketTypeId?: string;
   sessionId?: string;
 }
@@ -659,10 +901,16 @@ function toTicketDto(row: {
   };
 }
 
-/** 随机码分页列表。 */
+/**
+ * 随机码分页列表。
+ *
+ * 匿名边界（设计要求第 1 条「不记名投票」）：列表固定只返回未使用的码。
+ * 已使用/已作废的码不出现 —— 管理员能看到「哪些码已核销」就能反推投票进度到人，
+ * 因此使用情况只以票种级聚合计数（listTicketTypes 的 usedCount/unusedCount）披露。
+ */
 export async function listTickets(query: TicketListQuery): Promise<Paged<TicketDto>> {
   const where = {
-    status: query.status,
+    status: 'unused' as const,
     ticketTypeId: query.ticketTypeId,
     sessionId: query.sessionId,
   };
@@ -686,7 +934,6 @@ export async function listTickets(query: TicketListQuery): Promise<Paged<TicketD
 }
 
 export interface TicketExportFilter {
-  status?: TicketStatusValue;
   ticketTypeId?: string;
   sessionId?: string;
 }
@@ -694,13 +941,16 @@ export interface TicketExportFilter {
 /**
  * 取待导出的随机码。
  *
+ * 匿名边界：与列表一致，导出固定只含未使用的码（发放对账材料）；
+ * 已核销的码不出现在任何管理员可下载的清单里。
+ *
  * `ponytail:` 一次性把结果读进内存（上限 5 万行）。发码量级是千级，够用；
  * 若将来单次导出超过这个量级，改成流式写 exceljs 的 WorkbookWriter。
  */
 export async function listTicketsForExport(filter: TicketExportFilter) {
   return prisma.ticket.findMany({
     where: {
-      status: filter.status,
+      status: 'unused' as const,
       ticketTypeId: filter.ticketTypeId,
       sessionId: filter.sessionId,
     },
@@ -792,7 +1042,10 @@ export async function listTicketBatches(sessionId?: string): Promise<TicketBatch
     where: { sessionId },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 500,
-    include: { ticketType: { select: { id: true, code: true, name: true } } },
+    include: {
+      ticketType: { select: { id: true, code: true, name: true } },
+      department: { select: { id: true, name: true } },
+    },
   });
   return batches.map((batch) => ({
     id: batch.id,
@@ -800,6 +1053,8 @@ export async function listTicketBatches(sessionId?: string): Promise<TicketBatch
     operator: batch.operator,
     createdAt: batch.createdAt.toISOString(),
     ticketType: batch.ticketType,
+    departmentId: batch.departmentId ?? null,
+    departmentName: batch.department?.name ?? null,
   }));
 }
 
@@ -920,6 +1175,212 @@ export async function disableDepartment(id: string, operator: string): Promise<v
 }
 
 // -----------------------------------------------------------------------------
+// 全局部门字典
+// -----------------------------------------------------------------------------
+
+export interface OrgDepartmentDto {
+  id: string;
+  name: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: string;
+}
+
+function toOrgDepartmentDto(row: {
+  id: string;
+  name: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: Date;
+}): OrgDepartmentDto {
+  return {
+    id: row.id,
+    name: row.name,
+    sortOrder: row.sortOrder,
+    enabled: row.enabled,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** 全局部门字典列表（登录即可读，无需写权限）。 */
+export async function listOrgDepartments(): Promise<{ departments: OrgDepartmentDto[] }> {
+  const rows = await prisma.orgDepartment.findMany({
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+  });
+  return { departments: rows.map(toOrgDepartmentDto) };
+}
+
+// -----------------------------------------------------------------------------
+// 字典新增 → 未开场场次自动补部门（联动问卷下拉）
+// -----------------------------------------------------------------------------
+
+/** 附件8 表尾填写说明（两套模板共用）。 */
+const QUESTIONNAIRE_FOOTER_NOTE =
+  '填写说明：问卷调查采用无记名投票的方式开展，每一条评价项点满分20分，弃权、不填视为0分。';
+
+/** 个人问卷模板（附件8 sheet1）：5 项点 + 5 个被评职务列。 */
+const PERSON_QUESTIONNAIRE_TEMPLATE = {
+  questionnaireType: 'person',
+  title: 'xx车间负责人评价问卷',
+  footerNote: QUESTIONNAIRE_FOOTER_NOTE,
+  criteria: [
+    { name: '政治素质', description: '信念坚定、对党忠诚、认真贯彻落实上级党组织的指令，团结带领职工听党话、跟党走，关键时刻，经得住考验。' },
+    { name: '敬业担当', description: '扎根一线埋头苦干，无私奉献，恪尽职守，不畏艰险、迎难而上、善于斗争、勇于斗争。' },
+    { name: '专业能力', description: '精通线路业务知识，善于解决工作中遇到的疑难杂症，熟悉规章制度、现场实操能力强，具备扎实的故障排查、应急处置能力。' },
+    { name: '工作质效', description: '善于管理，优质完成各项生产任务、确保设备运营安全和干部职工人身安全。' },
+    { name: '廉洁自律', description: '严守纪律，清正廉洁，恪守职业道德底线，管理透明、办事公道。' },
+  ],
+  voteColumns: ['主任', '党支部书记', '党支部副书记', '副主任', '副主任'],
+};
+
+/** 车间问卷模板（附件8 sheet2）：5 项点，无被评职务列（单列「得分」版式）。 */
+const WORKSHOP_QUESTIONNAIRE_TEMPLATE = {
+  questionnaireType: 'workshop',
+  title: 'xx车间评价问卷',
+  footerNote: QUESTIONNAIRE_FOOTER_NOTE,
+  criteria: [
+    { name: '党建引领', description: '车间班子团结协作、沟通顺畅、政治生态较好，职场氛围风清气正。信念坚定、对党忠诚、及时传达学习党的理论知识，认真贯彻落实上级各项决策部署，带领党员发挥先锋模范作用。' },
+    { name: '安全管理', description: '落实安全生产责任制，风险研判到位、隐患排查整治到位、安全履职效果（安全检查）、整体安全形势平稳（安全效果）。' },
+    { name: '生产组织', description: '生产组织有序，计划安排合理，人员作业效率高，跨专业协同作业得当，高质量完成生产任务，验收考评闭环。' },
+    { name: '队伍素质', description: '干部职工理论知识扎实、实操经验丰富、应急处理得当，团队意识强、精神风貌好、学习氛围浓。' },
+    { name: '基础管理', description: '标准作业，各类台账齐全，技术资料，库房管理规范、职场环境干净整洁。' },
+  ],
+  voteColumns: [] as string[],
+};
+
+/** 问卷类型启发式：以「车间」结尾按车间问卷，其余按个人问卷（管理员之后仍可在问卷配置页改）。 */
+function questionnaireTypeOf(name: string): 'person' | 'workshop' {
+  return name.endsWith('车间') ? 'workshop' : 'person';
+}
+
+/**
+ * 把字典新部门按名复制进所有未开场（draft）的场次，并套用附件8 对应模板。
+ *
+ * 只动 draft 场次：voting/paused 已在投票、ended 已成历史，中途加部门会破坏
+ * 投票口径。场内已有同名部门则跳过（@@unique([sessionId, name]) 兜底）。
+ * 模板含标题/说明/5 项点/被评列，与问卷配置页手工配置的结果一致。
+ */
+async function syncOrgDepartmentToDraftSessions(
+  name: string,
+  sortOrder: number,
+  operator: string,
+): Promise<number> {
+  const draftSessions = await prisma.voteSession.findMany({
+    where: { status: 'draft' },
+    select: { id: true },
+  });
+  let synced = 0;
+  for (const session of draftSessions) {
+    const exists = await prisma.department.findFirst({
+      where: { sessionId: session.id, name },
+      select: { id: true },
+    });
+    if (exists) continue;
+    const template =
+      questionnaireTypeOf(name) === 'workshop'
+        ? WORKSHOP_QUESTIONNAIRE_TEMPLATE
+        : PERSON_QUESTIONNAIRE_TEMPLATE;
+    const created = await prisma.department.create({
+      data: {
+        sessionId: session.id,
+        name,
+        sortOrder,
+        questionnaireType: template.questionnaireType,
+        title: template.title,
+        footerNote: template.footerNote,
+      },
+    });
+    await prisma.criterion.createMany({
+      data: template.criteria.map((item, index) => ({
+        departmentId: created.id,
+        sessionId: session.id,
+        name: item.name,
+        description: item.description,
+        sortOrder: index + 1,
+      })),
+    });
+    if (template.voteColumns.length > 0) {
+      await prisma.voteColumn.createMany({
+        data: template.voteColumns.map((columnName, index) => ({
+          departmentId: created.id,
+          sessionId: session.id,
+          name: columnName,
+          sortOrder: index + 1,
+        })),
+      });
+    }
+    await writeAudit('department.create', { name, operator });
+    synced += 1;
+  }
+  return synced;
+}
+
+export async function createOrgDepartment(
+  input: { name: string; sortOrder?: number },
+  operator: string,
+): Promise<OrgDepartmentDto> {
+  const name = input.name.trim();
+  if (await prisma.orgDepartment.findUnique({ where: { name } })) {
+    throw ApiError.conflict(`部门「${name}」已存在`, 'ORG_DEPARTMENT_EXISTS');
+  }
+  const created = await prisma.orgDepartment.create({
+    data: { name, sortOrder: input.sortOrder ?? 0 },
+  });
+  await writeAudit('org_department.create', { name, operator });
+  // 字典新增即联动：未开场场次自动补进同名场内部门（套附件8 模板），
+  // 问卷下拉（数据源是场内 departments）随之出现新部门，无需再手动添加。
+  await syncOrgDepartmentToDraftSessions(name, input.sortOrder ?? 0, operator);
+  return toOrgDepartmentDto(created);
+}
+
+export async function updateOrgDepartment(
+  id: string,
+  patch: { name?: string; sortOrder?: number; enabled?: boolean },
+  operator: string,
+): Promise<OrgDepartmentDto> {
+  const current = await prisma.orgDepartment.findUnique({ where: { id } });
+  if (!current) throw ApiError.notFound('部门不存在', 'ORG_DEPARTMENT_NOT_FOUND');
+
+  const name = patch.name?.trim();
+  if (name && name !== current.name) {
+    const conflict = await prisma.orgDepartment.findUnique({ where: { name } });
+    if (conflict && conflict.id !== id) {
+      throw ApiError.conflict(`部门「${name}」已存在`, 'ORG_DEPARTMENT_EXISTS');
+    }
+  }
+
+  const updated = await prisma.orgDepartment.update({
+    where: { id },
+    data: { name, sortOrder: patch.sortOrder, enabled: patch.enabled },
+  });
+  await writeAudit('org_department.update', { name: updated.name, operator });
+  return toOrgDepartmentDto(updated);
+}
+
+/**
+ * 删除全局部门 —— 物理删除。
+ *
+ * 字典项与场内 departments 是「按名复制」关系，没有数据级联，未被任何场次
+ * 引用时删除是安全的。已被场次引用（vote_sessions.org_department_id）时 409：
+ * 场次对字典来源的引用不可悬空，想从新场次下拉里移除请用停用（enabled=false）。
+ */
+export async function deleteOrgDepartment(id: string, operator: string): Promise<void> {
+  const current = await prisma.orgDepartment.findUnique({ where: { id } });
+  if (!current) throw ApiError.notFound('部门不存在', 'ORG_DEPARTMENT_NOT_FOUND');
+
+  const referenced = await prisma.voteSession.count({ where: { orgDepartmentId: id } });
+  if (referenced > 0) {
+    throw ApiError.conflict(
+      `部门「${current.name}」已被 ${referenced} 个场次引用，不能删除；可改为停用`,
+      'ORG_DEPARTMENT_IN_USE',
+    );
+  }
+
+  await prisma.orgDepartment.delete({ where: { id } });
+  await writeAudit('org_department.delete', { name: current.name, operator });
+}
+
+// -----------------------------------------------------------------------------
 // 职工
 // -----------------------------------------------------------------------------
 
@@ -935,7 +1396,9 @@ export async function listEmployees(
     id: row.id,
     departmentId: row.departmentId,
     name: row.name,
-    employeeNo: row.employeeNo,
+    gender: row.gender,
+    age: row.age,
+    title: row.title,
     sortOrder: row.sortOrder,
     enabled: row.enabled,
   }));
@@ -946,21 +1409,10 @@ export interface EmployeeCreateInput {
   /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
   sessionId?: string;
   name: string;
-  employeeNo?: string | null;
+  gender?: string | null;
+  age?: number | null;
+  title?: string | null;
   sortOrder?: number;
-}
-
-/** 空串统一成 null：`employee_no` 有唯一索引，多个空串会互相冲突。 */
-function normalizeEmployeeNo(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-async function assertEmployeeNoAvailable(employeeNo: string, excludeId?: string): Promise<void> {
-  const conflict = await prisma.employee.findFirst({ where: { employeeNo } });
-  if (conflict && conflict.id !== excludeId) {
-    throw ApiError.conflict(`工号 ${employeeNo} 已被「${conflict.name}」占用`, 'EMPLOYEE_NO_EXISTS');
-  }
 }
 
 export async function createEmployee(
@@ -974,15 +1426,14 @@ export async function createEmployee(
     throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
   }
 
-  const employeeNo = normalizeEmployeeNo(input.employeeNo);
-  if (employeeNo) await assertEmployeeNoAvailable(employeeNo);
-
   const created = await prisma.employee.create({
     data: {
       departmentId: input.departmentId,
       sessionId: department.sessionId,
       name: input.name.trim(),
-      employeeNo,
+      gender: input.gender ?? null,
+      age: input.age ?? null,
+      title: input.title ?? null,
       sortOrder: input.sortOrder ?? 0,
     },
   });
@@ -991,7 +1442,9 @@ export async function createEmployee(
     id: created.id,
     departmentId: created.departmentId,
     name: created.name,
-    employeeNo: created.employeeNo,
+    gender: created.gender,
+    age: created.age,
+    title: created.title,
     sortOrder: created.sortOrder,
     enabled: created.enabled,
   };
@@ -1002,7 +1455,9 @@ export async function updateEmployee(
   patch: {
     departmentId?: string;
     name?: string;
-    employeeNo?: string | null;
+    gender?: string | null;
+    age?: number | null;
+    title?: string | null;
     sortOrder?: number;
     enabled?: boolean;
   },
@@ -1019,19 +1474,15 @@ export async function updateEmployee(
     nextSessionId = department.sessionId;
   }
 
-  let employeeNo: string | null | undefined;
-  if (patch.employeeNo !== undefined) {
-    employeeNo = normalizeEmployeeNo(patch.employeeNo);
-    if (employeeNo) await assertEmployeeNoAvailable(employeeNo, id);
-  }
-
   const updated = await prisma.employee.update({
     where: { id },
     data: {
       departmentId: patch.departmentId,
       sessionId: nextSessionId,
       name: patch.name?.trim(),
-      employeeNo,
+      gender: patch.gender,
+      age: patch.age,
+      title: patch.title,
       sortOrder: patch.sortOrder,
       enabled: patch.enabled,
     },
@@ -1041,7 +1492,9 @@ export async function updateEmployee(
     id: updated.id,
     departmentId: updated.departmentId,
     name: updated.name,
-    employeeNo: updated.employeeNo,
+    gender: updated.gender,
+    age: updated.age,
+    title: updated.title,
     sortOrder: updated.sortOrder,
     enabled: updated.enabled,
   };
@@ -1053,6 +1506,27 @@ export async function disableEmployee(id: string, operator: string): Promise<voi
   if (!current) throw ApiError.notFound('职工不存在');
   await prisma.employee.update({ where: { id }, data: { enabled: false } });
   await writeAudit('employee.disable', { name: current.name, operator });
+}
+
+/** 名单导出：只含启用职工，列序与导入模板一致（导出件可直接再导入）。 */
+export async function listRosterForExport(
+  departmentId: string | undefined,
+  sessionId: string | undefined,
+): Promise<
+  Array<{ departmentName: string; name: string; gender: string | null; age: number | null; title: string | null }>
+> {
+  const rows = await prisma.employee.findMany({
+    where: { departmentId, enabled: true, sessionId: await resolveSessionId(sessionId) },
+    orderBy: [{ department: { sortOrder: 'asc' } }, { sortOrder: 'asc' }, { name: 'asc' }],
+    include: { department: { select: { name: true } } },
+  });
+  return rows.map((row) => ({
+    departmentName: row.department.name,
+    name: row.name,
+    gender: row.gender,
+    age: row.age,
+    title: row.title,
+  }));
 }
 
 // -----------------------------------------------------------------------------
@@ -1071,15 +1545,21 @@ export interface ImportEmployeesResult {
 /**
  * 导入职工名单。
  *
- * 按「部门名 + 工号」upsert：有工号的行以工号为唯一键（跨部门调动也能正确更新），
- * 没工号的行按「部门 + 姓名」匹配。部门不存在时按名称自动创建，避免管理员为了
- * 导入一份名单先手工建十几个部门。
+ * 按「部门名 + 姓名」upsert：同名同部门的行视为同一人，更新其性别/年龄/职称。
+ * 部门不存在时按名称自动创建，避免管理员为了导入一份名单先手工建十几个部门。
  *
  * 单行失败只计入 errors 并继续，不整批回滚 —— 一份上千行的名单里有一行脏数据，
  * 让管理员自己改那一行比重传整份文件现实。
  */
 export async function importEmployees(
-  rows: Array<{ rowNumber: number; departmentName: string; name: string; employeeNo: string | null }>,
+  rows: Array<{
+    rowNumber: number;
+    departmentName: string;
+    name: string;
+    gender: string | null;
+    age: number | null;
+    title: string | null;
+  }>,
   operator: string,
   sessionId?: string,
 ): Promise<ImportEmployeesResult> {
@@ -1122,30 +1602,26 @@ export async function importEmployees(
         departmentCache.set(row.departmentName, departmentId);
       }
 
-      if (row.employeeNo) {
-        const existing = await prisma.employee.findFirst({ where: { employeeNo: row.employeeNo } });
-        if (existing) {
-          await prisma.employee.update({
-            where: { id: existing.id },
-            data: { name: row.name, departmentId, sessionId: targetSessionId },
-          });
-          result.updated += 1;
-        } else {
-          await prisma.employee.create({
-            data: { departmentId, sessionId: targetSessionId, name: row.name, employeeNo: row.employeeNo },
-          });
-          result.created += 1;
-        }
-        continue;
-      }
-
       const sameName = await prisma.employee.findFirst({
         where: { departmentId, name: row.name },
       });
       if (sameName) {
+        await prisma.employee.update({
+          where: { id: sameName.id },
+          data: { gender: row.gender, age: row.age, title: row.title },
+        });
         result.updated += 1;
       } else {
-        await prisma.employee.create({ data: { departmentId, sessionId: targetSessionId, name: row.name } });
+        await prisma.employee.create({
+          data: {
+            departmentId,
+            sessionId: targetSessionId,
+            name: row.name,
+            gender: row.gender,
+            age: row.age,
+            title: row.title,
+          },
+        });
         result.created += 1;
       }
     } catch (error) {

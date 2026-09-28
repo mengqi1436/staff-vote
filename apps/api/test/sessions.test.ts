@@ -42,13 +42,42 @@ const app = createApp();
 let agent: ReturnType<typeof request.agent>;
 /** 本文件建立的场次 id，afterAll 统一清理。 */
 const sessionIds: string[] = [];
+/** 本文件建立的全局字典部门 id（向导契约 B 的前置），afterAll 统一清理。 */
+const orgDepartmentIds: string[] = [];
 
-/** 建一个场次（走接口），记录 id 供清理。 */
+/**
+ * 建一个场次（走向导契约：字典部门 + opensAt 必填），记录 id 供清理。
+ * opensAt 取过去时间，不影响状态机用例的开放判定。
+ */
 async function newSession(name: string): Promise<string> {
-  const res = await agent.post('/api/admin/sessions').send({ name });
+  const org = await agent.post('/api/admin/org-departments').send({ name: `${name}-字典` });
+  expect(org.status).toBe(200);
+  orgDepartmentIds.push(org.body.department.id);
+  const res = await agent.post('/api/admin/sessions').send({
+    name,
+    orgDepartmentId: org.body.department.id,
+    opensAt: '2026-01-01T00:00:00+08:00',
+  });
   expect(res.status).toBe(200);
   sessionIds.push(res.body.session.id);
   return res.body.session.id;
+}
+
+/**
+ * 把场次配置补齐到「可开始投票」（契约 C 的完整性校验前置）：
+ * 向导创建已自动插入一条场内部门，这里补项点、被评列、100% 票种与一张未使用码。
+ */
+async function makeStartable(sessionId: string, code: string): Promise<void> {
+  const department = await prisma.department.findFirstOrThrow({ where: { sessionId } });
+  await agent
+    .post('/api/admin/criteria')
+    .send({ departmentId: department.id, name: `${code}项点`, minScore: 0, maxScore: 100 });
+  await agent.post('/api/admin/vote-columns').send({ departmentId: department.id, name: `${code}列` });
+  const type = await newTicketType(sessionId, code);
+  const generated = await agent
+    .post('/api/admin/tickets/generate')
+    .send({ sessionId, ticketTypeId: type, count: 1 });
+  expect(generated.status).toBe(200);
 }
 
 async function newDepartment(sessionId: string, name: string): Promise<string> {
@@ -115,6 +144,10 @@ describeDb('场次管理', () => {
     }
     await prisma.adminUser.deleteMany({ where: { username: { startsWith: TAG } } });
     await prisma.adminRole.deleteMany({ where: { code: { startsWith: TAG } } });
+    // 向导契约引入的字典部门：按「场次名-字典」的命名约定清理本文件建立的项
+    for (const orgId of orgDepartmentIds) {
+      await prisma.orgDepartment.deleteMany({ where: { id: orgId } });
+    }
     await prisma.$disconnect();
   });
 
@@ -129,13 +162,35 @@ describeDb('场次管理', () => {
     expect(row.startAt).toBeNull();
     expect(row.endedAt).toBeNull();
 
-    const duplicate = await agent.post('/api/admin/sessions').send({ name: `${TAG}场次-A` });
+    const duplicate = await agent.post('/api/admin/sessions').send({
+      name: `${TAG}场次-A`,
+      // 带全合法字段才能穿过形状校验，命中服务层的重名 409
+      orgDepartmentId: orgDepartmentIds[orgDepartmentIds.length - 1],
+      opensAt: '2026-01-01T00:00:00+08:00',
+    });
     expect(duplicate.status).toBe(409);
     expect(duplicate.body.error.code).toBe('SESSION_EXISTS');
   });
 
+  it('draft 场次列表携带开始投票阻塞清单；配置齐全后清空', async () => {
+    const created = await newSession(`${TAG}场次-阻塞`);
+
+    // 刚建的场次只有部门（向导自动落一条），缺项点/被评列/票种/未用码
+    const list = await agent.get('/api/admin/sessions');
+    const row = list.body.sessions.find((s: { id: string }) => s.id === created);
+    expect(Array.isArray(row.startBlockers)).toBe(true);
+    expect(row.startBlockers.length).toBeGreaterThan(0);
+
+    // 补齐配置后阻塞清单清空；此时 start 接口不再 409
+    await makeStartable(created, `${TAG}B1`);
+    const after = await agent.get('/api/admin/sessions');
+    const afterRow = after.body.sessions.find((s: { id: string }) => s.id === created);
+    expect(afterRow.startBlockers).toEqual([]);
+  });
+
   it('状态机：draft→voting→paused→voting→ended，ended 终态不可逆', async () => {
     const id = await newSession(`${TAG}场次-状态机`);
+    await makeStartable(id, `${TAG}S1`);
 
     // draft → end 非法
     const earlyEnd = await agent.post(`/api/admin/sessions/${id}/end`);
@@ -168,6 +223,7 @@ describeDb('场次管理', () => {
 
   it('状态机：paused → start 恢复 voting，且不覆盖首次 startAt', async () => {
     const id = await newSession(`${TAG}场次-恢复`);
+    await makeStartable(id, `${TAG}S2`);
     const started = await agent.post(`/api/admin/sessions/${id}/start`);
     const firstStartAt = started.body.session.startAt as string;
     await agent.post(`/api/admin/sessions/${id}/pause`);
@@ -257,6 +313,7 @@ describeDb('场次管理', () => {
     expect(missing.status).toBe(404);
 
     const id = await newSession(`${TAG}场次-终态改窗`);
+    await makeStartable(id, `${TAG}S3`);
     await agent.post(`/api/admin/sessions/${id}/start`);
     await agent.post(`/api/admin/sessions/${id}/end`);
     expect((await agent.get('/api/admin/sessions')).body.sessions.find((s: { id: string }) => s.id === id).status).toBe('ended');
@@ -305,74 +362,11 @@ describeDb('场次管理', () => {
 
     const filtered = await agent.get(`/api/admin/departments?sessionId=${idB}`);
     expect(filtered.status).toBe(200);
-    expect(filtered.body.map((row: { name: string }) => row.name)).toEqual([`${TAG}B场部门`]);
-  });
-
-  it('发码 assignments：按序写入领码人（发放留痕），跨场次职工被拒', async () => {
-    const id = await newSession(`${TAG}场次-发码`);
-    const departmentId = await newDepartment(id, `${TAG}发码部门`);
-    const empA = await newEmployee(id, departmentId, `${TAG}职工甲`);
-    const empB = await newEmployee(id, departmentId, `${TAG}职工乙`);
-    const otherSession = await newSession(`${TAG}场次-他场`);
-    const otherDept = await newDepartment(otherSession, `${TAG}他场部门`);
-    const empOther = await newEmployee(otherSession, otherDept, `${TAG}他场职工`);
-
-    const ticketTypeId = await newTicketType(id, `${TAG}T1`);
-
-    // 正常：2 张码都按序指定领码人；再发 1 张不指定（assignments 可省略）
-    const ok = await agent.post('/api/admin/tickets/generate').send({
-      sessionId: id,
-      ticketTypeId,
-      count: 2,
-      assignments: [{ ticketTypeId, employeeIds: [empA, empB] }],
-    });
-    expect(ok.status).toBe(200);
-
-    const tickets = await prisma.ticket.findMany({
-      where: { batchId: ok.body.batchId },
-      include: { assignee: { select: { name: true } } },
-    });
-    expect(tickets).toHaveLength(2);
-    // 返回的 codes[i] 就是生成的第 i 张码：assignee 按 assignments 顺序与之对应
-    const assigneeByCode = new Map(
-      (ok.body.codes as string[]).map((code, index) => [code, [empA, empB][index]]),
-    );
-    for (const ticket of tickets) {
-      expect(ticket.assigneeId).toBe(assigneeByCode.get(ticket.code));
-    }
-
-    // 不带 assignments：生成的码无领码人
-    const plain = await agent.post('/api/admin/tickets/generate').send({
-      sessionId: id,
-      ticketTypeId,
-      count: 1,
-    });
-    expect(plain.status).toBe(200);
-    const plainTickets = await prisma.ticket.findMany({
-      where: { batchId: plain.body.batchId },
-    });
-    expect(plainTickets).toHaveLength(1);
-    expect(plainTickets[0]?.assigneeId).toBeNull();
-
-    // 领码人属于其他场次 → 400
-    const mismatch = await agent.post('/api/admin/tickets/generate').send({
-      sessionId: id,
-      ticketTypeId,
-      count: 1,
-      assignments: [{ ticketTypeId, employeeIds: [empOther] }],
-    });
-    expect(mismatch.status).toBe(400);
-    expect(mismatch.body.error.code).toBe('SESSION_MISMATCH');
-
-    // 数量不一致 → 400
-    const badCount = await agent.post('/api/admin/tickets/generate').send({
-      sessionId: id,
-      ticketTypeId,
-      count: 5,
-      assignments: [{ ticketTypeId, employeeIds: [empA] }],
-    });
-    expect(badCount.status).toBe(400);
-    expect(badCount.body.error.code).toBe('ASSIGNMENT_COUNT_MISMATCH');
+    // idB 场内有两部门：向导按字典自动插入的「场次名-字典」+ 手工建的 B场部门；
+    // 关键断言是过滤正确：只含本场部门，不含 A 场的。
+    const names = filtered.body.map((row: { name: string }) => row.name);
+    expect(names).toContain(`${TAG}B场部门`);
+    expect(names).not.toContain(`${TAG}A场部门`);
   });
 
   it('发码票种不属于目标场次 → 400 SESSION_MISMATCH', async () => {

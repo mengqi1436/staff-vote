@@ -56,7 +56,7 @@ function fillSheet(
   sheet: Worksheet,
   info: Array<[string, string]>,
   columns: Array<{ header: string; key: string; width: number }>,
-  rows: Array<Record<string, string | number>>,
+  rows: Array<Record<string, string | number | null>>,
 ): void {
   for (const [label, value] of info) {
     sheet.addRow([label, value]);
@@ -77,19 +77,48 @@ function fillSheet(
 // 导出
 // -----------------------------------------------------------------------------
 
-/** 随机码清单的一行（列口径见设计文档第 12.2 节）。 */
+/** 职工名单导出的一行（列序与导入模板一致，导出件可直接再导入）。 */
+// 用类型别名而非 interface：fillSheet 的 rows 参数是 Record<string, ...>，
+// 只有别名（带隐式索引签名）能直接赋值，免去调用处逐字段 map。
+export type RosterExportRow = {
+  departmentName: string;
+  name: string;
+  gender: string | null;
+  age: number | null;
+  title: string | null;
+};
+
+/** 生成职工名单工作簿。 */
+export function buildRosterWorkbook(rows: RosterExportRow[]): Workbook {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = '职工素质评议系统';
+  const sheet = workbook.addWorksheet('职工名单');
+  fillSheet(
+    sheet,
+    [],
+    [
+      { header: '部门', key: 'departmentName', width: 22 },
+      { header: '姓名', key: 'name', width: 14 },
+      { header: '性别', key: 'gender', width: 8 },
+      { header: '年龄', key: 'age', width: 8 },
+      { header: '职称', key: 'title', width: 18 },
+    ],
+    rows,
+  );
+  return workbook;
+}
+
+/** 随机码清单的一行（发放对账材料；只含未使用的码，无状态/核销时间列 —— 匿名边界）。 */
 export interface TicketExportRow {
   code: string;
   ticketType: string;
-  status: string;
-  usedAt: Date | null;
   batchId: string;
   createdAt: Date;
 }
 
 /**
  * 生成随机码清单工作簿。
- * @param rows 已按查询条件筛选过的随机码
+ * @param rows 已按查询条件筛选过的随机码（服务层保证只含未使用的码）
  * @returns 只含单个 sheet 的工作簿
  */
 export function buildTicketsWorkbook(rows: TicketExportRow[]): Workbook {
@@ -102,16 +131,12 @@ export function buildTicketsWorkbook(rows: TicketExportRow[]): Workbook {
     [
       { header: '随机码', key: 'code', width: 14 },
       { header: '票种', key: 'ticketType', width: 22 },
-      { header: '状态', key: 'status', width: 10 },
-      { header: '核销时间', key: 'usedAt', width: 22 },
       { header: '批次', key: 'batchId', width: 40 },
       { header: '创建时间', key: 'createdAt', width: 22 },
     ],
     rows.map((row) => ({
       code: row.code,
       ticketType: row.ticketType,
-      status: row.status,
-      usedAt: formatDateTime(row.usedAt),
       batchId: row.batchId,
       createdAt: formatDateTime(row.createdAt),
     })),
@@ -158,20 +183,27 @@ export interface ResultsExportInput {
 }
 
 /**
- * 生成结果报表工作簿：综合排名 / 各项明细 / 参与票种口径。
- * @param input 排名、明细与口径数据
- * @returns 三个 sheet 的工作簿
+ * sheet 名组装：附加部门后缀并保证不超 Excel 的 31 字符上限。
+ * 部门名超长时截断后缀（各 sheet 前缀不同，仍互不冲突）。
  */
-export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = '职工素质投票系统';
+function sheetName(base: string, suffix = ''): string {
+  const full = suffix ? `${base}${suffix}` : base;
+  return full.length > 31 ? full.slice(0, 31) : full;
+}
+
+/**
+ * 把结果报表的五个 sheet（综合排名 / 各项明细 / 参与票种口径 / 票别单项 / 票别合计）
+ * 写进指定工作簿。buildResultsWorkbook 与整场导出（每个启用部门一组）共用。
+ * @param suffix sheet 名后缀（如 `-技术部`）；空串 = 单部门导出的原始名
+ */
+function fillResultsSheets(workbook: Workbook, input: ResultsExportInput, suffix = ''): void {
   const info: Array<[string, string]> = [
     ['部门', input.departmentName],
     ['生成时间', formatDateTime(input.generatedAt)],
   ];
 
   fillSheet(
-    workbook.addWorksheet('综合排名'),
+    workbook.addWorksheet(sheetName('综合排名', suffix)),
     info,
     [
       { header: '排名', key: 'rank', width: 8 },
@@ -188,7 +220,7 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
   );
 
   fillSheet(
-    workbook.addWorksheet('各项明细'),
+    workbook.addWorksheet(sheetName('各项明细', suffix)),
     [],
     [
       { header: '被评对象', key: 'voteColumnName', width: 20 },
@@ -207,7 +239,7 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
   );
 
   fillSheet(
-    workbook.addWorksheet('参与票种口径'),
+    workbook.addWorksheet(sheetName('参与票种口径', suffix)),
     info,
     [
       { header: '票种', key: 'code', width: 10 },
@@ -225,7 +257,7 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
 
   // 票别口径的两个明细 sheet：评分内容仍匿名，这里只到票别 × 被评对象粒度。
   fillSheet(
-    workbook.addWorksheet('票别单项明细'),
+    workbook.addWorksheet(sheetName('票别单项明细', suffix)),
     [],
     [
       { header: '票种', key: 'ticketTypeCode', width: 10 },
@@ -242,7 +274,7 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
   );
 
   fillSheet(
-    workbook.addWorksheet('票别合计明细'),
+    workbook.addWorksheet(sheetName('票别合计明细', suffix)),
     [],
     [
       { header: '票种', key: 'ticketTypeCode', width: 10 },
@@ -253,6 +285,143 @@ export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
       ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
       average: row.average,
+    })),
+  );
+}
+
+/**
+ * 生成结果报表工作簿：综合排名 / 各项明细 / 参与票种口径。
+ * @param input 排名、明细与口径数据
+ * @returns 三个 sheet 的工作簿
+ */
+export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = '职工素质投票系统';
+  fillResultsSheets(workbook, input);
+  return workbook;
+}
+
+// -----------------------------------------------------------------------------
+// 按随机码导出答卷（附件8 形态）
+// -----------------------------------------------------------------------------
+
+/** 单码答卷导出的数据（services/results.ts 的 loadTicketAnswerExport 组装）。 */
+export interface AnswerSheetExportInput {
+  headerNote: string;
+  /** 表标题（「xx」已替换为部门名） */
+  title: string;
+  footerNote: string;
+  /** 被评列名，按 sortOrder 排列 */
+  columnNames: string[];
+  /** 每行 = [项点名(含描述), ...各被评列分数] */
+  rows: Array<Array<string | number>>;
+  submittedAt: Date;
+  /** 票别标签：如「A（领导评议）」 */
+  ticketTypeLabel: string;
+}
+
+/**
+ * 生成单码答卷工作簿，复刻附件8 的纸质形态：
+ * 抬头（附件号 + 标题）→ 表体（行 = 项点，列 = 被评列，格 = 分数）→
+ * 表尾填写说明（合并整行）→ 提交时间与票别。
+ */
+export function buildAnswerSheetWorkbook(input: AnswerSheetExportInput): Workbook {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = '职工素质投票系统';
+  const sheet = workbook.addWorksheet('答卷');
+
+  if (input.headerNote) sheet.addRow([input.headerNote]);
+  if (input.title) {
+    const titleRow = sheet.addRow([input.title]);
+    titleRow.font = { bold: true, size: 14 };
+  }
+  sheet.addRow([]);
+
+  const header = sheet.addRow(['项点', ...input.columnNames]);
+  header.font = { bold: true };
+  header.alignment = { horizontal: 'center', vertical: 'middle' };
+  // 项点列放名称 + 描述，换行显示；分数列窄列居右由 Excel 默认数字对齐兜底。
+  sheet.getColumn(1).width = 42;
+  sheet.getColumn(1).alignment = { wrapText: true, vertical: 'top' };
+  for (let i = 2; i <= input.columnNames.length + 1; i += 1) {
+    sheet.getColumn(i).width = 12;
+  }
+
+  for (const row of input.rows) {
+    sheet.addRow(row);
+  }
+
+  if (input.footerNote) {
+    const lastColumn = input.columnNames.length + 1;
+    const noteRow = sheet.addRow([input.footerNote]);
+    if (lastColumn > 1) sheet.mergeCells(noteRow.number, 1, noteRow.number, lastColumn);
+    noteRow.alignment = { wrapText: true, vertical: 'top' };
+  }
+
+  sheet.addRow([]);
+  sheet.addRow(['提交时间', formatDateTime(input.submittedAt)]);
+  sheet.addRow(['票别', input.ticketTypeLabel]);
+
+  return workbook;
+}
+
+// -----------------------------------------------------------------------------
+// 整场整合导出
+// -----------------------------------------------------------------------------
+
+/** 整场导出中一个启用部门的结果组（sheet 名加部门后缀区分）。 */
+export interface SessionExportPart {
+  label: string;
+  input: ResultsExportInput;
+}
+
+/** 整场导出末尾「答卷汇总」sheet 的数据（services/results.ts 组装）。 */
+export interface AnswerSummaryInput {
+  columns: Array<{ header: string }>;
+  rows: Array<{
+    seq: number;
+    code: string;
+    submittedAt: Date;
+    ticketTypeCode: string;
+    scores: Array<number | string>;
+  }>;
+}
+
+/**
+ * 生成整场整合工作簿：每个启用部门一组的统分与排名 sheets（多部门时 sheet 名
+ * 带部门后缀，单部门保持原始名），末尾追加「答卷汇总」——按随机码定位答卷的
+ * 审计视图（无映射的历史答卷 code 留空）。
+ */
+export function buildSessionWorkbook(
+  parts: SessionExportPart[],
+  summary: AnswerSummaryInput,
+): Workbook {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = '职工素质投票系统';
+  for (const part of parts) {
+    fillResultsSheets(workbook, part.input, parts.length > 1 ? `-${part.label}` : '');
+  }
+
+  fillSheet(
+    workbook.addWorksheet('答卷汇总'),
+    [],
+    [
+      { header: '序号', key: 'seq', width: 6 },
+      { header: '随机码', key: 'code', width: 14 },
+      { header: '提交时间', key: 'submittedAt', width: 22 },
+      { header: '票别', key: 'ticketTypeCode', width: 10 },
+      ...summary.columns.map((column, index) => ({
+        header: column.header,
+        key: `score${index}`,
+        width: 12,
+      })),
+    ],
+    summary.rows.map((row) => ({
+      seq: row.seq,
+      code: row.code,
+      submittedAt: formatDateTime(row.submittedAt),
+      ticketTypeCode: row.ticketTypeCode,
+      ...Object.fromEntries(row.scores.map((value, index) => [`score${index}`, value])),
     })),
   );
 
@@ -302,7 +471,9 @@ export interface RosterRow {
   rowNumber: number;
   departmentName: string;
   name: string;
-  employeeNo: string | null;
+  gender: string | null;
+  age: number | null;
+  title: string | null;
 }
 
 /** 表头行识别：首列为「部门」或英文 department 时视为表头。 */
@@ -376,12 +547,18 @@ function toRosterRows(table: string[][]): RosterRow[] {
     if (isHeaderRow(cells)) continue;
     const departmentName = (cells[0] ?? '').trim();
     const name = (cells[1] ?? '').trim();
-    const employeeNo = (cells[2] ?? '').trim();
+    const gender = (cells[2] ?? '').trim();
+    // 年龄非数字时按缺省处理：管理员自维护的数据，比整行报错更省事
+    const ageText = (cells[3] ?? '').trim();
+    const age = ageText === '' || Number.isNaN(Number(ageText)) ? null : Number(ageText);
+    const title = (cells[4] ?? '').trim();
     rows.push({
       rowNumber: index + 1,
       departmentName,
       name,
-      employeeNo: employeeNo === '' ? null : employeeNo,
+      gender: gender === '' ? null : gender,
+      age,
+      title: title === '' ? null : title,
     });
   }
   return rows;
@@ -399,7 +576,7 @@ function toArrayBuffer(buffer: Buffer): ArrayBuffer {
 /**
  * 解析职工名单文件。
  *
- * 列约定「部门,姓名,工号(可选)」，首行可以是表头。
+ * 列约定「部门,姓名,性别,年龄,职称（后三列可空）」，首行可以是表头。
  * 全空行由服务层计为「跳过」，本函数原样返回，便于把错误指向真实行号。
  *
  * @param buffer 上传的文件内容

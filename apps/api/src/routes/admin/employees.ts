@@ -18,10 +18,17 @@ import {
   disableEmployee,
   importEmployees,
   listEmployees,
+  listRosterForExport,
   resolveSessionId,
   updateEmployee,
 } from '../../services/admin.js';
-import { parseRosterFile } from '../../lib/xlsx.js';
+import {
+  buildRosterWorkbook,
+  fileStamp,
+  parseRosterFile,
+  sendWorkbook,
+  workbookToBuffer,
+} from '../../lib/xlsx.js';
 import { ApiError } from '../../middleware/errorHandler.js';
 import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
@@ -38,14 +45,18 @@ const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
   sessionId: z.string().min(1).optional(),
   name: z.string().trim().min(1, '姓名不能为空').max(50),
-  employeeNo: z.string().trim().max(50).nullable().optional(),
+  gender: z.string().trim().max(10).nullable().optional(),
+  age: z.number().int().min(0, '年龄不能为负').max(150).nullable().optional(),
+  title: z.string().trim().max(50).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
 });
 
 const PatchSchema = z.object({
   departmentId: z.string().min(1).optional(),
   name: z.string().trim().min(1).max(50).optional(),
-  employeeNo: z.string().trim().max(50).nullable().optional(),
+  gender: z.string().trim().max(10).nullable().optional(),
+  age: z.number().int().min(0, '年龄不能为负').max(150).nullable().optional(),
+  title: z.string().trim().max(50).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
   enabled: z.boolean().optional(),
 });
@@ -128,7 +139,22 @@ employeesRouter.get('/', async (req, res) => {
   res.json(await listEmployees(departmentId, await resolveSessionId(sessionId)));
 });
 
-/** 导入名单（xlsx / csv，列：部门,姓名,工号）。 */
+/** 导入模板：表头与列约定同口径，示例行演示各列；xlsx 与 CSV 模板内容由前端按需取。 */
+employeesRouter.get('/import-template.xlsx', async (_req, res) => {
+  const workbook = buildRosterWorkbook([
+    { departmentName: '办公室', name: '张三', gender: '男', age: 35, title: '高级工程师' },
+  ]);
+  sendWorkbook(res, '职工名单导入模板.xlsx', await workbookToBuffer(workbook));
+});
+
+/** 名单导出：列「部门,姓名,性别,年龄,职称」与导入模板同序，导出件可直接再导入。 */
+employeesRouter.get('/export', async (req, res) => {
+  const { departmentId, sessionId } = ListQuerySchema.parse(req.query);
+  const workbook = buildRosterWorkbook(await listRosterForExport(departmentId, sessionId));
+  sendWorkbook(res, `职工名单-${fileStamp()}.xlsx`, await workbookToBuffer(workbook));
+});
+
+/** 导入名单（xlsx / csv，列：部门,姓名,性别,年龄,职称）。 */
 employeesRouter.post('/import', requirePermission('employees.write'), async (req, res) => {
   const sessionId =
     typeof req.query.sessionId === 'string' && req.query.sessionId.trim() !== ''

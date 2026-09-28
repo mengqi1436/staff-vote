@@ -180,7 +180,7 @@ export function AdminDepartments() {
             <span>
               <Popconfirm
                 title="删除该部门？"
-                description="删除即停用（软删除），可随时再启用。"
+                description="删除即停用，历史评分保留，可随时再启用。"
                 okText="删除"
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
@@ -239,7 +239,7 @@ export function AdminDepartments() {
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
-            title="删除即停用（软删除）"
+            title="删除即停用"
             description={
               <ul style={{ margin: 0, paddingLeft: 20 }}>
                 <li>停用后不再出现在投票入口，历史评分仍可导出，可随时再启用。</li>

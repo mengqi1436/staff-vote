@@ -4,6 +4,7 @@ import { loginRouter, sessionRouter } from './auth.js';
 import { criteriaRouter } from './criteria.js';
 import { departmentsRouter } from './departments.js';
 import { employeesRouter } from './employees.js';
+import { orgDepartmentsRouter } from './orgDepartments.js';
 import { rbacRouter } from './rbac.js';
 import { sessionsRouter } from './sessions.js';
 import { settingsRouter } from './settings.js';
@@ -22,15 +23,23 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   POST   /login  { username, password }  → 设置 httpOnly Cookie；用 adminLoginLimiter
  *   POST   /logout
  *   GET    /me
+ *   /sessions           GET POST PATCH /:id/start|pause|end（写需 settings.write）；
+ *                       POST /:id/start 前做配置完整性校验（缺项 409 SESSION_INCOMPLETE）
+ *   /sessions/:id/ticket-plan PUT  票别分配聚合：提交启用票种全集并发码
+ *                       （需 ticketTypes.write + tickets.generate）
+ *   /sessions/:id/export.xlsx GET  整场整合导出（results.export）
  *   /ticket-types      GET POST PATCH DELETE   权重合计=100 校验（写需 ticketTypes.write）
  *   /tickets           GET（分页筛选）
  *   /tickets/generate  POST { ticketTypeId, count }  → 批量发码，记 TicketBatch 与 AuditLog
  *                                                   （tickets.generate）
  *   /tickets/export    GET  → xlsx
+ *   /tickets/:id/export.xlsx GET  按随机码导出答卷（results.export）
  *   /tickets/:id/revoke POST → 作废单张未使用的码（tickets.revoke）
  *   /tickets/revoke-bulk POST { sessionId, ticketTypeId? } → 一键作废该场次范围内
  *                         全部未使用码；used / revoked 不动，返回 { revoked }（tickets.revoke）
  *   /ticket-batches    GET
+ *   /org-departments   GET POST PATCH DELETE   全局部门字典；被场次引用时删除 409
+ *                         （写需 departments.write，读=登录即可）
  *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false）；
  *                         PATCH 同时负责问卷表头配置（questionnaireType / headerNote /
  *                         title / footerNote）（写需 departments.write）
@@ -60,6 +69,7 @@ adminRouter.use('/sessions', sessionsRouter);
 adminRouter.use('/ticket-types', ticketTypesRouter);
 adminRouter.use('/tickets', ticketsRouter);
 adminRouter.use('/ticket-batches', ticketBatchesRouter);
+adminRouter.use('/org-departments', orgDepartmentsRouter);
 adminRouter.use('/departments', departmentsRouter);
 adminRouter.use('/vote-columns', voteColumnsRouter);
 adminRouter.use('/employees', employeesRouter);

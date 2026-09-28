@@ -33,7 +33,7 @@ pnpm db:generate|deploy|seed|drift   # Prisma 生成/迁移/种子/漂移检查
 
 ## 其他要点
 
-- 匿名边界：`score_sheets` 表不含随机码/IP/User-Agent，**不要加回去**，也不要往匿名链路里塞可识别信息。
+- 匿名边界：`score_sheets` 表不含随机码/IP/User-Agent，**不要加回去**，也不要往匿名链路里塞可识别信息。`sheet_ticket_map` 是为满足「按随机码导出答卷」需求引入的受控映射（随机码↔答卷，1:1）：仅 `results.export` 权限的导出端点读取，评分与统计链路不使用它，不要扩大它的使用面。
 - 管理员口令 scrypt 哈希（OWASP 参数），AES-128 仅预留用于将来的可还原字段，绝不用于口令。
 - 防锁死：系统必须保留至少一个「已启用且拥有 `admins.manage`」的账号，违反的操作后端 409。
 - pnpm 依赖构建脚本需在 `pnpm-workspace.yaml` 的 `allowBuilds`/`onlyBuiltDependencies` 放行（prisma/esbuild 已放行）。

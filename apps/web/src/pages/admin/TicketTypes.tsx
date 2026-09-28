@@ -269,7 +269,7 @@ export function AdminTicketTypes() {
           </Button>
           <Popconfirm
             title="删除该票种？"
-            description="删除即停用（软删除）：已发出的随机码与历史评分保留，可随时再启用。"
+            description="删除即停用：已发出的随机码与历史评分保留，可随时再启用。"
             okText="删除"
             cancelText="取消"
             okButtonProps={{ danger: true }}
@@ -340,7 +340,7 @@ export function AdminTicketTypes() {
             showIcon
             style={{ marginBottom: 16 }}
             title={`启用票种权重合计 ${summary.total}%，${summaryTail}`}
-            description={`启用 ${summary.enabledCount} 个 · 停用 ${data.length - summary.enabledCount} 个不计入合计；与后端「启用票种权重合计＝100」的校验同口径。`}
+            description={`启用 ${summary.enabledCount} 个 · 停用 ${data.length - summary.enabledCount} 个不计入合计；与系统执行的「启用票种权重合计＝100」规则一致。`}
           />
 
           <Card
@@ -353,7 +353,7 @@ export function AdminTicketTypes() {
               showIcon
               style={{ marginBottom: 16 }}
               title="一次改完再保存，系统按「先降权、后升权」逐条提交"
-              description="调整权重需「管理票种与权重」权限。降权先提交、升权后提交，中间每一步的合计都不会超过 100%，因此不会撞上后端「合计不得超过 100%」的上限；在单行编辑里改权重撞到该上限时，回到这里一次改完即可。"
+              description="调整权重需「管理票种与权重」权限。降权先提交、升权后提交，中间每一步的合计都不会超过 100%，因此不会撞上「合计不得超过 100%」的上限；在单行编辑里改权重撞到该上限时，回到这里一次改完即可。"
             />
 
             <Table<TicketTypeDto>
@@ -412,12 +412,12 @@ export function AdminTicketTypes() {
               description={
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
                   <li>
-                    后端校验的是「启用票种权重合计＝100」，停用票种一律不计入合计；
-                    合计提示与后端同口径，避免按两个不同的数字做决定。
+                    系统按「启用票种权重合计＝100」把关，停用票种一律不计入合计；
+                    合计提示与实际执行口径一致，避免按两个不同的数字做决定。
                   </li>
                   <li>
                     新建票种时可以先低于 100%（先建齐票种再逐个调权）；降权或停用会先腾出空间；
-                    升权后合计不等于 100% 会被后端拒绝并回显差额。
+                    升权后合计不等于 100% 会被拒绝并提示差额。
                   </li>
                   <li>合计与差额随列表实时重算，页面不轮询，保存或启停后自动刷新。</li>
                   <li>
@@ -427,7 +427,7 @@ export function AdminTicketTypes() {
                   <li>已发＝已生成的随机码数；已用＝已提交投票并核销的码数；未用＝已发 − 已用 − 已作废。</li>
                   <li>权重仅对启用票种生效；「停用」为文字状态，不靠颜色单独表意。</li>
                   <li>
-                    删除是软删除（停用）：历史随机码与评分表都引用票种，物理删除会毁掉历史数据，
+                    删除即停用：历史随机码与评分表都引用票种，彻底删除会毁掉历史数据，
                     因此列表永久保留记录。
                   </li>
                 </ul>

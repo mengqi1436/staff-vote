@@ -85,6 +85,40 @@ export function downloadUrl(path: string): string {
   return `${BASE}${path}`;
 }
 
+/**
+ * fetch 方式下载：先看响应状态再落盘。入参是 downloadUrl() 的返回值（带 /api 前缀）。
+ * 导出答卷这类「可能没有产物」的接口需要区分 404（无答卷）与真实下载，
+ * 直链 <a href> 无法拦截错误响应，浏览器只会默默展示一段 JSON。
+ */
+export async function downloadFile(url: string): Promise<void> {
+  const response = await fetch(url, { credentials: 'same-origin' });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    let code = 'UNKNOWN';
+    let message = `请求失败（${response.status}）`;
+    try {
+      const payload = JSON.parse(text) as { error?: { code?: string; message?: string } };
+      code = payload.error?.code ?? code;
+      message = payload.error?.message ?? message;
+    } catch {
+      // 非 JSON 错误体：保留默认文案
+    }
+    throw new ApiError(response.status, code, message);
+  }
+  const blob = await response.blob();
+  // 文件名取 Content-Disposition（后端 attachment 形态），取不到退回路径末段
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const fallback = decodeURIComponent(url.split('/').pop() ?? 'download.xlsx');
+  const name = match ? decodeURIComponent(match[1]!) : fallback;
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
 /** 职工名单导入的返回体，与后端 ImportEmployeesResult 一致。 */
 export interface ImportFeedback {
   total?: number;
@@ -122,13 +156,45 @@ export interface AdminSessionDto {
   startAt: string | null;
   endedAt: string | null;
   createdAt: string;
+  /** 所属全局部门 id；旧场次（建场前没有全局部门字典）为 null */
+  orgDepartmentId: string | null;
+  /** 所属全局部门名（冗余展示用，与 orgDepartmentId 同源）；旧场次为 null */
+  orgDepartmentName: string | null;
+  /** draft 场次开始投票前的阻塞缺项；非空 = 配置未完成，开始按钮应禁用。非 draft 恒为空。 */
+  startBlockers: string[];
 }
 
-/** 发码选配：按票别指定领码职工，生成随机码时绑定领码人。 */
-export interface TicketAssignment {
-  ticketTypeId: string;
-  employeeIds: string[];
+/**
+ * 全局部门字典（跨场次复用的部门目录）。
+ * 场内 departments 是「这一场实际参评的部门」，建场时从本字典选定并自动落一条；
+ * 本字典才是管理员维护的主数据。
+ */
+export interface OrgDepartmentDto {
+  id: string;
+  name: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: string;
 }
+
+/** 场次票别规划的单行请求体（PUT /sessions/:id/ticket-plan）。 */
+export interface TicketPlanItem {
+  /** 票种编码，场次内唯一（1-8 字符） */
+  code: string;
+  name: string;
+  weightPercent: number;
+  /** 本票种要发放的随机码数量；0 = 只建票种不发码 */
+  count: number;
+}
+
+/** 票别规划提交结果：逐票种的建批与发码情况（不含明文码）。 */
+export interface TicketPlanResult {
+  ticketTypes: TicketTypeDto[];
+  generated: Array<{ ticketTypeId: string; batchId: string; count: number }>;
+}
+
+/** 前端门控用的权限码常量（目录真源在后端 lib/permissions.ts）。 */
+export const PERMISSION_RESULTS_EXPORT = 'results.export';
 
 /** 拼接 `?sessionId=` 查询串；未选场次时不带参数（后端单场数据兼容）。 */
 function sessionIdQuery(sessionId?: string | null): string {
@@ -220,7 +286,9 @@ export type VoteCriterionDto = Pick<
 export interface EmployeeDto {
   id: string;
   name: string;
-  employeeNo: string | null;
+  gender: string | null;
+  age: number | null;
+  title: string | null;
   sortOrder: number;
   enabled: boolean;
 }
@@ -264,6 +332,10 @@ export interface TicketBatchDto {
   operator: string;
   createdAt: string;
   ticketType: { id: string; code: string; name: string };
+  /** 本批次绑定评议部门；null = 不限定（存量码/向导发码兼容，可评议全部部门） */
+  departmentId: string | null;
+  /** 冗余展示用部门名，与 departmentId 同源；null 同上 */
+  departmentName: string | null;
 }
 
 export interface Paged<T> {
@@ -299,6 +371,43 @@ export interface StatsOverview {
     /** 判定所针对的场次状态（draft / voting / paused / ended） */
     status: string;
   };
+  generatedAt: string;
+}
+
+/** 参考样表统计的行：被评对象 × 票别（docs/附件文件包/参考样表.xlsx 形态）。 */
+export interface SampleStatRowDto {
+  departmentId: string;
+  departmentName: string;
+  /** 被评列 ID：同名被评列（如两个「副主任」）各自行唯一，用作 rowKey */
+  voteColumnId: string;
+  /** 被评对象：个人表为被评列名（主任…），车间表为车间名 */
+  targetName: string;
+  /** 票种 ID；「ABC汇总」行为 null */
+  ticketTypeId: string | null;
+  /** 票别显示：A / B / C /「ABC汇总」 */
+  ticketCode: string;
+  /** 各项点得分，顺序与 criteriaNames 对齐 */
+  scores: number[];
+  /** 1-5合计：各项点得分之和 */
+  total: number;
+  /** 综合评价得分 */
+  comprehensiveScore: number;
+  /** 综合评价得分排序（组内同分并列） */
+  rank: number;
+}
+
+export interface SampleStatTableDto {
+  criteriaNames: string[];
+  rows: SampleStatRowDto[];
+}
+
+/** GET /admin/stats/samples：参考样表口径的已提交表单计算结果。 */
+export interface StatsSamplesDto {
+  /** 个人问卷表（车间负责人评价） */
+  personal: SampleStatTableDto;
+  /** 车间问卷表（车间评价） */
+  workshop: SampleStatTableDto;
+  sheetCount: number;
   generatedAt: string;
 }
 
@@ -425,8 +534,17 @@ export const adminApi = {
    */
   sessions: {
     list: () => request<{ sessions: AdminSessionDto[] }>('/admin/sessions'),
-    create: (name: string) =>
-      request<{ session: AdminSessionDto }>('/admin/sessions', { method: 'POST', body: { name } }),
+    /**
+     * 创建场次（建场向导第 1 步）。请求体含所属全局部门与开放窗口起点（必填）：
+     * 后端在同一事务里建场次并自动落一条场内部门（name=所选字典部门名，个人问卷）。
+     * closesAt 省略或 null = 长期开放；opensAt 必须 < closesAt，违反返回 422。
+     */
+    create: (values: {
+      name: string;
+      orgDepartmentId: string;
+      opensAt: string;
+      closesAt?: string | null;
+    }) => request<{ session: AdminSessionDto }>('/admin/sessions', { method: 'POST', body: values }),
     /**
      * 更新场次名称与开放窗口。
      *
@@ -443,6 +561,18 @@ export const adminApi = {
       request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/pause`, { method: 'POST' }),
     end: (id: string) =>
       request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/end`, { method: 'POST' }),
+    /**
+     * 票别规划（建场向导第 3 步）：本次提交集合 = 启用票种全集，
+     * 逐票种 upsert 并按 count 建批发码（count=0 只建票种）；
+     * 启用票种权重合计必须恰为 100，违反返回 422 WEIGHT_SUM。
+     */
+    ticketPlan: (sessionId: string, types: TicketPlanItem[]) =>
+      request<TicketPlanResult>(`/admin/sessions/${sessionId}/ticket-plan`, {
+        method: 'PUT',
+        body: { types },
+      }),
+    /** 整场整合导出（多 sheet：四层统分排名 + 答卷汇总），权限 results.export。 */
+    exportFullUrl: (id: string) => downloadUrl(`/admin/sessions/${id}/export.xlsx`),
   },
 
   /** 权限目录：角色勾选框按 groupName 分组渲染 */
@@ -499,11 +629,10 @@ export const adminApi = {
       if (params.sessionId) query.set('sessionId', params.sessionId);
       return request<Paged<TicketDto>>(`/admin/tickets?${query.toString()}`);
     },
-    /** @param options.assignments 选配领码人：按票别勾选职工，生成时绑定领码人 */
     generate: (
       ticketTypeId: string,
       count: number,
-      options: { sessionId?: string | null; assignments?: TicketAssignment[] } = {},
+      options: { sessionId?: string | null; departmentId?: string } = {},
     ) =>
       request<{ batchId: string; count: number; codes: string[] }>('/admin/tickets/generate', {
         method: 'POST',
@@ -512,7 +641,8 @@ export const adminApi = {
           ticketTypeId,
           count,
           ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-          assignments: options.assignments,
+          // departmentId 省略 = 不限定部门（仅「不限定」选项显式确认后使用）
+          ...(options.departmentId ? { departmentId: options.departmentId } : {}),
         },
       }),
     revoke: (id: string) => request<TicketDto>(`/admin/tickets/${id}/revoke`, { method: 'POST' }),
@@ -535,11 +665,36 @@ export const adminApi = {
       if (params.sessionId) query.set('sessionId', params.sessionId);
       return downloadUrl(`/admin/tickets/export?${query.toString()}`);
     },
+    /**
+     * 单个随机码的答卷导出（附件8 形态单 sheet），权限 results.export。
+     * 码未使用/已作废返回 409；无答卷或无映射返回 404，走 downloadFile 才能拦到。
+     */
+    exportAnswerUrl: (id: string) => downloadUrl(`/admin/tickets/${id}/export.xlsx`),
   },
 
   batches: {
     list: (options: { sessionId?: string | null } = {}) =>
       request<TicketBatchDto[]>(`/admin/ticket-batches${sessionIdQuery(options.sessionId)}`),
+  },
+
+  /**
+   * 全局部门字典（跨场次主数据，路由 /admin/departments 独立页维护）。
+   * 读 = 登录即可；写操作权限 departments.write。
+   * 删除被场次引用时返回 409 ORG_DEPARTMENT_IN_USE（只能停用）。
+   */
+  orgDepartments: {
+    list: () => request<{ departments: OrgDepartmentDto[] }>('/admin/org-departments'),
+    create: (body: { name: string; sortOrder?: number }) =>
+      request<{ department: OrgDepartmentDto }>('/admin/org-departments', {
+        method: 'POST',
+        body,
+      }),
+    update: (id: string, body: { name?: string; sortOrder?: number; enabled?: boolean }) =>
+      request<{ department: OrgDepartmentDto }>(`/admin/org-departments/${id}`, {
+        method: 'PATCH',
+        body,
+      }),
+    remove: (id: string) => request<void>(`/admin/org-departments/${id}`, { method: 'DELETE' }),
   },
 
   departments: {
@@ -597,7 +752,14 @@ export const adminApi = {
       return request<EmployeeDto[]>(`/admin/employees${qs ? `?${qs}` : ''}`);
     },
     create: (
-      body: { departmentId: string; name: string; employeeNo?: string | null; sortOrder?: number },
+      body: {
+        departmentId: string;
+        name: string;
+        gender?: string | null;
+        age?: number | null;
+        title?: string | null;
+        sortOrder?: number;
+      },
       sessionId?: string | null,
     ) =>
       request<EmployeeDto>('/admin/employees', { method: 'POST', body: sessionId ? { ...body, sessionId } : body }),
@@ -610,6 +772,15 @@ export const adminApi = {
       form.append('file', file);
       return request<ImportFeedback>('/admin/employees/import', { method: 'POST', body: form });
     },
+    /** 名单导出：后端生成 xlsx，走 downloadFile 才能拦到错误响应。 */
+    exportUrl: (departmentId?: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      if (departmentId) query.set('departmentId', departmentId);
+      if (sessionId) query.set('sessionId', sessionId);
+      return downloadUrl(`/admin/employees/export?${query.toString()}`);
+    },
+    /** 导入模板（xlsx 版）：后端生成；CSV 版由前端直接拼字符串。 */
+    importTemplateUrl: () => downloadUrl('/admin/employees/import-template.xlsx'),
   },
 
   criteria: {
@@ -644,6 +815,9 @@ export const adminApi = {
   stats: {
     overview: (options: { sessionId?: string | null } = {}) =>
       request<StatsOverview>(`/admin/stats/overview${sessionIdQuery(options.sessionId)}`),
+    /** 参考样表统计（被评对象 × 票别）；重计算，由统计页签在投票结束后按需加载。 */
+    samples: (options: { sessionId?: string | null } = {}) =>
+      request<StatsSamplesDto>(`/admin/stats/samples${sessionIdQuery(options.sessionId)}`),
   },
 
   results: {

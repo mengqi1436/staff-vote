@@ -85,8 +85,10 @@ beforeEach(() => {
   revokeBulkMock.mockResolvedValue({ revoked: 2 });
 
   listMock.mockImplementation(async (params = {}) => {
-    if (params.status === 'unused') {
-      return { items: [], total: unusedTotal, page: 1, pageSize: params.pageSize ?? 20 };
+    // 匿名边界后所有查询都带 status:'unused'：pageSize===1 的是未使用总数探测，
+    // 其余是明细分页 —— 明细固定返回一行未使用码用于行内作废断言。
+    if (params.status === 'unused' && params.pageSize === 1) {
+      return { items: [], total: unusedTotal, page: 1, pageSize: 1 };
     }
     return {
       items: [

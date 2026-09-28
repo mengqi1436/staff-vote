@@ -44,6 +44,12 @@ export const PERMISSION_CATALOG: PermissionSeed[] = [
     sortOrder: 30,
   },
   {
+    code: 'results.export',
+    name: '导出答卷与统计结果',
+    groupName: '评议执行',
+    sortOrder: 31,
+  },
+  {
     code: 'admins.manage',
     name: '管理管理员账号与角色权限',
     groupName: '系统管理',

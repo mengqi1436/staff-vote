@@ -79,8 +79,10 @@ async function seedPermissions(): Promise<Map<string, string>> {
 /**
  * 同步内置角色。
  *
- * 首次创建时按代码授予默认权限；已存在的角色【不覆盖】其权限集合 ——
- * 管理员在后台改过的角色必须保留，这与本文件既有的 seed 约定一致。
+ * 首次创建时按代码授予默认权限；已存在的角色【只增不删】——
+ * 权限目录随代码演进（如新增 results.export），为已存在的内置角色补授
+ * 其定义集合中缺失的权限，保证新增权限码不需要手工到每个环境里勾选；
+ * 管理员在后台加的权限与删掉的权限都不回滚（不做整体覆盖）。
  *
  * @param permissionIdByCode seedPermissions 返回的权限码 → id 映射
  * @returns 角色码 → 角色 id 的映射
@@ -91,8 +93,28 @@ async function seedRoles(permissionIdByCode: Map<string, string>): Promise<Map<s
   for (const item of BUILTIN_ROLES) {
     const existing = await prisma.adminRole.findUnique({ where: { code: item.code } });
     if (existing) {
+      const definedIds = item.permissions
+        .map((code) => permissionIdByCode.get(code))
+        .filter((permissionId): permissionId is string => Boolean(permissionId));
+      const currentIds = new Set(
+        (
+          await prisma.rolePermission.findMany({
+            where: { roleId: existing.id },
+            select: { permissionId: true },
+          })
+        ).map((row) => row.permissionId),
+      );
+      const missing = definedIds.filter((permissionId) => !currentIds.has(permissionId));
+      if (missing.length > 0) {
+        await prisma.rolePermission.createMany({
+          data: missing.map((permissionId) => ({ roleId: existing.id, permissionId })),
+        });
+        console.log(`[seed] 已为角色「${item.name}」补授 ${missing.length} 项新增权限`);
+      } else {
+        console.log(`[seed] 角色「${item.name}」已存在，权限齐备`);
+      }
+
       idByCode.set(existing.code, existing.id);
-      console.log(`[seed] 角色「${item.name}」已存在，保留其现有权限`);
       continue;
     }
 

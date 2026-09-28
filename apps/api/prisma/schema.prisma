@@ -50,18 +50,39 @@ model VoteSession {
   opensAt   DateTime?     @db.Timestamptz(3) @map("opens_at")
   /// 开放结束时间；空 = 长期开放（状态为 voting 且已到 opensAt 即开放）。
   closesAt  DateTime?     @db.Timestamptz(3) @map("closes_at")
+  /// 所属全局部门（字典）。空 = 历史场次，建场次向导之前的存量数据。
+  orgDepartmentId String?  @map("org_department_id")
   createdAt DateTime      @default(now()) @db.Timestamptz(3) @map("created_at")
 
-  departments   Department[]
-  criteria      Criterion[]
-  voteColumns   VoteColumn[]
-  employees     Employee[]
-  ticketTypes   TicketType[]
-  ticketBatches TicketBatch[]
-  tickets       Ticket[]
-  scoreSheets   ScoreSheet[]
+  orgDepartment  OrgDepartment? @relation(fields: [orgDepartmentId], references: [id], onDelete: Restrict)
+  departments    Department[]
+  criteria       Criterion[]
+  voteColumns    VoteColumn[]
+  employees      Employee[]
+  ticketTypes    TicketType[]
+  ticketBatches  TicketBatch[]
+  tickets        Ticket[]
+  scoreSheets    ScoreSheet[]
+  sheetTicketMap SheetTicketMap[]
 
+  @@index([orgDepartmentId])
   @@map("vote_sessions")
+}
+
+/// 全局部门字典。跨场次复用的部门名单：建场次向导第一步从字典里选部门，
+/// 系统随即在场内 departments 插入一条同名部门。被场次引用的字典项不可删除
+/// （应用层 409 + 数据库 RESTRICT 兜底），停用即可让它从新场次的下拉里消失。
+model OrgDepartment {
+  id        String   @id @default(uuid(7))
+  name      String   @unique
+  sortOrder Int      @default(0) @map("sort_order")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  sessions VoteSession[]
+
+  @@map("org_departments")
 }
 
 /// 随机码状态。用数据库原生 enum，避免字符串字面量漂移。
@@ -158,10 +179,12 @@ model Department {
   /// 表尾填写说明（参考表里合并整行的说明文字，含满分与弃权口径）。
   footerNote String @default("") @map("footer_note")
 
-  employees   Employee[]
-  criteria    Criterion[]
-  voteColumns VoteColumn[]
-  sheets      ScoreSheet[]
+  employees     Employee[]
+  criteria      Criterion[]
+  voteColumns   VoteColumn[]
+  sheets        ScoreSheet[]
+  tickets       Ticket[]
+  ticketBatches TicketBatch[]
 
   session VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
 
@@ -204,8 +227,12 @@ model Employee {
   departmentId String   @map("department_id")
   sessionId    String   @map("session_id")
   name         String
-  /// 外部唯一标识，为将来对接人事系统预留（届时按此列 upsert，无需改表结构）
-  employeeNo   String?  @unique @map("employee_no")
+  /// 性别：男/女，可空（导入的名单可能缺省）
+  gender       String?
+  /// 年龄，可空
+  age          Int?
+  /// 职称，可空
+  title        String?
   sortOrder    Int      @default(0) @map("sort_order")
   enabled      Boolean  @default(true)
   createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
@@ -276,16 +303,22 @@ model TicketBatch {
   id           String   @id @default(uuid(7))
   ticketTypeId String   @map("ticket_type_id")
   sessionId    String   @map("session_id")
+  /// 评议部门绑定；NULL = 不限定（持码人可评全部部门）。
+  departmentId String?  @map("department_id")
   count        Int
   operator     String
   createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
 
   session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  /// 部门删除前须先作废/解绑本批次的码（Restrict，不要 SetNull：
+  /// SetNull 会把受限码静默退回万能码，等于放宽权限）。
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   tickets    Ticket[]
 
   @@index([ticketTypeId])
   @@index([sessionId])
+  @@index([departmentId])
   @@map("ticket_batches")
 }
 
@@ -296,6 +329,9 @@ model Ticket {
   ticketTypeId String       @map("ticket_type_id")
   batchId      String       @map("batch_id")
   sessionId    String       @map("session_id")
+  /// 评议部门绑定；NULL = 不限定（持码人可评全部部门）。随批次发码时冗余落列，
+  /// 投票链路只读本列，不必 join 批次。
+  departmentId String?      @map("department_id")
   /// 领码人（发放留痕）。票不记名：本列只回答「码发给了谁、谁已投」，
   /// 与评分数据（score_sheets 不含 ticketId）在物理上隔断。
   assigneeId   String?      @map("assignee_id")
@@ -306,14 +342,20 @@ model Ticket {
   session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
   batch      TicketBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  /// 部门删除前须先作废/解绑本码（Restrict，不要 SetNull：
+  /// SetNull 会把受限码静默退回万能码，等于放宽权限）。
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   /// 职工被删除后发放记录保留，只是退回「未指定领码人」（SetNull）。
   assignee   Employee?   @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  /// 提交答卷后写入的受控映射（0..1 张）。
+  sheetMap   SheetTicketMap?
 
   @@index([status])
   @@index([batchId])
   @@index([ticketTypeId])
   @@index([sessionId])
   @@index([assigneeId])
+  @@index([departmentId])
   @@map("tickets")
 }
 
@@ -331,11 +373,35 @@ model ScoreSheet {
   session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
   items      ScoreItem[]
+  /// 受控映射（可空：启用映射前的历史答卷没有对应行）。反向指向随机码，
+  /// 仅 results.export 的导出路径读取，评分与统计链路不使用。
+  ticketMap  SheetTicketMap?
 
   @@index([departmentId])
   @@index([sessionId])
   @@index([ticketTypeId])
   @@map("score_sheets")
+}
+
+/// 随机码与答卷的受控映射（按随机码导出答卷用）。
+///
+/// 匿名边界说明：score_sheets 本身仍不含任何票据标识；本表是唯一的「码 → 答卷」
+/// 关联点，仅 results.export 权限的导出路径读取。评分（scoring）与统计（stats /
+/// results）链路不 join 本表，因此删除或停用本表不影响任何计分口径。
+model SheetTicketMap {
+  /// 主键即随机码：一码至多一张答卷，重复提交在投票事务里先被核销校验拦下。
+  ticketId String @id @map("ticket_id")
+  /// 唯一：一张答卷至多来自一个码。
+  sheetId  String @unique @map("sheet_id")
+  sessionId String @map("session_id")
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  ticket  Ticket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sheet   ScoreSheet  @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  session VoteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("sheet_ticket_map")
 }
 
 /// 一个打分单元格。score 为整数，区间由所属项点的 min/max 决定。

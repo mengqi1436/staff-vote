@@ -51,7 +51,7 @@ vi.mock('../../../lib/api.js', async () => {
       departments: { list: vi.fn(async () => departments) },
       employees: {
         list: vi.fn(async () => [
-          { id: 'e1', name: '张三', employeeNo: '001', sortOrder: 1, enabled: true },
+          { id: 'e1', name: '张三', gender: '男', age: 35, title: '高级工程师', sortOrder: 1, enabled: true },
         ]),
         create: vi.fn(),
         update: vi.fn(),

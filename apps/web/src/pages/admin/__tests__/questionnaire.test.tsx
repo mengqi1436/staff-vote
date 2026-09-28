@@ -69,9 +69,9 @@ function voteColumns() {
 
 function employees() {
   return [
-    { id: 'e1', departmentId: 'd1', name: '张三', employeeNo: '001', sortOrder: 1, enabled: true },
-    { id: 'e2', departmentId: 'd1', name: '李四', employeeNo: '002', sortOrder: 2, enabled: true },
-    { id: 'e3', departmentId: 'd1', name: '王五', employeeNo: '003', sortOrder: 3, enabled: true },
+    { id: 'e1', departmentId: 'd1', name: '张三', gender: '男', age: 35, title: '高级工程师', sortOrder: 1, enabled: true },
+    { id: 'e2', departmentId: 'd1', name: '李四', gender: '女', age: 28, title: '工程师', sortOrder: 2, enabled: true },
+    { id: 'e3', departmentId: 'd1', name: '王五', gender: '男', age: 45, title: '技师', sortOrder: 3, enabled: true },
   ];
 }
 
@@ -97,7 +97,9 @@ const mocks = vi.hoisted(() => ({
   columnUpdate: vi.fn(),
   columnRemove: vi.fn(),
   criteriaList: vi.fn(),
+  criteriaCreate: vi.fn(),
   criteriaUpdate: vi.fn(),
+  criteriaRemove: vi.fn(),
   employeesList: vi.fn(),
 }));
 
@@ -113,7 +115,12 @@ vi.mock('../../../lib/api.js', async () => {
         update: mocks.columnUpdate,
         remove: mocks.columnRemove,
       },
-      criteria: { list: mocks.criteriaList, update: mocks.criteriaUpdate },
+      criteria: {
+        list: mocks.criteriaList,
+        create: mocks.criteriaCreate,
+        update: mocks.criteriaUpdate,
+        remove: mocks.criteriaRemove,
+      },
       employees: { list: mocks.employeesList },
     },
   };
@@ -174,12 +181,31 @@ beforeEach(() => {
     }),
   );
   mocks.columnRemove.mockImplementation(async () => undefined);
-  const criterionStore = criteria();
-  mocks.criteriaList.mockImplementation(async () => criterionStore);
+  const criterionStore: Array<Record<string, unknown>> = criteria();
+  mocks.criteriaList.mockImplementation(async () => criterionStore as never);
+  mocks.criteriaCreate.mockImplementation(
+    async (body: { departmentId: string; name: string; sortOrder?: number }) => {
+      const row = {
+        id: 'c9',
+        name: body.name,
+        description: null,
+        minScore: 0,
+        maxScore: 100,
+        sortOrder: body.sortOrder ?? 0,
+        enabled: true,
+      };
+      criterionStore.push(row);
+      return row;
+    },
+  );
   mocks.criteriaUpdate.mockImplementation(async (id: string, body: Record<string, unknown>) => {
     const index = criterionStore.findIndex((row) => row.id === id);
-    criterionStore[index] = { ...criterionStore[index], ...body } as (typeof criterionStore)[number];
+    criterionStore[index] = { ...criterionStore[index], ...body };
     return criterionStore[index];
+  });
+  mocks.criteriaRemove.mockImplementation(async (id: string) => {
+    const index = criterionStore.findIndex((row) => row.id === id);
+    if (index >= 0) criterionStore.splice(index, 1);
   });
   mocks.employeesList.mockImplementation(async () => employees());
 });
@@ -276,21 +302,85 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     });
   }, TIMEOUT_MS);
 
-  it('新增被评列把部门与列名一起提交（同名允许，参考表的「副主任」出现两次）', async () => {
+  it('表尾空列头输入列名失焦即新增被评列（不再弹窗/跳页）', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    await screen.findByLabelText('被评列：主任');
+    const input = await screen.findByLabelText('新增被评列');
 
-    await user.click(screen.getByRole('button', { name: /新增被评列/ }));
-    const dialog = await screen.findByRole('dialog');
-    await user.type(within(dialog).getByLabelText('列名'), '副主任');
-    await user.click(within(dialog).getByRole('button', { name: /保\s*存/ }));
+    await user.type(input, '副主任');
+    await user.tab();
 
     await waitFor(() => expect(mocks.columnCreate).toHaveBeenCalledTimes(1));
     expect(mocks.columnCreate.mock.calls[0]?.[0]).toMatchObject({
       departmentId: 'd1',
       name: '副主任',
+      sortOrder: 3,
     });
+    // 输入留空失焦不创建
+    expect(await screen.findByLabelText('新增被评列')).toHaveValue('');
+  }, TIMEOUT_MS);
+
+  it('项点行「新增」插入表尾草稿行，输入名称失焦即创建（默认分值 0～100）', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderQuestionnaire();
+    await screen.findByLabelText('项点名称：政治素质');
+
+    await user.click(screen.getByRole('button', { name: '在「政治素质」下方新增项点' }));
+    const draft = await screen.findByLabelText('新增项点名称');
+    await user.type(draft, '安全素质');
+    await user.tab();
+
+    await waitFor(() => expect(mocks.criteriaCreate).toHaveBeenCalledTimes(1));
+    expect(mocks.criteriaCreate.mock.calls[0]?.[0]).toMatchObject({
+      departmentId: 'd1',
+      name: '安全素质',
+      minScore: 0,
+      maxScore: 100,
+      sortOrder: 2,
+    });
+  }, TIMEOUT_MS);
+
+  it('项点行下移与相邻行互换 sortOrder（两个 PATCH 按序提交）', async () => {
+    const user = userEvent.setup({ delay: null });
+    mocks.criteriaList.mockImplementation(async () => [
+      {
+        id: 'c1',
+        name: '政治素质',
+        description: '信念坚定。',
+        minScore: 0,
+        maxScore: 20,
+        sortOrder: 1,
+        enabled: true,
+      },
+      {
+        id: 'c2',
+        name: '业务能力',
+        description: null,
+        minScore: 0,
+        maxScore: 20,
+        sortOrder: 2,
+        enabled: true,
+      },
+    ]);
+    renderQuestionnaire();
+    await screen.findByLabelText('项点名称：政治素质');
+
+    await user.click(screen.getByRole('button', { name: '下移「政治素质」' }));
+
+    await waitFor(() => expect(mocks.criteriaUpdate).toHaveBeenCalledTimes(2));
+    expect(mocks.criteriaUpdate.mock.calls[0]).toEqual(['c1', { sortOrder: 2 }]);
+    expect(mocks.criteriaUpdate.mock.calls[1]).toEqual(['c2', { sortOrder: 1 }]);
+  }, TIMEOUT_MS);
+
+  it('项点行删除需确认，确认后调用 criteria.remove（软删除）', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderQuestionnaire();
+    await screen.findByLabelText('项点名称：政治素质');
+
+    await user.click(screen.getByRole('button', { name: '删除「政治素质」' }));
+    await user.click(await screen.findByRole('button', { name: /^删\s*除$/ }));
+
+    await waitFor(() => expect(mocks.criteriaRemove).toHaveBeenCalledWith('c1'));
   }, TIMEOUT_MS);
 
   it('列头悬停 × 并确认后删除该列', async () => {
@@ -412,7 +502,10 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     expect(screen.queryByRole('button', { name: '编辑标题' })).toBeNull();
     expect(screen.queryByRole('button', { name: '编辑填写说明' })).toBeNull();
     expect(screen.queryByRole('button', { name: '删除「主任」' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /新增被评列/ })).toBeNull();
+    // 新增入口（表尾空列头 / 项点操作组）只对可写账号出现
+    expect(screen.queryByLabelText('新增被评列')).toBeNull();
+    expect(screen.queryByLabelText('新增项点名称')).toBeNull();
+    expect(screen.queryByRole('button', { name: '新增项点' })).toBeNull();
     expect(screen.getByText('办公室')).toBeInTheDocument();
   }, TIMEOUT_MS);
 });

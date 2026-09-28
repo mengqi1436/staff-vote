@@ -6,6 +6,7 @@ import {
   PartitionOutlined,
   SettingOutlined,
   SafetyCertificateOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 import { adminApi } from '../../lib/api.js';
@@ -15,8 +16,9 @@ import { AdminSessionProvider, useAdminSession } from '../../lib/sessionContext.
 /**
  * 后台外壳：登录态守卫 + 侧边导航 + 退出登录。
  *
- * 管理页已整合为「场次工作台」（/admin/sessions/:id），侧栏只剩三个入口：
- * 场次管理（列表与工作台）、系统设置、账号权限；评议配置都在工作台的页签里。
+ * 管理页已整合为「场次工作台」（/admin/sessions/:id），侧栏四个入口：
+ * 场次管理（列表与工作台）、部门管理（全局部门字典）、系统设置、账号权限；
+ * 评议配置都在工作台的页签里。
  * 视觉遵循 Apple 风契约 v1：浅色磨砂侧栏 + sticky 半透明顶栏，
  * 只动材质与样式值，不引入自造组件。
  *
@@ -29,6 +31,7 @@ import { AdminSessionProvider, useAdminSession } from '../../lib/sessionContext.
 /** 各路由的页面标题：页头展示当前页，与菜单文案一致。 */
 const PAGE_TITLES: Record<string, string> = {
   '/admin/sessions': '场次管理',
+  '/admin/departments': '部门管理',
   '/admin/settings': '系统设置',
   '/admin/admins': '账号与权限',
   '/admin/sessions/:id': '场次工作台',
@@ -37,12 +40,17 @@ const PAGE_TITLES: Record<string, string> = {
 /** 工作台路由：/admin/sessions/<场次 id>。 */
 const WORKSPACE_PATH = /^\/admin\/sessions\/[^/]+$/;
 
-/** 侧边导航：三个入口平铺，评议配置全部在场次工作台的页签里。 */
+/** 侧边导航：四个入口平铺（全局部门字典独立于场次管理）。 */
 const MENU_ITEMS: MenuProps['items'] = [
   {
     key: '/admin/sessions',
     icon: <PartitionOutlined />,
     label: <Link to="/admin/sessions">场次管理</Link>,
+  },
+  {
+    key: '/admin/departments',
+    icon: <TeamOutlined />,
+    label: <Link to="/admin/departments">部门管理</Link>,
   },
   {
     key: '/admin/settings',

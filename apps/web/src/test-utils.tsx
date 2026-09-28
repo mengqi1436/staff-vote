@@ -10,7 +10,7 @@
  */
 import { render } from '@testing-library/react';
 import type { ReactElement } from 'react';
-import type { AdminMe } from './lib/api.js';
+import type { AdminMe, AdminSessionDto } from './lib/api.js';
 import { AuthContext } from './lib/auth.js';
 import { SessionContext } from './lib/sessionContext.js';
 
@@ -24,6 +24,7 @@ export const ALL_PERMISSIONS: string[] = [
   'tickets.revoke',
   'settings.write',
   'admins.manage',
+  'results.export',
 ];
 
 /**
@@ -51,6 +52,25 @@ const DEFAULT_SESSION_STATE = {
   reload: () => {},
 };
 
+/** 造一条测试场次记录：新字段（全局部门）默认为空，兼容旧场次形态。 */
+function testSession(id: string, name = '测试场次', overrides: Partial<AdminSessionDto> = {}): AdminSessionDto {
+  return {
+    id,
+    name,
+    status: 'draft',
+    opensAt: null,
+    closesAt: null,
+    startAt: null,
+    endedAt: null,
+    createdAt: '',
+    orgDepartmentId: null,
+    orgDepartmentName: null,
+    // 缺省为配置完整；要测「开始投票禁用」的用例自行覆盖
+    startBlockers: [],
+    ...overrides,
+  };
+}
+
 /**
  * 渲染组件并注入权限上下文。
  *
@@ -58,27 +78,21 @@ const DEFAULT_SESSION_STATE = {
  * @param permissions 授予的权限码；默认全部。传 `[]` 即为只读账号
  * @param sessionId 注入的当前场次 id；默认 null（未选择场次）。传 id 时也注入
  *   对应的单场次列表，供页面断言「带 sessionId 的请求参数」
+ * @param sessionOverrides 注入场次记录的字段覆盖（如 { status: 'ended' }），
+ *   供需要非 draft 状态（统计页签开放等）的用例使用；不影响名字与 id
  * @returns testing-library 的 render 结果
  */
-export function renderWithAuth(ui: ReactElement, permissions: string[] = ALL_PERMISSIONS, sessionId: string | null = null) {
+export function renderWithAuth(
+  ui: ReactElement,
+  permissions: string[] = ALL_PERMISSIONS,
+  sessionId: string | null = null,
+  sessionOverrides: Partial<AdminSessionDto> = {},
+) {
   const admin = adminWith(permissions);
   const sessionState = {
     ...DEFAULT_SESSION_STATE,
     sessionId,
-    sessions: sessionId
-      ? [
-          {
-            id: sessionId,
-            name: '测试场次',
-            status: 'draft' as const,
-            opensAt: null,
-            closesAt: null,
-            startAt: null,
-            endedAt: null,
-            createdAt: '',
-          },
-        ]
-      : [],
+    sessions: sessionId ? [testSession(sessionId, '测试场次', sessionOverrides)] : [],
   };
   return render(
     <SessionContext.Provider value={sessionState}>
