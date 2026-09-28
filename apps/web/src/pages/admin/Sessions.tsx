@@ -1,10 +1,9 @@
 import { useCallback, useState } from 'react';
 import {
+  App as AntApp,
   Button,
   Card,
   Empty,
-  Form,
-  Input,
   Modal,
   Popconfirm,
   Space,
@@ -15,12 +14,13 @@ import {
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router';
 import type { TableColumnsType } from 'antd';
-import { adminApi, type AdminSessionDto } from '../../lib/api.js';
+import { adminApi, ApiError, type AdminSessionDto } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { describeError, formatDateTime } from './lib.js';
 import { ErrorState, LoadingState, PageHeader, StaleDataAlert, useNotify } from './shared.js';
+import { SessionCreateWizard } from './SessionCreateWizard.js';
 import {
   formatWindow,
   SESSION_STATUS_META,
@@ -31,26 +31,23 @@ import {
 /**
  * 场次管理（评议工作流第 0 步：一场评议一个场次）。
  *
- * 状态机操作与开放窗口编辑弹窗来自 sessionShared（与场次工作台共用，不各写一份）；
+ * 新建走三步向导（SessionCreateWizard：基本信息 → 问卷基础表 → 票别分配），
+ * 不再是单字段弹窗。状态机操作与开放窗口编辑弹窗来自 sessionShared（与工作台共用）；
  * 本页是列表形态：状态机按钮渲染为小号链接，行内另有「编辑窗口」与「进入工作台」。
+ * draft 场次的行内入口文案是「继续配置」——进工作台补齐问卷与票别才能开始投票。
  */
-
-interface CreateForm {
-  name: string;
-}
 
 export function AdminSessions() {
   const load = useCallback(() => adminApi.sessions.list(), []);
   const { data, error, loading, refresh } = usePolling(load, 0);
   const notify = useNotify();
+  const modal = AntApp.useApp().modal;
   const { setSessionId, reload } = useAdminSession();
   const { can } = useAuth();
   const navigate = useNavigate();
   const canWrite = can('settings.write');
 
-  const [form] = Form.useForm<CreateForm>();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   /** 正在流转中的场次 id：只让被操作的行进入 loading，其他行照常可点 */
   const [actingId, setActingId] = useState<string | null>(null);
   /** 正在编辑开放时间窗的场次；null 表示弹窗关闭 */
@@ -58,25 +55,25 @@ export function AdminSessions() {
 
   const sessions = data?.sessions ?? [];
 
-  const handleCreate = async (): Promise<void> => {
-    let values: CreateForm;
-    try {
-      values = await form.validateFields();
-    } catch {
-      return;
-    }
-    setCreating(true);
-    try {
-      const result = await adminApi.sessions.create(values.name.trim());
-      notify.success(`场次「${result.session.name}」已创建`);
-      setCreateOpen(false);
-      refresh();
-      reload();
-    } catch (caught) {
-      notify.error(describeError(caught, '创建场次失败，请重试'));
-    } finally {
-      setCreating(false);
-    }
+  /**
+   * 配置未完成的提示（契约 M 的「提示」侧）：弹窗列出后端给的中文缺项清单，
+   * 并引导回工作台补配置。start 被拒的行内按钮同时恢复可点。
+   */
+  const showIncomplete = (row: AdminSessionDto, detail: string): void => {
+    modal.warning({
+      title: `场次「${row.name}」配置未完成，还不能开始投票`,
+      content: (
+        <div style={{ whiteSpace: 'pre-wrap' }}>
+          {detail}
+          <div style={{ marginTop: 8, color: 'rgba(0, 0, 0, 0.45)' }}>
+            在工作台补齐问卷与票别后即可开始投票。
+          </div>
+        </div>
+      ),
+      okText: '去工作台继续配置',
+      cancelText: '关闭',
+      onOk: () => void navigate(`/admin/sessions/${row.id}`),
+    });
   };
 
   /** 流转的统一入口：start 同时承担 draft→voting 与 paused→voting。 */
@@ -88,8 +85,13 @@ export function AdminSessions() {
       refresh();
       reload();
     } catch (caught) {
-      // 409 INVALID_SESSION_TRANSITION 等错误统一走既有错误提示路径
-      notify.error(describeError(caught, '操作失败，请重试'));
+      // 配置未完成（409 SESSION_INCOMPLETE）：后端 detail 是中文缺项清单，
+      // 内容多行，用弹窗展示比一闪而过的 message 更读得清；其余错误走既有提示路径
+      if (caught instanceof ApiError && caught.code === 'SESSION_INCOMPLETE') {
+        showIncomplete(row, caught.message);
+      } else {
+        notify.error(describeError(caught, '操作失败，请重试'));
+      }
     } finally {
       setActingId(null);
     }
@@ -130,7 +132,7 @@ export function AdminSessions() {
       key: 'actions',
       width: 320,
       render: (_: unknown, row: AdminSessionDto) => {
-        const actions = sessionActions(row.status);
+        const actions = sessionActions(row.status, row.startBlockers);
         return (
           <Space size={8} wrap>
             {actions.map((action) =>
@@ -155,6 +157,17 @@ export function AdminSessions() {
                       {action.label}
                     </Button>
                   </Popconfirm>
+                ) : action.disabled ? (
+                  // 配置未完成时禁用并说明缺什么（DESIGN.md：行内操作 disabled+Tooltip）。
+                  // disabled 按钮会吞掉鼠标事件，pointerEvents:none 让事件穿透到
+                  // 外层 span，Tooltip 的 onMouseEnter 才能触发。
+                  <Tooltip key={action.key} title={action.disabledReason}>
+                    <span>
+                      <Button size="small" type="link" style={{ padding: 0, pointerEvents: 'none' }} disabled>
+                        {action.label}
+                      </Button>
+                    </span>
+                  </Tooltip>
                 ) : (
                   <Button
                     key={action.key}
@@ -198,8 +211,14 @@ export function AdminSessions() {
                 </Button>
               </Tooltip>
             )}
-            <Button size="small" type="link" style={{ padding: 0 }} onClick={() => void navigate(`/admin/sessions/${row.id}`)}>
-              进入工作台
+            {/* draft 场次：进工作台 = 继续配置（契约 M 的「继续配置」入口） */}
+            <Button
+              size="small"
+              type="link"
+              style={{ padding: 0 }}
+              onClick={() => void navigate(`/admin/sessions/${row.id}`)}
+            >
+              {row.status === 'draft' ? '继续配置' : '进入工作台'}
             </Button>
           </Space>
         );
@@ -211,7 +230,7 @@ export function AdminSessions() {
     <>
       <PageHeader
         title="场次管理"
-        description="一场评议一个场次：先建场次，再为该场次配置部门、项点、票种并发码。场次结束后不可恢复。"
+        description="一场评议一个场次：点「新建场次」走三步向导（基本信息 → 问卷基础表 → 票别分配），完成后在工作台发码与查看结果。场次结束后不可恢复。"
         extra={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
@@ -221,10 +240,7 @@ export function AdminSessions() {
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
-                onClick={() => {
-                  form.resetFields();
-                  setCreateOpen(true);
-                }}
+                onClick={() => setWizardOpen(true)}
               >
                 新建场次
               </Button>
@@ -262,27 +278,15 @@ export function AdminSessions() {
         <LoadingState />
       ) : null}
 
-      <Modal
-        title="新建场次"
-        open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        onOk={() => void handleCreate()}
-        confirmLoading={creating}
-        okText="创建"
-        cancelText="取消"
-        destroyOnHidden
-      >
-        <Form<CreateForm> form={form} layout="vertical" requiredMark={false}>
-          <Form.Item
-            name="name"
-            label="场次名称"
-            rules={[{ required: true, message: '请输入场次名称' }]}
-            extra="例如：内设机构、安顺车站、贵阳西车站"
-          >
-            <Input placeholder="请输入场次名称" maxLength={64} />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {/* 新建场次三步向导：基本信息 → 问卷基础表 → 票别分配（契约 J） */}
+      <SessionCreateWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreated={() => {
+          refresh();
+          reload();
+        }}
+      />
 
       {/* 开放时间窗编辑弹窗：与场次工作台页头共用同一组件 */}
       <SessionWindowModal

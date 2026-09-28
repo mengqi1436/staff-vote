@@ -38,16 +38,37 @@ const END_CONFIRM = {
  * 非法流转后端返回 409 INVALID_SESSION_TRANSITION，调用方统一走 describeError 提示；
  * 后端负责真正的状态机校验，前端按钮显隐只是体验层。
  */
-export function sessionActions(status: AdminSessionDto['status']): Array<{
+export function sessionActions(
+  status: AdminSessionDto['status'],
+  /** draft 场次的开始投票阻塞缺项（后端 startBlockers）；非空时开始按钮禁用 */
+  startBlockers: string[] = [],
+): Array<{
   key: 'start' | 'pause' | 'end';
   label: string;
   danger: boolean;
   /** 需要二次确认时的确认框文案；不需要确认时为 undefined */
   confirm?: { title: string; description: string; okText: string };
+  /** 配置未完成等前端禁用场景；禁用时按钮必须配 Tooltip 说明原因 */
+  disabled?: boolean;
+  disabledReason?: string;
 }> {
   switch (status) {
-    case 'draft':
-      return [{ key: 'start', label: '开始投票', danger: false }];
+    case 'draft': {
+      const blocked = startBlockers.length > 0;
+      return [
+        {
+          key: 'start',
+          label: '开始投票',
+          danger: false,
+          disabled: blocked,
+          // 缺项可能逐部门长清单（Tooltip 会炸屏），这里只给总数与前两条示例；
+          // 完整明细仍由 start 接口的 409 detail 提供
+          disabledReason: blocked
+            ? `配置未完成，共缺 ${startBlockers.length} 项：${startBlockers.slice(0, 2).join('；')}${startBlockers.length > 2 ? '…' : ''}`
+            : undefined,
+        },
+      ];
+    }
     case 'voting':
       return [
         { key: 'pause', label: '暂停投票', danger: false },

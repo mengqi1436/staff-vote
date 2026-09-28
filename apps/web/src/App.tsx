@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-route
 import { AdminAdmins } from './pages/admin/Admins.js';
 import { AdminLayout } from './pages/admin/AdminLayout.js';
 import { AdminLogin } from './pages/admin/Login.js';
+import { AdminOrgDepartments } from './pages/admin/OrgDepartments.js';
 import { AdminPrintSheet } from './pages/admin/PrintSheet.js';
 import { AdminSessions } from './pages/admin/Sessions.js';
 import { SessionWorkspace } from './pages/admin/SessionWorkspace.js';
@@ -47,6 +48,7 @@ export function App() {
           <Route index element={<Navigate to="/admin/sessions" replace />} />
           <Route path="sessions" element={<AdminSessions />} />
           <Route path="sessions/:id" element={<SessionWorkspace />} />
+          <Route path="departments" element={<AdminOrgDepartments />} />
           <Route path="settings" element={<AdminSettings />} />
           <Route path="admins" element={<AdminAdmins />} />
         </Route>
