@@ -3,8 +3,9 @@ import { Alert, Button, Card, Empty, Select, Table, Tooltip, Typography } from '
 import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import type { TableColumnsType } from 'antd';
-import { adminApi, type ResultRowDto, type ResultsDto } from '../../lib/api.js';
+import { adminApi, PERMISSION_RESULTS_EXPORT, type ResultRowDto, type ResultsDto } from '../../lib/api.js';
 import { usePolling } from '../../lib/usePolling.js';
+import { useAuth } from '../../lib/auth.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
 import { EMPTY_TEXT, formatDateTime } from './lib.js';
 import {
@@ -29,6 +30,8 @@ import {
 export function AdminResults() {
   const [departmentId, setDepartmentId] = useState('');
   const { sessionId } = useAdminSession();
+  const { can } = useAuth();
+  const canExport = can(PERMISSION_RESULTS_EXPORT);
   const loadDepartments = useCallback(() => adminApi.departments.list({ sessionId }), [sessionId]);
   const departments = usePolling(loadDepartments, 0);
 
@@ -137,7 +140,13 @@ export function AdminResults() {
               刷新
             </Button>
             {hasDepartment ? (
-              <Link to={`/admin/results/print?departmentId=${departmentId}`}>
+              <Link
+                to={
+                  sessionId
+                    ? `/admin/results/print?departmentId=${departmentId}&sessionId=${encodeURIComponent(sessionId)}`
+                    : `/admin/results/print?departmentId=${departmentId}`
+                }
+              >
                 <Button icon={<PrinterOutlined />}>打印打分表</Button>
               </Link>
             ) : (
@@ -145,6 +154,16 @@ export function AdminResults() {
                 打印打分表
               </Button>
             )}
+            {canExport ? (
+              <Button
+                icon={<DownloadOutlined />}
+                href={sessionId ? adminApi.sessions.exportFullUrl(sessionId) : undefined}
+                disabled={!sessionId}
+                title={sessionId ? undefined : '请先选择场次'}
+              >
+                整场整合导出
+              </Button>
+            ) : null}
             <Button
               type="primary"
               icon={<DownloadOutlined />}

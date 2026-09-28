@@ -8,6 +8,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { resolveSessionId } from '../../services/admin.js';
 import { computeDepartmentResults } from '../../services/results.js';
+import { computeSessionSampleStats } from '../../services/sampleStats.js';
 import { getStatsOverview } from '../../services/stats.js';
 import { buildResultsWorkbook, fileStamp, sendWorkbook, workbookToBuffer } from '../../lib/xlsx.js';
 
@@ -26,6 +27,16 @@ export const statsRouter: Router = Router();
 statsRouter.get('/overview', async (req, res) => {
   const { sessionId } = StatsQuerySchema.parse(req.query);
   res.json(await getStatsOverview(await resolveSessionId(sessionId)));
+});
+
+/**
+ * 参考样表统计（docs/附件文件包/参考样表.xlsx）：被评对象 × 票别的
+ * 项点得分 / 1-5合计 / 综合评价得分 / 排序，分个人问卷表与车间问卷表。
+ * 与 /results 同一计分口径（lib/scoring.ts），只读计算、无副作用。
+ */
+statsRouter.get('/samples', async (req, res) => {
+  const { sessionId } = StatsQuerySchema.parse(req.query);
+  res.json(await computeSessionSampleStats(await resolveSessionId(sessionId)));
 });
 
 export const resultsRouter: Router = Router();

@@ -67,10 +67,16 @@ function MetaItem({ label, children }: { label: string; children: ReactNode }) {
 export function AdminPrintSheet() {
   const [searchParams] = useSearchParams();
   const departmentId = searchParams.get('departmentId') ?? '';
+  // 多场评议下结果按场次隔离：不带 sessionId 会串到「当前场次」的数据（历史 bug）。
+  // 入口（结果导出页签的「打印打分表」）已把当前场次拼进查询串。
+  const sessionId = searchParams.get('sessionId');
 
   const loadResults = useCallback(
-    () => (departmentId ? adminApi.results.list(departmentId) : Promise.resolve<ResultsDto | null>(null)),
-    [departmentId],
+    () =>
+      departmentId
+        ? adminApi.results.list(departmentId, sessionId)
+        : Promise.resolve<ResultsDto | null>(null),
+    [departmentId, sessionId],
   );
   const results = usePolling(loadResults, 0);
 

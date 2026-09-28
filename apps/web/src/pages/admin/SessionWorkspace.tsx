@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Popconfirm, Result, Space, Spin, Tabs, Tag, Typography } from 'antd';
+import { Button, Card, Popconfirm, Result, Space, Spin, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { FieldTimeOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router';
 import { adminApi, type AdminSessionDto } from '../../lib/api.js';
@@ -8,21 +8,20 @@ import { useAdminSession } from '../../lib/sessionContext.js';
 import { describeError } from './lib.js';
 import { PageHeader, useNotify } from './shared.js';
 import { formatWindow, SESSION_STATUS_META, SessionWindowModal, sessionActions } from './sessionShared.js';
-import { AdminDepartments } from './Departments.js';
-import { AdminCriteria } from './Criteria.js';
 import { AdminEmployees } from './Employees.js';
 import { AdminQuestionnaire } from './Questionnaire.js';
 import { AdminTicketTypes } from './TicketTypes.js';
 import { AdminTickets } from './Tickets.js';
 import { AdminResults } from './Results.js';
-import { SessionStats } from './StatsTables.js';
+import { SessionStats } from './StatsDashboard.js';
 
 /**
  * 单页场次工作台（/admin/sessions/:id）。
  *
  * 把原多个管理页整合到一个页面：页头常驻本场的开放控制（状态 Tag + 状态机按钮 +
- * 开放窗口展示与编辑），页签按评议工作流排列部门 → 项点 → 职工 → 问卷 → 票种权重 →
- * 随机码 → 统计 → 结果导出。
+ * 开放窗口展示与编辑），页签按评议工作流排列职工 → 问卷 → 票种权重 → 随机码 →
+ * 结果导出。「部门」「项点」页签已移除：场内部门在建场时按全局部门字典
+ * 自动落一条，项点的增删与上下移由问卷网格承接。
  *
  * 复用方式：路由参数 id 同步进「当前场次」上下文（setSessionId），现有页面组件
  * 依旧按上下文里的 sessionId 取数，组件本身零改动。同步只在场次确实存在时进行，
@@ -39,10 +38,19 @@ export function SessionWorkspace() {
   /** 状态机流转请求进行中：所有状态机按钮共用一个 busy */
   const [acting, setActing] = useState(false);
   const [windowOpen, setWindowOpen] = useState(false);
-  /** 当前页签：受控以便让统计页签切走即卸载（否则 5 秒轮询会一直跑） */
-  const [activeTab, setActiveTab] = useState('departments');
+  /** 当前页签 */
+  const [activeTab, setActiveTab] = useState('employees');
 
   const session = useMemo(() => sessions.find((item) => item.id === id), [sessions, id]);
+
+  /** 统计只在投票结束后开放：进行中/暂停/草稿时页签禁用（需求：统计在投票未结束时无法使用） */
+  const statsEnabled = session?.status === 'ended';
+
+  // 场次从未结束变为已结束（或反向重开）时，若用户正好停在统计页签则切回「职工」，
+  // 避免禁用页签仍作为 activeKey 残留导致内容区空白
+  useEffect(() => {
+    if (!statsEnabled && activeTab === 'stats') setActiveTab('employees');
+  }, [statsEnabled, activeTab]);
 
   // 路由场次 id → 场次上下文。列表尚未加载完或场次不存在时不同步：
   // 不存在的 id 一旦写进上下文，会被 Provider 的失效清理逻辑清掉，形成循环。
@@ -121,7 +129,7 @@ export function SessionWorkspace() {
           <>
             {/* 主操作按钮：无权限时不渲染，而不是给一个点不动的按钮 */}
             {canWrite
-              ? sessionActions(session.status).map((action) =>
+              ? sessionActions(session.status, session.startBlockers).map((action) =>
                   action.confirm ? (
                     <Popconfirm
                       key={action.key}
@@ -136,6 +144,17 @@ export function SessionWorkspace() {
                         {action.label}
                       </Button>
                     </Popconfirm>
+                  ) : action.disabled ? (
+                    // 配置未完成时禁用并说明缺什么（DESIGN.md：行内操作 disabled+Tooltip）。
+                    // disabled 按钮会吞掉鼠标事件，pointerEvents:none 让事件穿透到
+                    // 外层 span，Tooltip 的 onMouseEnter 才能触发。
+                    <Tooltip key={action.key} title={action.disabledReason}>
+                      <span>
+                        <Button type="primary" disabled style={{ pointerEvents: 'none' }}>
+                          {action.label}
+                        </Button>
+                      </span>
+                    </Tooltip>
                   ) : (
                     <Button
                       key={action.key}
@@ -162,18 +181,24 @@ export function SessionWorkspace() {
           activeKey={activeTab}
           onChange={setActiveTab}
           items={[
-            { key: 'departments', label: '部门', children: <AdminDepartments /> },
-            { key: 'criteria', label: '项点', children: <AdminCriteria /> },
+            // 「部门」「项点」页签已移除：场内部门在建场时按全局部门字典自动落一条，
+            // 项点的增删与上下移由问卷网格承接（components/admin/QuestionnaireGrid）
             { key: 'employees', label: '职工', children: <AdminEmployees /> },
             { key: 'questionnaire', label: '问卷', children: <AdminQuestionnaire /> },
             { key: 'ticket-types', label: '票种权重', children: <AdminTicketTypes /> },
             { key: 'tickets', label: '随机码', children: <AdminTickets /> },
             {
               key: 'stats',
-              label: '统计',
-              // 只有统计页签需要切走即卸载：它的 5 秒轮询否则会在后台一直跑；
+              label: statsEnabled ? (
+                '统计'
+              ) : (
+                <Tooltip title="投票结束后开放统计">统计</Tooltip>
+              ),
+              // 投票未结束时禁用（含 Tooltip 提示开放条件）；结束后才可进入
+              disabled: !statsEnabled,
+              // 统计页签切走即卸载：样表统计的加载与票种的 5 秒轮询不在后台空跑；
               // 其余页签用条件渲染会丢编辑态，保持 antd 的常驻挂载
-              children: activeTab === 'stats' ? <SessionStats /> : null,
+              children: activeTab === 'stats' && statsEnabled ? <SessionStats /> : null,
             },
             { key: 'results', label: '结果导出', children: <AdminResults /> },
           ]}

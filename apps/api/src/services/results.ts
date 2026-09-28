@@ -227,3 +227,174 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
     perTicketType,
   };
 }
+
+// -----------------------------------------------------------------------------
+// 按随机码导出答卷（受控映射的唯二读取方之一，两处导出都在 results.export 门内）
+// -----------------------------------------------------------------------------
+
+/** 单码答卷导出的数据（附件8 形态：行 = 项点，列 = 被评列，格 = 分数）。 */
+export interface TicketAnswerExport {
+  headerNote: string;
+  /** 表标题（其中「xx」已替换为部门名） */
+  title: string;
+  footerNote: string;
+  departmentName: string;
+  /** 被评列名，按 sortOrder 排列（含停用列：历史答卷里可能有分） */
+  columnNames: string[];
+  /** 每行 = [项点名(含描述), ...各被评列分数（缺格空串）] */
+  rows: Array<Array<string | number>>;
+  submittedAt: Date;
+  /** 票别标签：如「A（领导评议）」 */
+  ticketTypeLabel: string;
+}
+
+/**
+ * 取某随机码的答卷（导出附件8 形态用）。
+ *
+ * 校验顺序：码存在（404）→ 码已使用（unused/revoked 均 409，无答卷可导）→
+ * 有受控映射且有答卷（404 TICKET_NO_SHEET）。历史答卷可能没有映射（功能上线前
+ * 提交的），同样按「无答卷可导」处理。
+ *
+ * 项点与被评列**不筛 enabled**：停用的行/列在答卷里可能有分，导出要忠实还原提交时的表。
+ */
+export async function loadTicketAnswerExport(ticketId: string): Promise<TicketAnswerExport> {
+  const ticket = await prisma.ticket.findUnique({
+    where: { id: ticketId },
+    include: { ticketType: { select: { code: true, name: true } } },
+  });
+  if (!ticket) throw ApiError.notFound('随机码不存在');
+  if (ticket.status === 'unused') {
+    throw ApiError.conflict('该随机码尚未使用，还没有答卷可导出', 'TICKET_NOT_USED');
+  }
+  if (ticket.status === 'revoked') {
+    throw ApiError.conflict('该随机码已作废，不能导出答卷', 'TICKET_REVOKED');
+  }
+
+  const sheet = await prisma.scoreSheet.findFirst({
+    where: { ticketMap: { ticketId } },
+    include: { items: true },
+  });
+  if (!sheet) throw ApiError.notFound('未找到该随机码的答卷', 'TICKET_NO_SHEET');
+
+  const department = await prisma.department.findUnique({ where: { id: sheet.departmentId } });
+  if (!department) throw ApiError.notFound('答卷所属部门不存在');
+
+  const [criteria, voteColumns] = await Promise.all([
+    prisma.criterion.findMany({
+      where: { departmentId: sheet.departmentId },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    }),
+    prisma.voteColumn.findMany({
+      where: { departmentId: sheet.departmentId },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    }),
+  ]);
+
+  const scoreAt = new Map(sheet.items.map((item) => [`${item.voteColumnId}|${item.criterionId}`, item.score]));
+  const rows = criteria.map((criterion) => [
+    criterion.description ? `${criterion.name}\n${criterion.description}` : criterion.name,
+    ...voteColumns.map((column) => scoreAt.get(`${column.id}|${criterion.id}`) ?? ''),
+  ]);
+
+  return {
+    headerNote: department.headerNote,
+    title: department.title.replace('xx', department.name),
+    footerNote: department.footerNote,
+    departmentName: department.name,
+    columnNames: voteColumns.map((column) => column.name),
+    rows,
+    submittedAt: sheet.submittedAt,
+    ticketTypeLabel: `${ticket.ticketType.code}（${ticket.ticketType.name}）`,
+  };
+}
+
+/** 整场导出中「答卷汇总」sheet 的一行。 */
+export interface SessionAnswerSummaryRow {
+  /** 提交时间升序的序号，从 1 起 */
+  seq: number;
+  /** 受控映射带出的随机码；无映射的历史答卷为空串 */
+  code: string;
+  submittedAt: Date;
+  ticketTypeCode: string;
+  /** 各「被评列 × 项点」格子的分数，与 summaryColumns 一一对应（缺格空串） */
+  scores: Array<number | string>;
+}
+
+/** 整场导出的汇总列：一列一个「被评列 × 项点」组合。 */
+export interface SessionAnswerSummaryColumn {
+  header: string;
+}
+
+export interface SessionAnswerSummary {
+  columns: SessionAnswerSummaryColumn[];
+  rows: SessionAnswerSummaryRow[];
+}
+
+/**
+ * 取整场导出的答卷汇总数据。
+ *
+ * 行 = 该场次的全部答卷（提交时间升序），经 sheet_ticket_map join 带出随机码；
+ * 无映射的历史答卷也一并包含（code 留空）。列 = 本场次（含历史停用部门）的
+ * 全部「被评列 × 项点」组合，跨部门的列互不填数。
+ */
+export async function loadSessionAnswerSummary(sessionId: string): Promise<SessionAnswerSummary> {
+  const [sheets, columns] = await Promise.all([
+    prisma.scoreSheet.findMany({
+      where: { sessionId },
+      orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
+      include: {
+        ticketType: { select: { code: true } },
+        ticketMap: { include: { ticket: { select: { code: true } } } },
+        items: true,
+      },
+    }),
+    prisma.voteColumn.findMany({
+      where: { sessionId },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      include: {
+        department: { select: { sortOrder: true, name: true } },
+      },
+    }),
+  ]);
+
+  const criteria = await prisma.criterion.findMany({
+    where: { sessionId },
+    orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+  });
+
+  // 列序：部门（sortOrder）→ 被评列（sortOrder）→ 项点（sortOrder）。
+  // 被评列的 sortOrder 只在部门内有意义，跨部门先按部门的 sortOrder 分组排序。
+  const sortedColumns = [...columns].sort((a, b) => {
+    const deptDiff = a.department.sortOrder - b.department.sortOrder;
+    if (deptDiff !== 0) return deptDiff;
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return a.id < b.id ? -1 : 1;
+  });
+  const criteriaByDepartment = new Map<string, typeof criteria>();
+  for (const criterion of criteria) {
+    const list = criteriaByDepartment.get(criterion.departmentId) ?? [];
+    list.push(criterion);
+    criteriaByDepartment.set(criterion.departmentId, list);
+  }
+  const orderedColumns: SessionAnswerSummaryColumn[] = [];
+  const columnKeyByOrder: string[] = [];
+  for (const column of sortedColumns) {
+    for (const criterion of criteriaByDepartment.get(column.departmentId) ?? []) {
+      orderedColumns.push({ header: `${column.department.name}-${column.name}-${criterion.name}` });
+      columnKeyByOrder.push(`${column.id}|${criterion.id}`);
+    }
+  }
+
+  const rows = sheets.map((sheet, index) => {
+    const scoreAt = new Map(sheet.items.map((item) => [`${item.voteColumnId}|${item.criterionId}`, item.score]));
+    return {
+      seq: index + 1,
+      code: sheet.ticketMap?.ticket.code ?? '',
+      submittedAt: sheet.submittedAt,
+      ticketTypeCode: sheet.ticketType.code,
+      scores: columnKeyByOrder.map((key) => scoreAt.get(key) ?? ''),
+    };
+  });
+
+  return { columns: orderedColumns, rows };
+}
