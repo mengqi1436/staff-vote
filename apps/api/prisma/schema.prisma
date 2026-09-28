@@ -39,31 +39,34 @@ enum SessionStatus {
 /// 投票场次。各场次的部门/项点/票种/随机码/评分数据经 session_id 隔离，
 /// 同库保留历史场次；开放时间窗按场次独立配置（opens_at / closes_at）。
 model VoteSession {
-  id        String        @id @default(uuid(7))
-  name      String        @unique
-  status    SessionStatus @default(draft)
+  id              String        @id @default(uuid(7))
+  name            String        @unique
+  status          SessionStatus @default(draft)
   /// 首次 start 的时间；暂停后恢复不覆盖。
-  startAt   DateTime?     @db.Timestamptz(3) @map("start_at")
+  startAt         DateTime?     @map("start_at") @db.Timestamptz(3)
   /// end 的时间；ended 为终态，之后不再变化。
-  endedAt   DateTime?     @db.Timestamptz(3) @map("ended_at")
+  endedAt         DateTime?     @map("ended_at") @db.Timestamptz(3)
   /// 开放开始时间；空 = 不限制开始（状态为 voting 即开放）。
-  opensAt   DateTime?     @db.Timestamptz(3) @map("opens_at")
+  opensAt         DateTime?     @map("opens_at") @db.Timestamptz(3)
   /// 开放结束时间；空 = 长期开放（状态为 voting 且已到 opensAt 即开放）。
-  closesAt  DateTime?     @db.Timestamptz(3) @map("closes_at")
+  closesAt        DateTime?     @map("closes_at") @db.Timestamptz(3)
   /// 所属全局部门（字典）。空 = 历史场次，建场次向导之前的存量数据。
-  orgDepartmentId String?  @map("org_department_id")
-  createdAt DateTime      @default(now()) @db.Timestamptz(3) @map("created_at")
+  orgDepartmentId String?       @map("org_department_id")
+  /// 打分范围：person = 仅个人问卷；both = 个人 + 车间两张问卷都要打分（投票端两表齐填才核销）。
+  scoreScope      String        @default("person") @map("score_scope")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  orgDepartment  OrgDepartment? @relation(fields: [orgDepartmentId], references: [id], onDelete: Restrict)
-  departments    Department[]
-  criteria       Criterion[]
-  voteColumns    VoteColumn[]
-  employees      Employee[]
-  ticketTypes    TicketType[]
-  ticketBatches  TicketBatch[]
-  tickets        Ticket[]
-  scoreSheets    ScoreSheet[]
-  sheetTicketMap SheetTicketMap[]
+  orgDepartment          OrgDepartment?                 @relation(fields: [orgDepartmentId], references: [id], onDelete: Restrict)
+  departments            Department[]
+  criteria               Criterion[]
+  voteColumns            VoteColumn[]
+  employees              Employee[]
+  ticketTypes            TicketType[]
+  ticketBatches          TicketBatch[]
+  tickets                Ticket[]
+  scoreSheets            ScoreSheet[]
+  sheetTicketMap         SheetTicketMap[]
+  questionnaireTemplates SessionQuestionnaireTemplate[]
 
   @@index([orgDepartmentId])
   @@map("vote_sessions")
@@ -77,8 +80,8 @@ model OrgDepartment {
   name      String   @unique
   sortOrder Int      @default(0) @map("sort_order")
   enabled   Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   sessions VoteSession[]
 
@@ -100,8 +103,8 @@ model AdminUser {
   username     String   @unique
   /// scrypt 格式串：scrypt$N$r$p$salt$hash。绝不可存明文或可逆加密值。
   passwordHash String   @map("password_hash")
-  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   /// 角色。为空表示未分配角色，等价于只读：没有任何写权限。
   roleId String? @map("role_id")
@@ -122,8 +125,8 @@ model Permission {
   name      String
   groupName String   @map("group_name")
   sortOrder Int      @default(0) @map("sort_order")
-  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   roles RolePermission[]
 
@@ -137,8 +140,8 @@ model AdminRole {
   name        String
   description String?
   builtin     Boolean  @default(false)
-  createdAt   DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt   DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   permissions RolePermission[]
   admins      AdminUser[]
@@ -165,19 +168,12 @@ model Department {
   sessionId String   @map("session_id")
   sortOrder Int      @default(0) @map("sort_order")
   enabled   Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   /// 问卷类型：person = 个人问卷（多个被评职务列），workshop = 车间问卷（单列「得分」）。
   /// 存字符串而不是数据库 enum：问卷形态将来还可能增加，加一种形态不该要求写迁移。
   questionnaireType String @default("person") @map("questionnaire_type")
-
-  /// 表头左上角的附件号（参考表里的「附件1-1」）。
-  headerNote String @default("附件1-1") @map("header_note")
-  /// 表标题（参考表里的「xx车间负责人评价问卷」）。
-  title String @default("") @map("title")
-  /// 表尾填写说明（参考表里合并整行的说明文字，含满分与弃权口径）。
-  footerNote String @default("") @map("footer_note")
 
   employees     Employee[]
   criteria      Criterion[]
@@ -206,8 +202,8 @@ model VoteColumn {
   employeeId   String?  @map("employee_id")
   sortOrder    Int      @default(0) @map("sort_order")
   enabled      Boolean  @default(true)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
@@ -235,11 +231,11 @@ model Employee {
   title        String?
   sortOrder    Int      @default(0) @map("sort_order")
   enabled      Boolean  @default(true)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  department      Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  session         VoteSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   /// 该职工被指为某个被评职务列的具体人选（问卷表头「职务与姓名」）。
   voteColumns     VoteColumn[]
   /// 发放留痕：发给该职工的随机码（见 Ticket.assigneeId）。
@@ -250,11 +246,20 @@ model Employee {
   @@map("employees")
 }
 
-/// 素质项点，即打分表的「行」。每个部门可配一套，min/max 单独设置。
+/// 素质项点，即打分表的「行」。min/max 单独设置。
+///
+/// 两种形态（0010 起）：
+/// - 模板项点：departmentId 为空 + templateType 标明归属（person/workshop），
+///   每场次每类型一套，问卷配置页编辑的就是它，投票表按部门类型取用；
+/// - 部门项点：departmentId 非空、templateType 为空 = 0010 之前的存量行，
+///   只为历史 score_items 的外键保留，不再被任何配置或投票链路读取。
 model Criterion {
   id           String   @id @default(uuid(7))
-  departmentId String   @map("department_id")
+  /// 模板项点为 NULL；存量部门项点指向原部门。
+  departmentId String?  @map("department_id")
   sessionId    String   @map("session_id")
+  /// 模板项点的问卷类型（person/workshop）；部门项点为 NULL。
+  templateType String?  @map("template_type")
   name         String
   /// 项点描述（参考表里项点名称下方那段长文字），可空。
   description  String?
@@ -262,15 +267,16 @@ model Criterion {
   maxScore     Int      @default(100) @map("max_score")
   sortOrder    Int      @default(0) @map("sort_order")
   enabled      Boolean  @default(true)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   scoreItems ScoreItem[]
 
   @@index([departmentId])
   @@index([sessionId])
+  @@index([sessionId, templateType])
   @@map("criteria")
 }
 
@@ -285,10 +291,10 @@ model TicketType {
   weightPercent Int      @map("weight_percent")
   sortOrder     Int      @default(0) @map("sort_order")
   enabled       Boolean  @default(true)
-  createdAt     DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
-  updatedAt     DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  session     VoteSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  session     VoteSession   @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   tickets     Ticket[]
   batches     TicketBatch[]
   scoreSheets ScoreSheet[]
@@ -307,7 +313,7 @@ model TicketBatch {
   departmentId String?  @map("department_id")
   count        Int
   operator     String
-  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
@@ -336,19 +342,19 @@ model Ticket {
   /// 与评分数据（score_sheets 不含 ticketId）在物理上隔断。
   assigneeId   String?      @map("assignee_id")
   status       TicketStatus @default(unused)
-  usedAt       DateTime?    @db.Timestamptz(3) @map("used_at")
-  createdAt    DateTime     @default(now()) @db.Timestamptz(3) @map("created_at")
+  usedAt       DateTime?    @map("used_at") @db.Timestamptz(3)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
-  batch      TicketBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  session    VoteSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  ticketType TicketType       @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  batch      TicketBatch      @relation(fields: [batchId], references: [id], onDelete: Restrict)
   /// 部门删除前须先作废/解绑本码（Restrict，不要 SetNull：
   /// SetNull 会把受限码静默退回万能码，等于放宽权限）。
-  department Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  department Department?      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   /// 职工被删除后发放记录保留，只是退回「未指定领码人」（SetNull）。
-  assignee   Employee?   @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
-  /// 提交答卷后写入的受控映射（0..1 张）。
-  sheetMap   SheetTicketMap?
+  assignee   Employee?        @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  /// 提交答卷后写入的受控映射（0..n 张：score_scope=both 一码两张答卷）。
+  sheetMaps  SheetTicketMap[]
 
   @@index([status])
   @@index([batchId])
@@ -367,11 +373,11 @@ model ScoreSheet {
   departmentId String   @map("department_id")
   ticketTypeId String   @map("ticket_type_id")
   sessionId    String   @map("session_id")
-  submittedAt  DateTime @default(now()) @db.Timestamptz(3) @map("submitted_at")
+  submittedAt  DateTime @default(now()) @map("submitted_at") @db.Timestamptz(3)
 
-  department Department  @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  session    VoteSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  ticketType TicketType  @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  department Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  session    VoteSession     @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  ticketType TicketType      @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
   items      ScoreItem[]
   /// 受控映射（可空：启用映射前的历史答卷没有对应行）。反向指向随机码，
   /// 仅 results.export 的导出路径读取，评分与统计链路不使用。
@@ -389,33 +395,38 @@ model ScoreSheet {
 /// 关联点，仅 results.export 权限的导出路径读取。评分（scoring）与统计（stats /
 /// results）链路不 join 本表，因此删除或停用本表不影响任何计分口径。
 model SheetTicketMap {
-  /// 主键即随机码：一码至多一张答卷，重复提交在投票事务里先被核销校验拦下。
-  ticketId String @id @map("ticket_id")
+  /// 一码可对应多张答卷：score_scope=both 的场次，持码人要交「个人问卷 + 车间问卷」
+  /// 两张表，每张表各一行（复合主键防止同一张表被同一码重复登记）。
+  ticketId  String   @map("ticket_id")
   /// 唯一：一张答卷至多来自一个码。
-  sheetId  String @unique @map("sheet_id")
-  sessionId String @map("session_id")
-  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  sheetId   String   @unique @map("sheet_id")
+  sessionId String   @map("session_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   ticket  Ticket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   sheet   ScoreSheet  @relation(fields: [sheetId], references: [id], onDelete: Cascade)
   session VoteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@id([ticketId, sheetId])
   @@index([sessionId])
   @@map("sheet_ticket_map")
 }
 
 /// 一个打分单元格。score 为整数，区间由所属项点的 min/max 决定。
 model ScoreItem {
-  id           String @id @default(uuid(7))
-  sheetId      String @map("sheet_id")
-  voteColumnId String @map("vote_column_id")
-  criterionId  String @map("criterion_id")
+  id           String  @id @default(uuid(7))
+  sheetId      String  @map("sheet_id")
+  /// 个人问卷指向被评职务列；车间问卷整表无被评列，本列为 NULL（0010 起）。
+  voteColumnId String? @map("vote_column_id")
+  criterionId  String  @map("criterion_id")
   score        Int
 
-  sheet      ScoreSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  voteColumn VoteColumn @relation(fields: [voteColumnId], references: [id], onDelete: Restrict)
-  criterion  Criterion  @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+  sheet      ScoreSheet  @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  voteColumn VoteColumn? @relation(fields: [voteColumnId], references: [id], onDelete: Restrict)
+  criterion  Criterion   @relation(fields: [criterionId], references: [id], onDelete: Restrict)
 
+  /// Postgres 唯一索引对 NULL 不去重：车间行 (sheetId, NULL, criterionId) 依赖
+  /// criterionId 互异天然防重；个人行维持 (sheet, column, criterion) 唯一。
   @@unique([sheetId, voteColumnId, criterionId])
   @@index([voteColumnId, criterionId])
   @@index([criterionId])
@@ -426,7 +437,7 @@ model ScoreItem {
 model Setting {
   key       String   @id
   value     String
-  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("settings")
 }
@@ -436,8 +447,35 @@ model AuditLog {
   id        String   @id @default(uuid(7))
   action    String
   detail    Json?
-  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+/// 场次级问卷模板。个人 / 车间各一套（附件号 + 标题 + 填写说明），
+/// 所有同类型部门共用：改一处，全场生效（0010 起取代部门级三件套字段）。
+model SessionQuestionnaireTemplate {
+  /// 单列代理主键 + 下方 @@unique 保证「每场次每类型一套模板」。
+  /// 注意：Prisma 7.10 queryCompiler 对本模型的 API 调用会编译出引用不存在列的
+  /// 坏 SQL（P2022 "column (not available)"）；已实测排除复合主键形态、字段名、
+  /// 非默认值、模型位置等因素，根因未定位。绕开方式：模板表读写一律走
+  /// services/questionnaireTemplateStore.ts 的原生 SQL，不用 prisma.sessionQuestionnaireTemplate。
+  id         String   @id @default(uuid(7))
+  sessionId  String   @map("session_id")
+  /// person = 个人问卷模板，workshop = 车间问卷模板。存字符串，与 departments.questionnaireType 同口径。
+  type       String
+  /// 表头左上角的附件号（参考表里的「附件1-1」）。
+  headerNote String   @default("附件1-1") @map("header_note")
+  /// 表标题（参考表里的「xx车间负责人评价问卷」；xx 段在渲染时替换为部门名）。
+  title      String   @default("")
+  /// 表尾填写说明（参考表里合并整行的说明文字，含满分与弃权口径）。
+  footerNote String   @default("")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  session VoteSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, type])
+  @@map("session_questionnaire_templates")
 }

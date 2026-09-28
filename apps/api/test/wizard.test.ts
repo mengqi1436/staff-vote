@@ -74,8 +74,10 @@ async function newSession(name: string): Promise<string> {
 /** 给向导场次补齐项点与被评列（场内部门由创建自动插入），返回场内部门 id。 */
 async function setupQuestionnaire(sessionId: string): Promise<string> {
   const department = await prisma.department.findFirstOrThrow({ where: { sessionId } });
+  // 0010 起项点在模板层；显式带 sessionId（库里常有多个场次）与 templateType
   await agent.post('/api/admin/criteria').send({
-    departmentId: department.id,
+    sessionId,
+    templateType: 'person',
     name: '德',
     minScore: 0,
     maxScore: 100,
@@ -145,6 +147,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       });
       await prisma.scoreSheet.deleteMany({ where: { departmentId: { in: departmentIds } } });
       await prisma.criterion.deleteMany({ where: { departmentId: { in: departmentIds } } });
+      // 0010 起模板项点 departmentId 为空，按场次清掉才能删场次（外键 RESTRICT）
+      await prisma.criterion.deleteMany({ where: { sessionId, departmentId: null } });
       await prisma.voteColumn.deleteMany({ where: { departmentId: { in: departmentIds } } });
       await prisma.department.deleteMany({ where: { id: { in: departmentIds } } });
       await prisma.ticketType.deleteMany({ where: { id: { in: typeIds } } });
@@ -373,9 +377,16 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(afterDepartment.body.error.detail.join('\n')).toContain('项点');
       expect(afterDepartment.body.error.detail.join('\n')).toContain('被评列');
 
-      // 补 2：项点
+      // 补 2：项点（0010 起在模板层：departmentId 为空 + templateType）
       await prisma.criterion.create({
-        data: { departmentId: department.id, sessionId: session.id, name: '德' },
+        data: {
+          departmentId: null,
+          sessionId: session.id,
+          templateType: 'person',
+          name: '德',
+          minScore: 0,
+          maxScore: 100,
+        },
       });
       const afterCriterion = await agent.post(`/api/admin/sessions/${session.id}/start`);
       expect(afterCriterion.status).toBe(409);
@@ -607,17 +618,25 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       });
       sessionIds.push(session.id);
       const department = await prisma.department.create({
+        data: { sessionId: session.id, name: '安装车间', questionnaireType: 'person' },
+      });
+      // 0010 起抬头三件套在场次模板层（同类型部门共用），项点也在模板层
+      const criterion = await prisma.criterion.create({
         data: {
+          departmentId: null,
           sessionId: session.id,
-          name: '安装车间',
-          headerNote: '附件8-1',
-          title: 'xx评议问卷',
-          footerNote: '满分 100 分，弃权按 0 分计',
+          templateType: 'person',
+          name: '德',
+          minScore: 0,
+          maxScore: 100,
         },
       });
-      const criterion = await prisma.criterion.create({
-        data: { departmentId: department.id, sessionId: session.id, name: '德' },
-      });
+      await prisma.$executeRaw`
+        INSERT INTO session_questionnaire_templates (id, session_id, type, header_note, title, footer_note, created_at, updated_at)
+        VALUES (gen_random_uuid()::text, ${session.id}, 'person', '附件8-1', 'xx评议问卷', '满分 100 分，弃权按 0 分计', now(), now())
+        ON CONFLICT (session_id, type) DO UPDATE
+        SET header_note = '附件8-1', title = 'xx评议问卷', footer_note = '满分 100 分，弃权按 0 分计', updated_at = now()
+      `;
       const voteColumn = await prisma.voteColumn.create({
         data: { departmentId: department.id, sessionId: session.id, name: '主任' },
       });
@@ -657,7 +676,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       );
       expect(submitted.status).toBe(200);
 
-      const mapping = await prisma.sheetTicketMap.findUnique({
+      // 复合主键 (ticket_id, sheet_id) 后单 ticketId 不再是唯一键，用 findFirst
+      const mapping = await prisma.sheetTicketMap.findFirst({
         where: { ticketId: ticket.id },
       });
       expect(mapping).toBeTruthy();

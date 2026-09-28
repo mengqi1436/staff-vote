@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import { Alert, Button, Card, Flex, Result, Select, Spin, theme, Typography } from 'antd';
 import { Navigate, useNavigate } from 'react-router';
 import { ApiError, clearVoteToken, readVoteToken, voteApi } from '../../lib/api.js';
-import type { SubmitItem, VoteSheetResult } from '../../lib/api.js';
+import type { SubmitItem, VoteProgressResult, VoteSheetResult } from '../../lib/api.js';
 import { ScoreTable, cellElementId, cellKey, collectScoreErrors } from '../../components/vote/ScoreTable.js';
 import type { CellError, ScoreValues } from '../../components/vote/ScoreTable.js';
 import { clearVoteSessionInfo, readVoteSessionInfo } from '../../components/vote/voteSession.js';
@@ -53,6 +53,9 @@ const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /** 提交后不可修改的提示，页面里只写一处文案。 */
 const IRREVERSIBLE_HINT = '一码一票，提交即核销、不可再改。请核对无误后再提交；本页不记录您的姓名与身份。';
+
+/** 问卷类型的展示名：进度提示里用中文，不用后端的类型枚举值。 */
+const TYPE_LABELS: Record<string, string> = { person: '负责人评价', workshop: '车间评价' };
 
 /** error summary 的标题 id：容器的 aria-labelledby 与聚焦目标都用它。 */
 const ERROR_SUMMARY_TITLE_ID = 'score-error-summary-title';
@@ -180,6 +183,10 @@ export function VoteSheet() {
   const [focusTarget, setFocusTarget] = useState<{ row: number; col: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /** 双表流程（scoreScope=both）的打分进度：非 null 表示已交过表、还差 remaining 里的类型。 */
+  const [bothPending, setBothPending] = useState<VoteProgressResult | null>(null);
+  /** 本场次是否双表流程：负责人评价 + 车间评价两张表齐交才核销。 */
+  const isBothScope = sessionInfo?.session?.scoreScope === 'both';
 
   // 拉取该部门的问卷；切部门时把上一份填写内容与校验结果一起丢掉
   useEffect(() => {
@@ -296,20 +303,69 @@ export function VoteSheet() {
           }
         }
         await voteApi.submit({ departmentId: sheet.department.id, items }, token);
-        // 提交成功：凭据与缓存立刻清掉（公用电脑上更要清干净），再进成功页
+        if (isBothScope) {
+          // 双表流程：两张表齐交后端才核销。还差表就留在本页——清空已填内容、
+          // 切到剩余类型的部门，让职工接着填下一张。
+          const progress = await voteApi.progress(token);
+          if (progress.remaining.length === 0) {
+            clearVoteToken();
+            clearVoteSessionInfo();
+            setValues({});
+            void navigate('/vote/done', { replace: true });
+            return;
+          }
+          const nextDept = sessionInfo?.departments.find(
+            (department) => department.questionnaireType === progress.remaining[0],
+          );
+          setValues({});
+          setInvalidCells(EMPTY_SET);
+          setErrors([]);
+          setSubmitError(null);
+          setBothPending(progress);
+          if (nextDept !== undefined && nextDept.id !== deptId) setDeptId(nextDept.id);
+          return;
+        }
+        // 单表流程提交成功：凭据与缓存立刻清掉（公用电脑上更要清干净），再进成功页
         clearVoteToken();
         clearVoteSessionInfo();
         setValues({});
         void navigate('/vote/done', { replace: true });
       } catch (error: unknown) {
-        if (error instanceof ApiError && (error.status === 401 || error.status === 409)) {
+        if (error instanceof ApiError && error.status === 409) {
+          if (error.code === 'SHEET_TYPE_SUBMITTED') {
+            // 该类型评价表已经交过（重复点击或在别处提交）：凭据仍有效，
+            // 拉进度对齐——还差表就切过去继续，全交完直接进成功页。
+            try {
+              const progress = await voteApi.progress(token);
+              if (progress.remaining.length === 0) {
+                clearVoteToken();
+                clearVoteSessionInfo();
+                void navigate('/vote/done', { replace: true });
+                return;
+              }
+              const nextDept = sessionInfo?.departments.find(
+                (department) => department.questionnaireType === progress.remaining[0],
+              );
+              setValues({});
+              setInvalidCells(EMPTY_SET);
+              setErrors([]);
+              setSubmitError(null);
+              setBothPending(progress);
+              if (nextDept !== undefined && nextDept.id !== deptId) setDeptId(nextDept.id);
+              return;
+            } catch {
+              // 进度也查不到（凭据其实已失效）：退回下面的核销语义
+            }
+          }
           clearVoteToken();
           clearVoteSessionInfo();
-          setFatal(
-            error.status === 409
-              ? '该随机码已经提交过评分，一码一票不能重复提交。'
-              : '本轮投票凭据已失效，请回到入口重新输入随机码。',
-          );
+          setFatal('该随机码已经提交过评分，一码一票不能重复提交。');
+          return;
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          clearVoteToken();
+          clearVoteSessionInfo();
+          setFatal('本轮投票凭据已失效，请回到入口重新输入随机码。');
           return;
         }
         setSubmitError(submitErrorText(error));
@@ -317,7 +373,7 @@ export function VoteSheet() {
         setSubmitting(false);
       }
     },
-    [sheet, token, values, navigate],
+    [sheet, token, values, navigate, deptId, sessionInfo, isBothScope],
   );
 
   if (token === null) return <Navigate to="/" replace />;
@@ -378,6 +434,19 @@ export function VoteSheet() {
                   label: department.name,
                 }))}
               />
+            </div>
+          ) : null}
+
+          {/* 双表流程：已交一张、还差一张的常驻提示（提交成功或同类型重复提交后出现） */}
+          {bothPending !== null ? (
+            <div style={{ marginTop: 16 }}>
+              <StaticNotice tone="info" title={`还差 ${bothPending.remaining.length} 张评价表`}>
+                <Typography.Text type="secondary">
+                  {`已提交 ${bothPending.submitted.map((type) => TYPE_LABELS[type] ?? type).join('、')}，还需完成「${bothPending.remaining
+                    .map((type) => TYPE_LABELS[type] ?? type)
+                    .join('、')}」——请从上方切换部门继续填写并提交，全部交完随机码才会核销。`}
+                </Typography.Text>
+              </StaticNotice>
             </div>
           ) : null}
 

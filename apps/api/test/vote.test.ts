@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
  * 投票入口四端点的接口测试（supertest 直接打 app，不监听端口）。
@@ -28,6 +28,7 @@ const { createPrismaClient, prisma: appPrisma } = await import('../src/db.js');
 const { VOTE_CLOSED_MESSAGE } = await import('../src/lib/settings.js');
 const { signAdminToken, verifyVoteToken } = await import('../src/lib/token.js');
 const { createTestSession } = await import('./session-fixtures.js');
+const { createTemplate } = await import('../src/services/questionnaireTemplateStore.js');
 
 const app = createApp();
 /** 测试自己的连接：建夹具、查落库结果。同时证明 app 与测试确实在同一个库上。 */
@@ -55,7 +56,7 @@ interface Fixture {
   };
   disabledDepartmentId: string;
   otherDepartmentId: string;
-  /** 部门内两个启用被评列（打分表的列），按 sortOrder 排列 */
+  /** 越权用例的列 id：workshop 表只有虚拟得分列（voteColumnId=null），提交任何列 id 都应被拒 */
   voteColumnIds: readonly [string, string];
   /** 宽区间项点（0-100） */
   wide: CriterionFixture;
@@ -88,17 +89,23 @@ async function createFixture(): Promise<Fixture> {
   const ticketType = await prisma.ticketType.create({
     data: { sessionId, code: `VT${tag}`, name: `投票测试票种-${tag}`, weightPercent: 100 },
   });
-  // 表头四项显式给非默认值：用默认值断言不出"原样回传"，硬编码默认值也能蒙混过关。
+  // 表头三件套在 0010 起的真源是场次模板表：显式给非默认值，用默认值断言不出
+  // "原样回传"，硬编码默认值也能蒙混过关。
   const department = await prisma.department.create({
     data: {
       sessionId,
       name: `投票测试部门-${tag}`,
       sortOrder: 1,
       questionnaireType: 'workshop',
-      headerNote: `附件9-${tag}`,
-      title: `投票测试问卷-${tag}`,
-      footerNote: '满分 100 分，弃权、不填按 0 分计',
     },
+  });
+  // 该表的 Prisma 编译有 bug（P2022），夹具插入走原生 SQL 封装 questionnaireTemplateStore。
+  const template = await createTemplate(prisma, {
+    sessionId,
+    type: 'workshop',
+    headerNote: `附件9-${tag}`,
+    title: `投票测试问卷-${tag}`,
+    footerNote: '满分 100 分，弃权、不填按 0 分计',
   });
   const otherDepartment = await prisma.department.create({
     data: { sessionId, name: `投票测试他部门-${tag}`, sortOrder: 2 },
@@ -122,8 +129,9 @@ async function createFixture(): Promise<Fixture> {
 
   const wide = await prisma.criterion.create({
     data: {
-      departmentId: department.id,
+      departmentId: null,
       sessionId,
+      templateType: 'workshop',
       name: '德',
       description: '政治素质、职业操守与作风表现',
       minScore: 0,
@@ -132,12 +140,13 @@ async function createFixture(): Promise<Fixture> {
     },
   });
   const narrow = await prisma.criterion.create({
-    data: { departmentId: department.id, sessionId, name: '能', minScore: 10, maxScore: 20, sortOrder: 2 },
+    data: { departmentId: null, sessionId, templateType: 'workshop', name: '能', minScore: 10, maxScore: 20, sortOrder: 2 },
   });
   const disabledCriterion = await prisma.criterion.create({
     data: {
-      departmentId: department.id,
+      departmentId: null,
       sessionId,
+      templateType: 'workshop',
       name: '停用项点',
       minScore: 0,
       maxScore: 100,
@@ -145,8 +154,9 @@ async function createFixture(): Promise<Fixture> {
       enabled: false,
     },
   });
+  // 越权用例：另一类型（person）模板的项点——workshop 表引用它必须被拒。
   const otherCriterion = await prisma.criterion.create({
-    data: { departmentId: otherDepartment.id, sessionId, name: '外部门项点', minScore: 0, maxScore: 100 },
+    data: { departmentId: null, sessionId, templateType: 'person', name: '外类型项点', minScore: 0, maxScore: 100 },
   });
 
   return {
@@ -161,9 +171,9 @@ async function createFixture(): Promise<Fixture> {
     otherDepartmentId: otherDepartment.id,
     departmentHeader: {
       questionnaireType: department.questionnaireType,
-      headerNote: department.headerNote,
-      title: department.title,
-      footerNote: department.footerNote,
+      headerNote: template.headerNote,
+      title: template.title,
+      footerNote: template.footerNote,
     },
     voteColumnIds: [columnA.id, columnB.id],
     wide: {
@@ -311,6 +321,12 @@ afterAll(async () => {
     },
   });
   await prisma.ticketType.delete({ where: { id: fixture.ticketTypeId } });
+  // 项点已模板级化（department_id=null），按场次清理
+  await prisma.criterion.deleteMany({
+    where: { sessionId: fixture.sessionId },
+  });
+  // 场次模板表没有可用的 Prisma 模型 API（P2022），走原生 SQL 清理，避免 RESTRICT 挡住 session 删除
+  await prisma.$executeRaw`DELETE FROM session_questionnaire_templates WHERE session_id = ${fixture.sessionId}`;
   // 场次最后删：RESTRICT 外键要求先清空挂靠的业务数据。
   await prisma.voteSession.deleteMany({
     where: { id: { in: [fixture.sessionId, fixture.placeholderSessionId] } },
@@ -435,11 +451,12 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
       name: fixture.ticketTypeName,
       weightPercent: 100,
     });
-    // 响应带票所属场次（投票端按它展示与判定开放状态）。
+    // 响应带票所属场次（投票端按它展示与判定开放状态）；scoreScope 决定双表流程。
     expect(res.body.session).toEqual({
       id: fixture.sessionId,
       name: `投票测试场次-${tag}`,
       status: 'voting',
+      scoreScope: 'person',
     });
 
     // 部门只含启用项、按 sortOrder：夹具两个部门 sortOrder 1 / 2，停用部门不出现。
@@ -544,17 +561,8 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
 });
 
 describe('GET /api/vote/sheet —— 取打分表骨架', () => {
-  it('返回部门、问卷表头、启用项点（含描述与区间）与启用被评列', async () => {
+  it('返回部门、问卷表头、启用项点（含描述与区间）与虚拟得分列', async () => {
     const { token } = await newToken();
-
-    // 给第一个职务列绑定被评人：表头第二行「职务与姓名」要随表回传姓名
-    const employee = await prisma.employee.create({
-      data: { departmentId: fixture.departmentId, sessionId: fixture.sessionId, name: '张三' },
-    });
-    await prisma.voteColumn.update({
-      where: { id: fixture.voteColumnIds[0] },
-      data: { employeeId: employee.id },
-    });
 
     const res = await getSheet(token, fixture.departmentId);
 
@@ -562,19 +570,17 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
     expect(res.body.department).toEqual({
       id: fixture.departmentId,
       name: fixture.departmentName,
+      questionnaireType: fixture.departmentHeader.questionnaireType,
     });
-    // 表头四项来自部门配置，原样回传，不落回默认值。
+    // 表头四项来自场次模板，原样回传，不落回默认值。
     expect(res.body.questionnaireType).toBe(fixture.departmentHeader.questionnaireType);
     expect(res.body.headerNote).toBe(fixture.departmentHeader.headerNote);
     expect(res.body.title).toBe(fixture.departmentHeader.title);
     expect(res.body.footerNote).toBe(fixture.departmentHeader.footerNote);
     // 停用项点不出现，顺序按 sortOrder；description 带描述与留空两种形态都回传。
     expect(res.body.criteria).toEqual([fixture.wide, fixture.narrow]);
-    // 列 = 被评列：停用列不出现，顺序按 sortOrder；绑定了被评人的列回传姓名。
-    expect(res.body.voteColumns).toEqual([
-      { id: fixture.voteColumnIds[0], name: '主任', employeeName: '张三' },
-      { id: fixture.voteColumnIds[1], name: '党支部书记', employeeName: null },
-    ]);
+    // 车间问卷没有真实被评列：骨架回传一个虚拟「得分」列（id=null，items 落 vote_column_id=null）。
+    expect(res.body.voteColumns).toEqual([{ id: null, name: '得分', employeeName: null }]);
     // 打分维度已换成被评列，旧模型的 employees 字段必须整体消失，而不是留个空数组。
     expect(res.body).not.toHaveProperty('employees');
   });
@@ -639,15 +645,13 @@ describe('GET /api/vote/sheet —— 取打分表骨架', () => {
 
 describe('POST /api/vote/submit —— 提交与核销', () => {
   /**
-   * 本部门启用被评列（2）× 启用项点（2）= 4 格的完整提交内容。
+   * 车间问卷：虚拟得分列（voteColumnId=null）× 启用项点（2）= 2 格的完整提交内容。
    * 提交完整性校验要求全部格子都填，多数用例从它出发。
    */
-  function fullItems(): Array<{ voteColumnId: string; criterionId: string; score: number }> {
+  function fullItems(): Array<{ voteColumnId: string | null; criterionId: string; score: number }> {
     return [
-      { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 88 },
-      { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 15 },
-      { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
-      { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 12 },
+      { voteColumnId: null, criterionId: fixture.wide.id, score: 88 },
+      { voteColumnId: null, criterionId: fixture.narrow.id, score: 15 },
     ];
   }
 
@@ -676,19 +680,14 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
     expect(sheets[0]?.ticketTypeId).toBe(fixture.ticketTypeId);
     expect(sheets[0]?.sessionId).toBe(fixture.sessionId);
     expect(sheets[0]?.submittedAt).toBeInstanceOf(Date);
-    // 全部 4 格必须都落库：完整性校验强制填满，缺格在提交前就被拒绝。
-    expect(sheets[0]?.items).toHaveLength(4);
-    expect(sheets[0]?.items.map((item) => item.score).sort((a, b) => a - b)).toEqual([12, 15, 60, 88]);
-    // 分数要落在对的格子上：按 (被评列, 项点) 对齐，而不只是四个数字都对得上。
+    // 全部 2 格必须都落库：完整性校验强制填满，缺格在提交前就被拒绝。
+    expect(sheets[0]?.items).toHaveLength(2);
+    expect(sheets[0]?.items.map((item) => item.score).sort((a, b) => a - b)).toEqual([15, 88]);
+    // 分数要落在对的格子上：车间表没有被评列，按 (虚拟得分列, 项点) 对齐，而不只是两个数字都对得上。
     expect(
       sheets[0]?.items.map((item) => `${item.voteColumnId}|${item.criterionId}`).sort(),
     ).toEqual(
-      [
-        `${fixture.voteColumnIds[0]}|${fixture.wide.id}`,
-        `${fixture.voteColumnIds[0]}|${fixture.narrow.id}`,
-        `${fixture.voteColumnIds[1]}|${fixture.wide.id}`,
-        `${fixture.voteColumnIds[1]}|${fixture.narrow.id}`,
-      ].sort(),
+      [`null|${fixture.wide.id}`, `null|${fixture.narrow.id}`].sort(),
     );
   });
 
@@ -697,8 +696,8 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      // 4 格只交 3 格：缺 1 格
-      items: fullItems().slice(0, 3),
+      // 2 格只交 1 格：缺 1 格
+      items: fullItems().slice(0, 1),
     });
 
     expect(res.status).toBe(400);
@@ -716,7 +715,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
       departmentId: fixture.departmentId,
       items: [
         ...fullItems(),
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 10 },
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 10 },
       ],
     });
     expect(duplicated.status).toBe(400);
@@ -806,7 +805,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: null, criterionId: fixture.wide.id, score: 90 }],
     });
 
     expect(res.status).toBe(403);
@@ -819,7 +818,7 @@ describe('POST /api/vote/submit —— 提交与核销', () => {
   it('缺少令牌 → 401', async () => {
     const res = await postSubmit(null, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 }],
+      items: [{ voteColumnId: null, criterionId: fixture.wide.id, score: 90 }],
     });
 
     expect(res.status).toBe(401);
@@ -841,7 +840,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 88.5 }],
+      items: [{ voteColumnId: null, criterionId: fixture.wide.id, score: 88.5 }],
     });
 
     expect(res.status).toBe(400);
@@ -853,7 +852,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: '88' }],
+      items: [{ voteColumnId: null, criterionId: fixture.wide.id, score: '88' }],
     });
 
     expect(res.status).toBe(400);
@@ -864,7 +863,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 21 }],
+      items: [{ voteColumnId: null, criterionId: fixture.narrow.id, score: 21 }],
     });
 
     expect(res.status).toBe(400);
@@ -877,7 +876,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 9 }],
+      items: [{ voteColumnId: null, criterionId: fixture.narrow.id, score: 9 }],
     });
 
     expect(res.status).toBe(400);
@@ -885,19 +884,25 @@ describe('POST /api/vote/submit —— 入参校验', () => {
   });
 
   it('区间端点值可提交（10 与 20 都合法）→ 200', async () => {
-    const { token } = await newToken();
-
-    const res = await postSubmit(token, {
+    const lower = await newToken();
+    const resLow = await postSubmit(lower.token, {
       departmentId: fixture.departmentId,
       items: [
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 10 },
-        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 20 },
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 50 },
-        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
+        { voteColumnId: null, criterionId: fixture.narrow.id, score: 10 },
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 50 },
       ],
     });
+    expect(resLow.status).toBe(200);
 
-    expect(res.status).toBe(200);
+    const upper = await newToken();
+    const resHigh = await postSubmit(upper.token, {
+      departmentId: fixture.departmentId,
+      items: [
+        { voteColumnId: null, criterionId: fixture.narrow.id, score: 20 },
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 50 },
+      ],
+    });
+    expect(resHigh.status).toBe(200);
   });
 
   it('被评列不属于该部门 → 400（防越权写）', async () => {
@@ -922,7 +927,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.otherCriterionId, score: 90 },
+        { voteColumnId: null, criterionId: fixture.otherCriterionId, score: 90 },
       ],
     });
 
@@ -942,7 +947,7 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     const disabledCriterion = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.disabledCriterionId, score: 90 },
+        { voteColumnId: null, criterionId: fixture.disabledCriterionId, score: 90 },
       ],
     });
 
@@ -961,8 +966,8 @@ describe('POST /api/vote/submit —— 入参校验', () => {
     const res = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 80 },
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 90 },
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 80 },
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 90 },
       ],
     });
 
@@ -997,20 +1002,177 @@ describe('POST /api/vote/submit —— 入参校验', () => {
 
     await postSubmit(token, {
       departmentId: fixture.departmentId,
-      items: [{ voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 999 }],
+      items: [{ voteColumnId: null, criterionId: fixture.narrow.id, score: 999 }],
     });
     const fixed = await postSubmit(token, {
       departmentId: fixture.departmentId,
       items: [
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.narrow.id, score: 20 },
-        { voteColumnId: fixture.voteColumnIds[0], criterionId: fixture.wide.id, score: 50 },
-        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.narrow.id, score: 15 },
-        { voteColumnId: fixture.voteColumnIds[1], criterionId: fixture.wide.id, score: 60 },
+        { voteColumnId: null, criterionId: fixture.narrow.id, score: 20 },
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 50 },
       ],
     });
 
     expect(fixed.status).toBe(200);
     const ticket = await prisma.ticket.findUnique({ where: { id: ticketId } });
     expect(ticket?.status).toBe('used');
+  });
+});
+
+describe('score_scope=both —— 负责人评价与车间评价两张表', () => {
+  /** 把夹具场次切成 both；afterEach 统一还原，避免影响其他 describe 的单表语义 */
+  async function setBoth(): Promise<void> {
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { scoreScope: 'both' },
+    });
+  }
+
+  afterEach(async () => {
+    await prisma.voteSession.update({
+      where: { id: fixture.sessionId },
+      data: { scoreScope: 'person' },
+    });
+    // 双表用例会往两个部门都写表，这里统一清掉，避免污染其他用例的计数断言
+    const sheetIds = (
+      await prisma.scoreSheet.findMany({
+        where: { departmentId: { in: [fixture.departmentId, fixture.otherDepartmentId] } },
+        select: { id: true },
+      })
+    ).map((sheet) => sheet.id);
+    await prisma.scoreItem.deleteMany({ where: { sheetId: { in: sheetIds } } });
+    await prisma.scoreSheet.deleteMany({
+      where: { departmentId: { in: [fixture.departmentId, fixture.otherDepartmentId] } },
+    });
+  });
+
+  it('进度接口：both 场次 required 两类，交一张后 remaining 减一', async () => {
+    await setBoth();
+    const { token } = await newToken();
+
+    const before = await request(app).get('/api/vote/progress').set('Authorization', `Bearer ${token}`);
+    expect(before.status).toBe(200);
+    expect(before.body).toEqual({
+      scoreScope: 'both',
+      required: ['person', 'workshop'],
+      submitted: [],
+      remaining: ['person', 'workshop'],
+    });
+
+    const submitRes = await postSubmit(token, {
+      departmentId: fixture.departmentId,
+      items: [
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 88 },
+        { voteColumnId: null, criterionId: fixture.narrow.id, score: 15 },
+      ],
+    });
+    expect(submitRes.status).toBe(200);
+
+    const after = await request(app).get('/api/vote/progress').set('Authorization', `Bearer ${token}`);
+    expect(after.status).toBe(200);
+    expect(after.body).toEqual({
+      scoreScope: 'both',
+      required: ['person', 'workshop'],
+      submitted: ['workshop'],
+      remaining: ['person'],
+    });
+  });
+
+  it('只交车间评价不核销；补交负责人评价后才核销（两表齐才完）', async () => {
+    await setBoth();
+    const { token, ticketId } = await newToken();
+
+    const workshop = await postSubmit(token, {
+      departmentId: fixture.departmentId,
+      items: [
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 88 },
+        { voteColumnId: null, criterionId: fixture.narrow.id, score: 15 },
+      ],
+    });
+    expect(workshop.status).toBe(200);
+    const midway = await prisma.ticket.findUnique({ where: { id: ticketId } });
+    expect(midway?.status).toBe('unused');
+
+    // 负责人评价：otherDepartment（person 类型）× otherColumn（它的启用被评列）× otherCriterion（person 模板项点）
+    const person = await postSubmit(token, {
+      departmentId: fixture.otherDepartmentId,
+      items: [
+        { voteColumnId: fixture.otherVoteColumnId, criterionId: fixture.otherCriterionId, score: 90 },
+      ],
+    });
+    expect(person.status).toBe(200);
+    const done = await prisma.ticket.findUnique({ where: { id: ticketId } });
+    expect(done?.status).toBe('used');
+    expect(await prisma.scoreSheet.count({ where: { ticketTypeId: fixture.ticketTypeId } })).toBe(2);
+  });
+
+  it('绑定部门的票在 both 场次可评任意车间（车间评价不受绑定限制）', async () => {
+    await setBoth();
+    const ticket = await createTicket();
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { departmentId: fixture.otherDepartmentId },
+    });
+    const loginRes = await login(ticket.code);
+    const token = loginRes.body.token as string;
+
+    // 票绑定的是 person 部门（otherDepartment），交另一车间（fixture.departmentId）的车间评价 → 放行
+    const res = await postSubmit(token, {
+      departmentId: fixture.departmentId,
+      items: [
+        { voteColumnId: null, criterionId: fixture.wide.id, score: 88 },
+        { voteColumnId: null, criterionId: fixture.narrow.id, score: 15 },
+      ],
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('both 场次绑定码可取车间打分表骨架（取表豁免绑定校验）', async () => {
+    await setBoth();
+    const ticket = await createTicket();
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { departmentId: fixture.otherDepartmentId },
+    });
+    const loginRes = await login(ticket.code);
+    const token = loginRes.body.token as string;
+
+    // 票绑定 person 部门，取另一车间（fixture.departmentId）的打分表骨架 → 200 且回传车间问卷形态
+    const res = await getSheet(token, fixture.departmentId);
+    expect(res.status).toBe(200);
+    expect(res.body.department).toMatchObject({ id: fixture.departmentId, questionnaireType: 'workshop' });
+    expect(res.body.voteColumns).toEqual([{ id: null, name: '得分', employeeName: null }]);
+  });
+
+  it('both 场次登录返回的部门列表含全部启用车间（供选择评价对象）', async () => {
+    await setBoth();
+    const ticket = await createTicket();
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { departmentId: fixture.otherDepartmentId },
+    });
+    const loginRes = await login(ticket.code);
+
+    const ids = (loginRes.body.departments as Array<{ id: string }>).map((department) => department.id);
+    expect(ids).toContain(fixture.departmentId);
+    expect(ids).toContain(fixture.otherDepartmentId);
+  });
+
+  it('单表场次的 required 只含绑定部门的问卷类型', async () => {
+    const ticket = await createTicket();
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { departmentId: fixture.otherDepartmentId },
+    });
+    const loginRes = await login(ticket.code);
+    const token = loginRes.body.token as string;
+
+    const res = await request(app).get('/api/vote/progress').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      scoreScope: 'person',
+      required: ['person'],
+      submitted: [],
+      remaining: ['person'],
+    });
   });
 });

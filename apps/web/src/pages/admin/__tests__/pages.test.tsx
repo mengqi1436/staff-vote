@@ -280,7 +280,6 @@ const { AdminTicketTypes } = await import('../TicketTypes.js');
 const { AdminTickets } = await import('../Tickets.js');
 const { AdminDepartments } = await import('../Departments.js');
 const { AdminEmployees } = await import('../Employees.js');
-const { AdminCriteria } = await import('../Criteria.js');
 const { AdminQuestionnaire } = await import('../Questionnaire.js');
 const { AdminSettings } = await import('../Settings.js');
 const { AdminResults } = await import('../Results.js');
@@ -393,15 +392,6 @@ describe('后台页面渲染', () => {
     expect(await screen.findByText('导入 Excel/CSV')).toBeInTheDocument();
     // 导入列约定说明（部门,姓名,性别,年龄,职称）
     expect(await screen.findByText(/列顺序固定：部门,姓名,性别,年龄,职称/)).toBeInTheDocument();
-  });
-
-  it('项点页渲染列配置与归一化口径说明', async () => {
-    renderPage(<AdminCriteria />);
-
-    expect(await screen.findByText('政治素质')).toBeInTheDocument();
-    expect(await screen.findByText('各项满分不同时的综合得分口径')).toBeInTheDocument();
-    // 三行示例保留：90 与 62.5 归一化后等权平均得 76.25
-    expect(await screen.findByText(/76\.25/)).toBeInTheDocument();
   });
 
   it('设置页渲染系统标题表单', async () => {

@@ -99,6 +99,11 @@ async function clearOwnFixtures(): Promise<void> {
   await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: { in: ticketTypeIds } } });
   await prisma.employee.deleteMany({ where: { departmentId: { in: departmentIds } } });
   await prisma.criterion.deleteMany({ where: { departmentId: { in: departmentIds } } });
+  // 0010 起模板项点 departmentId 为空、挂「场次 + 类型」，上面的部门清理够不到；
+  // 只清 person（本文件统计用例用的类型），workshop 模板项点是 vote.test 的夹具
+  await prisma.criterion.deleteMany({
+    where: { sessionId: await ensureDefaultSession(prisma), departmentId: null, templateType: 'person' },
+  });
   // 被评列必须排在 scoreItem 之后：score_items 对 vote_columns 是 RESTRICT 外键
   await prisma.voteColumn.deleteMany({ where: { departmentId: { in: departmentIds } } });
   await prisma.department.deleteMany({ where: { id: { in: departmentIds } } });
@@ -156,15 +161,21 @@ async function createEmployee(departmentId: string, name: string) {
   return res.body as { id: string; name: string };
 }
 
+/**
+ * 0010 起项点在模板层维护（POST /criteria 带 templateType，与部门解耦）。
+ * departmentId 参数仅为兼容既有调用点保留，不再随请求发送；夹具部门均为
+ * 默认 person 类型，因此模板固定传 'person'。
+ */
 async function createCriterion(
   departmentId: string,
   name: string,
   minScore: number,
   maxScore: number,
 ) {
+  void departmentId;
   const res = await agent
     .post('/api/admin/criteria')
-    .send({ departmentId, name, minScore, maxScore });
+    .send({ templateType: 'person', name, minScore, maxScore });
   expect(res.status).toBe(200);
   return res.body as { id: string; name: string };
 }
@@ -834,44 +845,62 @@ describeDb('管理端接口', () => {
     expect(restored.body.name).toBe(`${TAG}部门-启停`);
   });
 
-  it('部门 PATCH 保存问卷表头配置（类型/附件号/标题/填写说明）并能读回', async () => {
+  it('部门 PATCH 保存问卷类型；模板表头（附件号/标题/填写说明）在场次模板层读改', async () => {
     const created = await createDepartment(`${TAG}部门-问卷`);
     const id = created.id;
 
-    // 新建部门按参考表的默认抬头：个人问卷 + 附件1-1，标题与填写说明留空
+    // 新建部门默认个人问卷；表头三件套 0010 起在模板层（新场次返回默认文案）
     const initial = await agent.get('/api/admin/departments');
     expect((initial.body as Array<{ id: string }>).find((row) => row.id === id)).toMatchObject({
       questionnaireType: 'person',
+    });
+    // 模板行是场次级持久数据，可能被其它用例/轮次残留，先重置为默认文案
+    const reset = await agent.patch('/api/admin/questionnaire-templates').send({
+      type: 'person',
+      headerNote: '附件1-1',
+      title: '',
+      footerNote: '',
+    });
+    expect(reset.status).toBe(200);
+    expect(reset.body).toMatchObject({
+      type: 'person',
+      headerNote: '附件1-1',
+      title: '',
+      footerNote: '',
+    });
+    const initialTemplate = await agent.get('/api/admin/questionnaire-templates?type=person');
+    expect(initialTemplate.body).toMatchObject({
       headerNote: '附件1-1',
       title: '',
       footerNote: '',
     });
 
-    const title = `${TAG}车间负责人评价问卷`;
+    const title = `${TAG}车间评价问卷`;
     const footerNote = '请如实填写，不填视为弃权。';
-    const saved = await agent.patch(`/api/admin/departments/${id}`).send({
-      questionnaireType: 'workshop',
+    const switched = await agent
+      .patch(`/api/admin/departments/${id}`)
+      .send({ questionnaireType: 'workshop' });
+    expect(switched.status).toBe(200);
+    expect(switched.body).toMatchObject({ questionnaireType: 'workshop' });
+
+    // 表头按类型全场共用：改 workshop 模板即改所有车间部门的抬头
+    const saved = await agent.patch('/api/admin/questionnaire-templates').send({
+      type: 'workshop',
       headerNote: '附件2-1',
       title,
       footerNote,
     });
     expect(saved.status).toBe(200);
     expect(saved.body).toMatchObject({
-      questionnaireType: 'workshop',
+      type: 'workshop',
       headerNote: '附件2-1',
       title,
       footerNote,
     });
 
-    // 回读：问卷配置页刷新后不能退回默认值（GET 漏字段是本轮改动的典型症状）
-    const reread = await agent.get('/api/admin/departments');
-    expect((reread.body as Array<{ id: string }>).find((row) => row.id === id)).toMatchObject({
-      questionnaireType: 'workshop',
-      headerNote: '附件2-1',
-      title,
-      footerNote,
-    });
-    expect((await prisma.department.findUnique({ where: { id } }))?.questionnaireType).toBe('workshop');
+    // 回读：模板 GET 返回持久化值；部门类型持久化
+    const reread = await agent.get('/api/admin/questionnaire-templates?type=workshop');
+    expect(reread.body).toMatchObject({ headerNote: '附件2-1', title, footerNote });    expect((await prisma.department.findUnique({ where: { id } }))?.questionnaireType).toBe('workshop');
 
     // 问卷类型只接受 person / workshop：路由层 zod 先拦下（service 里另有
     // QUESTIONNAIRE_TYPE_INVALID 分支，只有越过分区校验的调用才会走到），非法值不落库
@@ -945,19 +974,19 @@ describeDb('管理端接口', () => {
 
     const equal = await agent
       .post('/api/admin/criteria')
-      .send({ departmentId: department.id, name: '德', minScore: 80, maxScore: 80 });
+      .send({ templateType: 'person', name: '德', minScore: 80, maxScore: 80 });
     expect(equal.status).toBe(400);
     expect(equal.body.error.code).toBe('CRITERION_RANGE_INVALID');
 
     const inverted = await agent
       .post('/api/admin/criteria')
-      .send({ departmentId: department.id, name: '能', minScore: 90, maxScore: 10 });
+      .send({ templateType: 'person', name: '能', minScore: 90, maxScore: 10 });
     expect(inverted.status).toBe(400);
     expect(inverted.body.error.code).toBe('CRITERION_RANGE_INVALID');
 
     const decimal = await agent
       .post('/api/admin/criteria')
-      .send({ departmentId: department.id, name: '勤', minScore: 0, maxScore: 10.5 });
+      .send({ templateType: 'person', name: '勤', minScore: 0, maxScore: 10.5 });
     expect(decimal.status).toBe(400);
     expect(decimal.body.error.code).toBe('VALIDATION_FAILED');
 
@@ -971,16 +1000,18 @@ describeDb('管理端接口', () => {
     expect(patched.body).toMatchObject({ minScore: 0, maxScore: 50 });
 
     expect((await agent.delete(`/api/admin/criteria/${ok.id}`)).status).toBe(204);
-    const list = await agent.get(`/api/admin/criteria?departmentId=${department.id}`);
+    const list = await agent.get('/api/admin/criteria?templateType=person');
     expect(list.body).toHaveLength(1);
     expect(list.body[0]).toMatchObject({ id: ok.id, enabled: false });
     expect(await prisma.criterion.count({ where: { id: ok.id } })).toBe(1);
 
     expect((await agent.patch('/api/admin/criteria/not-exist').send({ minScore: 1 })).status).toBe(404);
-    const unknownDepartment = await agent
+    // 0010 起项点与部门解耦：原「未知部门」用例改写为「非法 templateType」——
+    // 路由层 zod 枚举拦下，不入库
+    const invalidType = await agent
       .post('/api/admin/criteria')
-      .send({ departmentId: 'not-exist', name: 'x', minScore: 0, maxScore: 10 });
-    expect(unknownDepartment.status).toBe(400);
+      .send({ templateType: 'team', name: 'x', minScore: 0, maxScore: 10 });
+    expect(invalidType.status).toBe(400);
   });
 
   it('被评列 CRUD：同名可重复、改名与软删除后从打分表消失', async () => {

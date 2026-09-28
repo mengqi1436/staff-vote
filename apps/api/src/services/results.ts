@@ -14,6 +14,7 @@
 import { computeResults } from '../lib/scoring.js';
 import { prisma } from '../db.js';
 import { ApiError } from '../middleware/errorHandler.js';
+import { findTemplate } from './questionnaireTemplateStore.js';
 
 export interface ResultCriterionScore {
   criterionId: string;
@@ -25,7 +26,8 @@ export interface ResultCriterionScore {
 
 export interface ResultRow {
   rank: number;
-  voteColumnId: string;
+  /** 车间问卷唯一一格虚拟「得分」列为 null */
+  voteColumnId: string | null;
   voteColumnName: string;
   /** 被评列是否启用；停用的列仍出现在结果里，便于解释历史成绩 */
   enabled: boolean;
@@ -88,9 +90,24 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
   const department = await prisma.department.findUnique({ where: { id: departmentId } });
   if (!department) throw ApiError.notFound('部门不存在');
 
-  const [voteColumns, criteria, ticketTypes, sheets] = await Promise.all([
-    prisma.voteColumn.findMany({
-      where: { departmentId },
+  const isWorkshop = department.questionnaireType === 'workshop';
+
+  const [voteColumns, templateCriteria, legacyCriteria, ticketTypes, sheets] = await Promise.all([
+    // 车间问卷没有被评列（0010）：只有一格虚拟「得分」列，计分时以 null 表示。
+    isWorkshop
+      ? Promise.resolve([])
+      : prisma.voteColumn.findMany({
+          where: { departmentId },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        }),
+    // 现行配置 = 场次模板项点；历史 sheet 可能引用 0010 前的部门项点，一并并入
+    // 结果口径（模板项点在前），保证旧答卷的分数仍能落在对应项点上。
+    prisma.criterion.findMany({
+      where: {
+        sessionId: department.sessionId,
+        departmentId: null,
+        templateType: department.questionnaireType,
+      },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     }),
     prisma.criterion.findMany({
@@ -105,8 +122,12 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
     prisma.scoreSheet.findMany({ where: { departmentId }, include: { items: true } }),
   ]);
 
+  // 去重合并：模板项点优先；部门旧项点只在 id 不重复时追加。
+  const criteria = [...templateCriteria, ...legacyCriteria.filter((c) => !templateCriteria.some((t) => t.id === c.id))];
+
   const scoring = computeResults({
-    voteColumnIds: voteColumns.map((column) => column.id),
+    // 车间问卷传唯一一格虚拟列（null）；person 传部门被评列。
+    voteColumnIds: isWorkshop ? [null] : voteColumns.map((column) => column.id),
     criteria: criteria.map((criterion) => ({
       id: criterion.id,
       minScore: criterion.minScore,
@@ -127,11 +148,17 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
   const criterionById = new Map(criteria.map((criterion) => [criterion.id, criterion]));
   const ticketTypeById = new Map(ticketTypes.map((type) => [type.id, type]));
 
+  // 车间问卷的虚拟「得分」列没有 VoteColumn 行：null 一律显示为「得分」。
+  const columnMetaOf = (voteColumnId: string | null) =>
+    voteColumnId === null
+      ? { name: '得分', enabled: true }
+      : columnById.get(voteColumnId) ?? { name: '', enabled: false };
+
   // 排名：综合得分降序，同分并列（1、2、2、4 式），同分内按列名稳定排序。
   const sorted = [...scoring.voteColumns].sort((a, b) => {
     if (b.comprehensiveScore !== a.comprehensiveScore) return b.comprehensiveScore - a.comprehensiveScore;
-    const nameA = columnById.get(a.voteColumnId)?.name ?? '';
-    const nameB = columnById.get(b.voteColumnId)?.name ?? '';
+    const nameA = columnMetaOf(a.voteColumnId).name;
+    const nameB = columnMetaOf(b.voteColumnId).name;
     return nameA.localeCompare(nameB, 'zh-CN');
   });
 
@@ -142,7 +169,7 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
       rank = index + 1;
       previousScore = column.comprehensiveScore;
     }
-    const meta = columnById.get(column.voteColumnId);
+    const meta = columnMetaOf(column.voteColumnId);
     return {
       rank,
       voteColumnId: column.voteColumnId,
@@ -180,7 +207,7 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
       ticketType.voteColumns.flatMap((column) =>
         column.criteria.map((criterion) => ({
           ticketTypeCode: codeOf(ticketType.ticketTypeId),
-          voteColumnName: columnById.get(column.voteColumnId)?.name ?? '',
+          voteColumnName: columnMetaOf(column.voteColumnId).name,
           criterionName: criterionById.get(criterion.criterionId)?.name ?? '',
           avg: criterion.avg,
         })),
@@ -189,7 +216,7 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
     columnRows: scoring.perTicketType.flatMap((ticketType) =>
       ticketType.voteColumns.map((column) => ({
         ticketTypeCode: codeOf(ticketType.ticketTypeId),
-        voteColumnName: columnById.get(column.voteColumnId)?.name ?? '',
+        voteColumnName: columnMetaOf(column.voteColumnId).name,
         average: column.average,
       })),
     ),
@@ -279,29 +306,53 @@ export async function loadTicketAnswerExport(ticketId: string): Promise<TicketAn
   const department = await prisma.department.findUnique({ where: { id: sheet.departmentId } });
   if (!department) throw ApiError.notFound('答卷所属部门不存在');
 
+  const isWorkshop = department.questionnaireType === 'workshop';
+
+  // 附件号/标题/说明的真源在 0010 起的场次模板表；行缺失（迁移前的老场次）退回默认文案。
+  // 该表的 Prisma 编译有 bug（P2022），读写一律走原生 SQL 封装 questionnaireTemplateStore。
+  const template = await findTemplate(prisma, sheet.sessionId, department.questionnaireType);
+
   const [criteria, voteColumns] = await Promise.all([
+    // 与结果页同一口径：模板项点优先，历史答卷引用的部门旧项点并入尾部。
     prisma.criterion.findMany({
-      where: { departmentId: sheet.departmentId },
+      where: {
+        sessionId: sheet.sessionId,
+        departmentId: null,
+        templateType: department.questionnaireType,
+      },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     }),
+    // 车间问卷没有被评列；导出形态是一列「得分」。
     prisma.voteColumn.findMany({
       where: { departmentId: sheet.departmentId },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     }),
   ]);
+  const allCriteria = [
+    ...criteria,
+    ...(await prisma.criterion
+      .findMany({
+        where: { departmentId: sheet.departmentId },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      })
+      .then((legacy) => legacy.filter((c) => !criteria.some((t) => t.id === c.id)))),
+  ];
 
   const scoreAt = new Map(sheet.items.map((item) => [`${item.voteColumnId}|${item.criterionId}`, item.score]));
-  const rows = criteria.map((criterion) => [
+  const rows = allCriteria.map((criterion) => [
     criterion.description ? `${criterion.name}\n${criterion.description}` : criterion.name,
-    ...voteColumns.map((column) => scoreAt.get(`${column.id}|${criterion.id}`) ?? ''),
+    // 车间问卷：唯一一格虚拟列（voteColumnId=null），键即 'null|<项点>'。
+    ...(isWorkshop
+      ? [scoreAt.get(`null|${criterion.id}`) ?? '']
+      : voteColumns.map((column) => scoreAt.get(`${column.id}|${criterion.id}`) ?? '')),
   ]);
 
   return {
-    headerNote: department.headerNote,
-    title: department.title.replace('xx', department.name),
-    footerNote: department.footerNote,
+    headerNote: template?.headerNote ?? '附件1-1',
+    title: (template?.title ?? '').replace('xx', department.name),
+    footerNote: template?.footerNote ?? '',
     departmentName: department.name,
-    columnNames: voteColumns.map((column) => column.name),
+    columnNames: isWorkshop ? ['得分'] : voteColumns.map((column) => column.name),
     rows,
     submittedAt: sheet.submittedAt,
     ticketTypeLabel: `${ticket.ticketType.code}（${ticket.ticketType.name}）`,
@@ -338,7 +389,7 @@ export interface SessionAnswerSummary {
  * 全部「被评列 × 项点」组合，跨部门的列互不填数。
  */
 export async function loadSessionAnswerSummary(sessionId: string): Promise<SessionAnswerSummary> {
-  const [sheets, columns] = await Promise.all([
+  const [sheets, columns, departments] = await Promise.all([
     prisma.scoreSheet.findMany({
       where: { sessionId },
       orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
@@ -352,8 +403,13 @@ export async function loadSessionAnswerSummary(sessionId: string): Promise<Sessi
       where: { sessionId },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       include: {
-        department: { select: { sortOrder: true, name: true } },
+        department: { select: { sortOrder: true, name: true, questionnaireType: true } },
       },
+    }),
+    // 车间问卷没有被评列：为每个车间部门补一列虚拟「得分」。
+    prisma.department.findMany({
+      where: { sessionId, enabled: true, questionnaireType: 'workshop' },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     }),
   ]);
 
@@ -370,23 +426,51 @@ export async function loadSessionAnswerSummary(sessionId: string): Promise<Sessi
     if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
     return a.id < b.id ? -1 : 1;
   });
-  const criteriaByDepartment = new Map<string, typeof criteria>();
+  // 0010 起项点在模板层（departmentId 为空），按 templateType 对应部门类型；
+  // 0010 前的部门旧项点（departmentId=部门）按原部门对应到该部门的列（历史评分可读）。
+  const templateCriteriaByType = new Map<string, typeof criteria>();
+  const legacyCriteriaByDepartment = new Map<string, typeof criteria>();
   for (const criterion of criteria) {
-    const list = criteriaByDepartment.get(criterion.departmentId) ?? [];
-    list.push(criterion);
-    criteriaByDepartment.set(criterion.departmentId, list);
+    if (criterion.departmentId === null && criterion.templateType !== null) {
+      const list = templateCriteriaByType.get(criterion.templateType) ?? [];
+      list.push(criterion);
+      templateCriteriaByType.set(criterion.templateType, list);
+    } else if (criterion.departmentId !== null) {
+      const list = legacyCriteriaByDepartment.get(criterion.departmentId) ?? [];
+      list.push(criterion);
+      legacyCriteriaByDepartment.set(criterion.departmentId, list);
+    }
   }
   const orderedColumns: SessionAnswerSummaryColumn[] = [];
   const columnKeyByOrder: string[] = [];
   for (const column of sortedColumns) {
-    for (const criterion of criteriaByDepartment.get(column.departmentId) ?? []) {
+    const departmentCriteria = [
+      ...(legacyCriteriaByDepartment.get(column.departmentId) ?? []),
+      ...(templateCriteriaByType.get(column.department.questionnaireType) ?? []),
+    ];
+    for (const criterion of departmentCriteria) {
       orderedColumns.push({ header: `${column.department.name}-${column.name}-${criterion.name}` });
       columnKeyByOrder.push(`${column.id}|${criterion.id}`);
     }
   }
+  // 车间部门的虚拟「得分」列：分数格没有 vote_column_id（null），
+  // 键加部门前缀避免多个车间部门的 'null|项点' 互相串格。
+  for (const department of departments) {
+    for (const criterion of templateCriteriaByType.get('workshop') ?? []) {
+      orderedColumns.push({ header: `${department.name}-得分-${criterion.name}` });
+      columnKeyByOrder.push(`${department.id}|null|${criterion.id}`);
+    }
+  }
 
   const rows = sheets.map((sheet, index) => {
-    const scoreAt = new Map(sheet.items.map((item) => [`${item.voteColumnId}|${item.criterionId}`, item.score]));
+    const scoreAt = new Map(
+      sheet.items.map((item) => [
+        item.voteColumnId === null
+          ? `${sheet.departmentId}|null|${item.criterionId}`
+          : `${item.voteColumnId}|${item.criterionId}`,
+        item.score,
+      ]),
+    );
     return {
       seq: index + 1,
       code: sheet.ticketMap?.ticket.code ?? '',

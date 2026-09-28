@@ -34,7 +34,8 @@ export interface ScoringTicketType {
 }
 
 export interface ScoringItem {
-  voteColumnId: string;
+  /** 被评列。null = 车间问卷的虚拟「得分」列（0010：车间表没有被评人列）。 */
+  voteColumnId: string | null;
   criterionId: string;
   score: number;
 }
@@ -45,7 +46,8 @@ export interface ScoringSheet {
 }
 
 export interface ScoringInput {
-  voteColumnIds: string[];
+  /** 被评列 ID 列表；车间问卷传 [null]（唯一一格虚拟「得分」列）。 */
+  voteColumnIds: Array<string | null>;
   criteria: ScoringCriterion[];
   ticketTypes: ScoringTicketType[];
   sheets: ScoringSheet[];
@@ -62,7 +64,8 @@ export interface CriterionResult {
 }
 
 export interface VoteColumnResult {
-  voteColumnId: string;
+  /** null = 车间问卷的虚拟「得分」列。 */
+  voteColumnId: string | null;
   /** 综合得分：各项归一化分的等权平均；无任何有效评分时为 0 */
   comprehensiveScore: number;
   criteria: CriterionResult[];
@@ -76,7 +79,8 @@ export interface TicketTypeCriterionAvg {
 
 /** 单票别对单个被评列的结果：每格平均分 + 列内均分。 */
 export interface TicketTypeColumnResult {
-  voteColumnId: string;
+  /** null = 车间问卷的虚拟「得分」列。 */
+  voteColumnId: string | null;
   criteria: TicketTypeCriterionAvg[];
   /** 该票种对该被评列的均分：各格平均分的等权平均 */
   average: number;

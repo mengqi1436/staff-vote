@@ -18,7 +18,7 @@ import { ALL_PERMISSIONS, renderWithAuth } from '../../../test-utils.js';
  */
 configure({ asyncUtilTimeout: 15000 });
 
-/** 参考表口径的部门配置：附件1-1 + 个人问卷 + 标题含 xx 占位。 */
+/** 参考表口径的部门配置：个人问卷 + 车间问卷各一（抬头三件套在场次模板里，不在部门上）。 */
 function departments() {
   return [
     {
@@ -27,9 +27,6 @@ function departments() {
       sortOrder: 1,
       enabled: true,
       questionnaireType: 'person',
-      headerNote: '附件1-1',
-      title: 'xx车间负责人评价问卷',
-      footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
     },
     {
       id: 'd2',
@@ -37,11 +34,28 @@ function departments() {
       sortOrder: 2,
       enabled: true,
       questionnaireType: 'workshop',
+    },
+  ];
+}
+
+/** 场次问卷模板（0010）：按问卷类型各一份，承载附件号/标题/填写说明三件套。 */
+function templateHeaders(): Record<string, Record<string, unknown>> {
+  return {
+    person: {
+      sessionId: null,
+      type: 'person',
+      headerNote: '附件1-1',
+      title: 'xx车间负责人评价问卷',
+      footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+    },
+    workshop: {
+      sessionId: null,
+      type: 'workshop',
       headerNote: '附件1-2',
       title: 'xx车间评价问卷',
       footerNote: '',
     },
-  ];
+  };
 }
 
 function voteColumns() {
@@ -101,6 +115,9 @@ const mocks = vi.hoisted(() => ({
   criteriaUpdate: vi.fn(),
   criteriaRemove: vi.fn(),
   employeesList: vi.fn(),
+  templateGet: vi.fn(),
+  templateUpdate: vi.fn(),
+  sessionsList: vi.fn(),
 }));
 
 vi.mock('../../../lib/api.js', async () => {
@@ -122,6 +139,8 @@ vi.mock('../../../lib/api.js', async () => {
         remove: mocks.criteriaRemove,
       },
       employees: { list: mocks.employeesList },
+      questionnaireTemplates: { get: mocks.templateGet, update: mocks.templateUpdate },
+      sessions: { list: mocks.sessionsList },
     },
   };
 });
@@ -184,7 +203,7 @@ beforeEach(() => {
   const criterionStore: Array<Record<string, unknown>> = criteria();
   mocks.criteriaList.mockImplementation(async () => criterionStore as never);
   mocks.criteriaCreate.mockImplementation(
-    async (body: { departmentId: string; name: string; sortOrder?: number }) => {
+    async (body: { templateType: string; name: string; sortOrder?: number }) => {
       const row = {
         id: 'c9',
         name: body.name,
@@ -208,30 +227,44 @@ beforeEach(() => {
     if (index >= 0) criterionStore.splice(index, 1);
   });
   mocks.employeesList.mockImplementation(async () => employees());
+  // 场次模板三件套：GET 按类型取，PATCH 合并回 store（refresh 回显新值）
+  const templateStore = templateHeaders();
+  mocks.templateGet.mockImplementation(async (type: string) => templateStore[type] ?? null);
+  mocks.templateUpdate.mockImplementation(async (body: Record<string, unknown>) => {
+    const type = String(body.type);
+    templateStore[type] = { ...templateStore[type], ...body };
+    return templateStore[type];
+  });
+  // 问卷页未选场次：scoreScope 数据源不请求（组件对 null sessionId 直接短路）
+  mocks.sessionsList.mockImplementation(async () => ({ sessions: [] }));
 });
 
 describe('问卷配置页（附件8 Excel 版式）', () => {
   it('按附件8版式渲染：附件号、标题（xx 为部门下拉）、斜线表头、被评列、项点行、填写说明', async () => {
     renderQuestionnaire();
 
-    // 抬头与被评列都从部门/问卷配置回填；多场后列表请求带场次过滤（未选场次为 null）
-    expect(await screen.findByLabelText('附件号')).toHaveValue('附件1-1');
+    // 抬头与被评列都从模板/问卷配置回填；多场后列表请求带场次过滤（未选场次为 null）。
+    // 数据是异步到货的：先等元素出现，再等值灌入——全量并行跑机器慢时，
+    // 「元素在」不代表「值已在」，逐项 waitFor 才稳定。
+    const headerInput = await screen.findByLabelText('附件号');
+    await waitFor(() => expect(headerInput).toHaveValue('附件1-1'));
     await waitFor(() => expect(mocks.columnList).toHaveBeenCalledWith('d1', null));
-    await waitFor(() => expect(mocks.criteriaList).toHaveBeenCalledWith('d1', null));
+    await waitFor(() => expect(mocks.criteriaList).toHaveBeenCalledWith('person', null));
+    await waitFor(() => expect(mocks.templateGet).toHaveBeenCalledWith('person', null));
 
     // 标题中的「xx」渲染为部门下拉，默认选中第一个部门；其余文字原样展示
-    expect(screen.getByRole('combobox', { name: '选择部门' })).toHaveValue('');
-    expect(screen.getByText('办公室')).toBeInTheDocument();
-    expect(screen.getByText('车间负责人评价问卷')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: '选择部门' })).toBeInTheDocument();
+    await screen.findByText('办公室');
+    await screen.findByText('车间负责人评价问卷');
 
     // 斜线表头与被评列
     expect(screen.getByText('职务与姓名')).toBeInTheDocument();
     expect(screen.getByText('评价项点')).toBeInTheDocument();
-    expect(screen.getByLabelText('被评列：主任')).toHaveValue('主任');
+    await waitFor(() => expect(screen.getByLabelText('被评列：主任')).toHaveValue('主任'));
     expect(screen.getByLabelText('被评列：党支部书记')).toHaveValue('党支部书记');
 
     // 项点行：名称与描述是表上的内联输入（可直接编辑）
-    expect(screen.getByLabelText('项点名称：政治素质')).toHaveValue('政治素质');
+    await waitFor(() => expect(screen.getByLabelText('项点名称：政治素质')).toHaveValue('政治素质'));
     expect(screen.getByLabelText('项点描述：政治素质')).toHaveValue('信念坚定、对党忠诚。');
 
     // 填写说明：关键词富文本
@@ -250,10 +283,10 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     await user.click(await screen.findByTitle('财务科'));
 
     await waitFor(() => expect(mocks.columnList).toHaveBeenCalledWith('d2', null));
-    expect(mocks.criteriaList).toHaveBeenCalledWith('d2', null);
+    expect(mocks.criteriaList).toHaveBeenCalledWith('workshop', null);
   }, TIMEOUT_MS);
 
-  it('附件号内联编辑，失焦自动 PATCH 到该部门', async () => {
+  it('附件号内联编辑，失焦自动 PATCH 到场次模板', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
     const input = await screen.findByLabelText('附件号');
@@ -262,9 +295,11 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     await user.type(input, '附件1-2');
     await user.tab();
 
-    await waitFor(() => expect(mocks.departmentUpdate).toHaveBeenCalledTimes(1));
-    expect(mocks.departmentUpdate.mock.calls[0]?.[0]).toBe('d1');
-    expect(mocks.departmentUpdate.mock.calls[0]?.[1]).toEqual({ headerNote: '附件1-2' });
+    await waitFor(() => expect(mocks.templateUpdate).toHaveBeenCalledTimes(1));
+    expect(mocks.templateUpdate.mock.calls[0]?.[0]).toEqual({
+      type: 'person',
+      headerNote: '附件1-2',
+    });
   }, TIMEOUT_MS);
 
   it('标题通过铅笔进入编辑，保存含 xx 占位的完整标题', async () => {
@@ -280,8 +315,11 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     await user.type(input, 'xx车间评价问卷');
     await user.tab();
 
-    await waitFor(() => expect(mocks.departmentUpdate).toHaveBeenCalledTimes(1));
-    expect(mocks.departmentUpdate.mock.calls[0]?.[1]).toEqual({ title: 'xx车间评价问卷' });
+    await waitFor(() => expect(mocks.templateUpdate).toHaveBeenCalledTimes(1));
+    expect(mocks.templateUpdate.mock.calls[0]?.[0]).toEqual({
+      type: 'person',
+      title: 'xx车间评价问卷',
+    });
   }, TIMEOUT_MS);
 
   it('填写说明通过铅笔编辑，失焦保存 footerNote', async () => {
@@ -296,8 +334,9 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     await user.type(input, '填写说明：每项满分20分。');
     await user.tab();
 
-    await waitFor(() => expect(mocks.departmentUpdate).toHaveBeenCalledTimes(1));
-    expect(mocks.departmentUpdate.mock.calls[0]?.[1]).toEqual({
+    await waitFor(() => expect(mocks.templateUpdate).toHaveBeenCalledTimes(1));
+    expect(mocks.templateUpdate.mock.calls[0]?.[0]).toEqual({
+      type: 'person',
       footerNote: '填写说明：每项满分20分。',
     });
   }, TIMEOUT_MS);
@@ -332,7 +371,7 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
 
     await waitFor(() => expect(mocks.criteriaCreate).toHaveBeenCalledTimes(1));
     expect(mocks.criteriaCreate.mock.calls[0]?.[0]).toMatchObject({
-      departmentId: 'd1',
+      templateType: 'person',
       name: '安全素质',
       minScore: 0,
       maxScore: 100,

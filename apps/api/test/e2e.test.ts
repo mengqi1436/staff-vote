@@ -201,10 +201,10 @@ describe('端到端：职工素质评议完整流程', () => {
     // 故意让两项满分不同（100 与 10）——这正是「原始分不能直接相加」的场景
     const c1 = await admin
       .post('/api/admin/criteria')
-      .send({ departmentId, name: '工作业绩', minScore: 0, maxScore: 100, sortOrder: 0 });
+      .send({ templateType: 'person', name: '工作业绩', minScore: 0, maxScore: 100, sortOrder: 0 });
     const c2 = await admin
       .post('/api/admin/criteria')
-      .send({ departmentId, name: '工作质量', minScore: 0, maxScore: 10, sortOrder: 1 });
+      .send({ templateType: 'person', name: '工作质量', minScore: 0, maxScore: 10, sortOrder: 1 });
     expect(c1.status).toBe(200);
     expect(c2.status).toBe(200);
     criterionScoreId = c1.body.id;
@@ -214,7 +214,7 @@ describe('端到端：职工素质评议完整流程', () => {
   it('4. 拒绝非法项点区间（max <= min）', async () => {
     const res = await admin
       .post('/api/admin/criteria')
-      .send({ departmentId, name: '非法项', minScore: 10, maxScore: 10 });
+      .send({ templateType: 'person', name: '非法项', minScore: 10, maxScore: 10 });
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
   });
@@ -288,6 +288,7 @@ describe('端到端：职工素质评议完整流程', () => {
       id: sessionId,
       name: 'e2e-主场次',
       status: 'voting',
+      scoreScope: 'person',
     });
     // 令牌不得携带码明文
     expect(JSON.stringify(session.body)).not.toContain(generatedCodes[0] as string);
@@ -560,7 +561,7 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '车间主任' });
     const criterionB = await admin
       .post('/api/admin/criteria')
-      .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '安全', minScore: 0, maxScore: 100 });
+      .send({ sessionId: sessionBId, templateType: 'person', name: '安全', minScore: 0, maxScore: 100 });
     expect(colB.status).toBe(200);
     expect(criterionB.status).toBe(200);
 
@@ -657,6 +658,8 @@ describe('端到端：职工素质评议完整流程', () => {
     await prisma.ticketBatch.deleteMany({ where: { ticketTypeId: typeBRow.id } });
     await prisma.employee.deleteMany({ where: { departmentId: { in: deptIds } } });
     await prisma.criterion.deleteMany({ where: { departmentId: { in: deptIds } } });
+    // 0010 起项点在模板层（departmentId 为空），按场次清掉才能删场次（外键 RESTRICT）
+    await prisma.criterion.deleteMany({ where: { sessionId: sessionBId, departmentId: null } });
     await prisma.voteColumn.deleteMany({ where: { departmentId: { in: deptIds } } });
     await prisma.department.deleteMany({ where: { id: { in: deptIds } } });
     await prisma.ticketType.delete({ where: { id: typeBRow.id } });

@@ -67,6 +67,8 @@ function testSession(id: string, name = '测试场次', overrides: Partial<Admin
     orgDepartmentName: null,
     // 缺省为配置完整；要测「开始投票禁用」的用例自行覆盖
     startBlockers: [],
+    // 缺省单表（仅负责人评价）；要测双表流程的用例覆盖为 'both'
+    scoreScope: 'person',
     ...overrides,
   };
 }

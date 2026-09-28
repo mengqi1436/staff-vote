@@ -6,6 +6,7 @@ import { verifyVoteToken, type VoteTokenPayload } from '../lib/token.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import {
   createVoteSession,
+  getVoteProgress,
   getVoteSheet,
   getVoteStatus,
   resolveStatusSession,
@@ -51,7 +52,8 @@ const SubmitSchema = z.object({
   items: z
     .array(
       z.object({
-        voteColumnId: z.string().min(1),
+        // 车间问卷的虚拟「得分」列提交 null；个人问卷为真实被评列 id。
+        voteColumnId: z.union([z.string().min(1), z.null()]),
         criterionId: z.string().min(1),
         // 只收整数：小数、字符串、布尔值一律 400。前端输入框的 step=1 只是提示，不是防线。
         score: z.int(),
@@ -123,4 +125,9 @@ voteRouter.post('/submit', voteAuth, async (req, res) => {
   // "经过某中间件后该字段必然存在"）。
   await submitVote(req.voteTicket!, departmentId, items);
   res.json({ ok: true });
+});
+
+/** 该码的答卷进度：score_scope=both 时一张码要交个人+车间两张，投票页据此引导流程。 */
+voteRouter.get('/progress', voteAuth, async (req, res) => {
+  res.json(await getVoteProgress(req.voteTicket!));
 });

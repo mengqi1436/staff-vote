@@ -79,7 +79,6 @@ vi.mock('../../../lib/api.js', async () => {
 const { ApiError } = await import('../../../lib/api.js');
 const { AdminDepartments } = await import('../Departments.js');
 const { AdminEmployees } = await import('../Employees.js');
-const { AdminCriteria } = await import('../Criteria.js');
 const { AdminSettings } = await import('../Settings.js');
 
 /** 渲染单个页面并注入权限集合。 */
@@ -94,7 +93,7 @@ function renderPage(node: ReactElement, permissions: string[]) {
   );
 }
 
-describe('后台四页写操作权限门控', () => {
+describe('后台三页写操作权限门控', () => {
   // ---------------------------------------------------------------------------
   // 主操作按钮：有权限在，无权限不渲染
   // ---------------------------------------------------------------------------
@@ -122,16 +121,6 @@ describe('后台四页写操作权限门控', () => {
     expect(await screen.findByText('张三')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /新增职工/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /导入 Excel\/CSV/ })).not.toBeInTheDocument();
-  });
-
-  it('项点页：有权限渲染「新增项点」，只读账号不渲染', async () => {
-    const granted = renderPage(<AdminCriteria />, ALL_PERMISSIONS);
-    expect(await screen.findByRole('button', { name: /新增项点/ })).toBeInTheDocument();
-    granted.unmount();
-
-    renderPage(<AdminCriteria />, []);
-    expect(await screen.findByText('政治素质')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /新增项点/ })).not.toBeInTheDocument();
   });
 
   it('设置页：有权限渲染「保存设置」，只读账号不渲染', async () => {
@@ -178,37 +167,12 @@ describe('后台四页写操作权限门控', () => {
     for (const button of removes) expect(button).toBeEnabled();
   });
 
-  it('职工页与项点页：只读账号的行内开关同样保留但禁用', async () => {
-    const employees = renderPage(<AdminEmployees />, []);
+  it('职工页：只读账号的行内开关同样保留但禁用', async () => {
+    renderPage(<AdminEmployees />, []);
     expect(await screen.findByRole('switch', { name: /停用「张三」/ })).toBeDisabled();
-    employees.unmount();
-
-    renderPage(<AdminCriteria />, []);
-    expect(await screen.findByRole('switch', { name: /停用「政治素质」/ })).toBeDisabled();
   });
 
   // ---------------------------------------------------------------------------
   // 后端 403 的 message 必须能在界面读出来
   // ---------------------------------------------------------------------------
-
-  it('项点页：后端 403 的 message 原样显示在页面内提示里', async () => {
-    const message = '当前账号没有「管理评分项点」权限，请联系超级管理员';
-    const { adminApi } = await import('../../../lib/api.js');
-    vi.mocked(adminApi.criteria.create).mockRejectedValueOnce(
-      new ApiError(403, 'PERMISSION_DENIED', message),
-    );
-
-    const user = userEvent.setup();
-    // 权限缓存是旧的（界面以为有权限），真正的拒绝来自后端
-    renderPage(<AdminCriteria />, ALL_PERMISSIONS);
-
-    await user.click(await screen.findByRole('button', { name: /新增项点/ }));
-    await user.type(await screen.findByLabelText(/项点名称/), '德');
-    await user.click(screen.getByRole('button', { name: /保\s*存/ }));
-
-    // 必须落在页面内提示（Alert）里，而不是只弹一条全局提示
-    const alert = (await screen.findByText('操作被拒绝')).closest('.ant-alert');
-    expect(alert).not.toBeNull();
-    expect(alert).toHaveTextContent(message);
-  });
 });

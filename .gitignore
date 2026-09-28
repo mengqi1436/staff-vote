@@ -38,3 +38,6 @@ nul
 
 # ZCode 本地工作区目录
 .zcode/
+
+# 会话规划产物（task_plan / findings / progress 与工作流缓存）
+.planning/

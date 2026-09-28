@@ -232,7 +232,7 @@ describeDb('管理端写端点的权限门控', () => {
   });
 
   it('项点：只读账号写操作 403，有权限账号可写，GET 不受限', async () => {
-    const body = { departmentId, name: `${TAG}项点-只读新建`, minScore: 0, maxScore: 100 };
+    const body = { templateType: 'person', name: `${TAG}项点-只读新建`, minScore: 0, maxScore: 100 };
     expect((await viewer.post('/api/admin/criteria').send(body)).status).toBe(403);
     expect((await viewer.patch(`/api/admin/criteria/${criterionId}`).send({ maxScore: 90 })).status).toBe(
       403,
@@ -247,7 +247,7 @@ describeDb('管理端写端点的权限门控', () => {
 
     const ok = await editor
       .post('/api/admin/criteria')
-      .send({ departmentId, name: `${TAG}项点-编辑新建`, minScore: 0, maxScore: 50 });
+      .send({ templateType: 'person', name: `${TAG}项点-编辑新建`, minScore: 0, maxScore: 50 });
     expect(ok.status).toBe(200);
     expect((await editor.patch(`/api/admin/criteria/${ok.body.id}`).send({ maxScore: 60 })).status).toBe(
       200,
@@ -333,7 +333,7 @@ describeDb('管理端写端点的权限门控', () => {
   it('403 文案取权限目录的中文名，可直接展示给用户', async () => {
     const res = await viewer
       .post('/api/admin/criteria')
-      .send({ departmentId, name: `${TAG}项点-文案`, minScore: 0, maxScore: 10 });
+      .send({ templateType: 'person', name: `${TAG}项点-文案`, minScore: 0, maxScore: 10 });
 
     expect(res.status).toBe(403);
     expect(res.body.error).toMatchObject({

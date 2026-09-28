@@ -12,6 +12,7 @@ import { prisma } from '../db.js';
 import { generateUniqueCodes } from '../lib/code.js';
 import { DEFAULT_SETTINGS, SETTING_KEYS } from '../lib/settings.js';
 import { ApiError } from '../middleware/errorHandler.js';
+import { findTemplate, upsertTemplate } from './questionnaireTemplateStore.js';
 import type { SessionStatus, TicketStatus } from '../generated/prisma/enums.js';
 
 // -----------------------------------------------------------------------------
@@ -45,6 +46,8 @@ export interface VoteSessionDto {
   /** 所属全局部门（字典）。null = 历史场次，无字典来源。 */
   orgDepartmentId: string | null;
   orgDepartmentName: string | null;
+  /** 打分范围：person = 仅个人问卷；both = 个人 + 车间两张问卷都打。 */
+  scoreScope: string;
   createdAt: string;
   /** draft 场次开始投票前的阻塞缺项（中文清单）；非空 = 不能开始。非 draft 恒为空。 */
   startBlockers: string[];
@@ -61,6 +64,7 @@ async function toSessionDto(row: {
   closesAt: Date | null;
   orgDepartmentId: string | null;
   orgDepartment: { name: string } | null;
+  scoreScope: string;
   createdAt: Date;
 }): Promise<VoteSessionDto> {
   const dto: VoteSessionDto = {
@@ -73,6 +77,7 @@ async function toSessionDto(row: {
     closesAt: toIso(row.closesAt),
     orgDepartmentId: row.orgDepartmentId,
     orgDepartmentName: row.orgDepartment?.name ?? null,
+    scoreScope: row.scoreScope,
     createdAt: row.createdAt.toISOString(),
     startBlockers: [],
   };
@@ -188,13 +193,18 @@ export async function createSession(
  */
 export async function updateSession(
   id: string,
-  input: { name?: string; opensAt?: string | null; closesAt?: string | null },
+  input: { name?: string; opensAt?: string | null; closesAt?: string | null; scoreScope?: string },
   operator: string,
 ): Promise<VoteSessionDto> {
   const current = await prisma.voteSession.findUnique({ where: { id } });
   if (!current) throw ApiError.notFound('场次不存在');
 
-  const data: { name?: string; opensAt?: Date | null; closesAt?: Date | null } = {};
+  const data: {
+    name?: string;
+    opensAt?: Date | null;
+    closesAt?: Date | null;
+    scoreScope?: string;
+  } = {};
   if (input.name !== undefined) {
     const name = input.name.trim();
     const existing = await prisma.voteSession.findUnique({ where: { name } });
@@ -208,6 +218,12 @@ export async function updateSession(
   }
   if (input.closesAt !== undefined) {
     data.closesAt = input.closesAt === null ? null : new Date(input.closesAt);
+  }
+  if (input.scoreScope !== undefined) {
+    if (!['person', 'both'].includes(input.scoreScope)) {
+      throw ApiError.badRequest('打分范围只能是「仅个人问卷」或「个人和车间问卷」', 'SCORE_SCOPE_INVALID');
+    }
+    data.scoreScope = input.scoreScope;
   }
 
   const opensAt = data.opensAt !== undefined ? data.opensAt : current.opensAt;
@@ -292,21 +308,33 @@ async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
 
   const departments = await prisma.department.findMany({
     where: { sessionId, enabled: true },
-    select: { id: true, name: true },
+    select: { id: true, name: true, questionnaireType: true },
   });
   if (departments.length === 0) {
     issues.push('尚未配置启用部门：至少需要一个启用部门');
   }
   for (const department of departments) {
-    const [criteriaCount, columnCount] = await Promise.all([
-      prisma.criterion.count({ where: { departmentId: department.id, enabled: true } }),
-      prisma.voteColumn.count({ where: { departmentId: department.id, enabled: true } }),
-    ]);
+    // 0010 起项点按「场次 + 问卷类型」在模板层共用：部门有没有项点，
+    // 取决于它所属类型的模板项点是否已配置且启用。
+    const criteriaCount = await prisma.criterion.count({
+      where: {
+        sessionId,
+        departmentId: null,
+        templateType: department.questionnaireType,
+        enabled: true,
+      },
+    });
     if (criteriaCount === 0) {
       issues.push(`部门「${department.name}」尚未配置启用项点：至少需要一个启用项点`);
     }
-    if (columnCount === 0) {
-      issues.push(`部门「${department.name}」尚未配置启用被评列：至少需要一个启用被评列`);
+    // 被评列只属于个人问卷（车间问卷是单一「得分」列，不需要配置）
+    if (department.questionnaireType === 'person') {
+      const columnCount = await prisma.voteColumn.count({
+        where: { departmentId: department.id, enabled: true },
+      });
+      if (columnCount === 0) {
+        issues.push(`部门「${department.name}」尚未配置启用被评列：至少需要一个启用被评列`);
+      }
     }
   }
 
@@ -359,12 +387,6 @@ export interface DepartmentDto {
   enabled: boolean;
   /** 问卷类型：person = 个人问卷（多列被评职务），workshop = 车间问卷（单列得分） */
   questionnaireType: string;
-  /** 表头左上角的附件号，如「附件1-1」 */
-  headerNote: string;
-  /** 打分表标题 */
-  title: string;
-  /** 表尾填写说明 */
-  footerNote: string;
 }
 
 /** 被评列：打分表的「列」，与职工名单分离（参考表的主任/副书记/得分等）。 */
@@ -392,7 +414,10 @@ export interface EmployeeDto {
 
 export interface CriterionDto {
   id: string;
-  departmentId: string;
+  /** 模板项点为 null；0010 前的存量部门项点指向原部门。 */
+  departmentId: string | null;
+  /** 模板项点的问卷类型（person/workshop）；部门项点为 null。 */
+  templateType: string | null;
   name: string;
   /** 项点描述，显示在打分表项点名称下方 */
   description: string | null;
@@ -400,6 +425,15 @@ export interface CriterionDto {
   maxScore: number;
   sortOrder: number;
   enabled: boolean;
+}
+
+/** 场次级问卷模板（个人 / 车间各一套：附件号 + 标题 + 填写说明）。 */
+export interface QuestionnaireTemplateDto {
+  sessionId: string;
+  type: string;
+  headerNote: string;
+  title: string;
+  footerNote: string;
 }
 
 export interface TicketDto {
@@ -1073,9 +1107,6 @@ export async function listDepartments(sessionId?: string): Promise<DepartmentDto
     sortOrder: row.sortOrder,
     enabled: row.enabled,
     questionnaireType: row.questionnaireType,
-    headerNote: row.headerNote,
-    title: row.title,
-    footerNote: row.footerNote,
   }));
 }
 
@@ -1099,15 +1130,13 @@ export async function createDepartment(
     sortOrder: created.sortOrder,
     enabled: created.enabled,
     questionnaireType: created.questionnaireType,
-    headerNote: created.headerNote,
-    title: created.title,
-    footerNote: created.footerNote,
   };
 }
 
 /**
- * 改部门。除名称/排序/启停外，还包括问卷表头配置（问卷类型、附件号、标题、填写说明）——
- * 参考表的抬头与表尾说明都由这里配置，后台「问卷配置」页用的就是这几个字段。
+ * 改部门（名称/排序/启停/问卷类型）。
+ * 0010 起问卷抬头三件套（附件号/标题/填写说明）迁至场次级模板
+ * （updateQuestionnaireTemplate），部门只保留「用哪套问卷」的类型字段。
  */
 export async function updateDepartment(
   id: string,
@@ -1116,9 +1145,6 @@ export async function updateDepartment(
     sortOrder?: number;
     enabled?: boolean;
     questionnaireType?: string;
-    headerNote?: string;
-    title?: string;
-    footerNote?: string;
   },
   operator: string,
 ): Promise<DepartmentDto> {
@@ -1143,9 +1169,6 @@ export async function updateDepartment(
       sortOrder: patch.sortOrder,
       enabled: patch.enabled,
       questionnaireType: patch.questionnaireType,
-      headerNote: patch.headerNote,
-      title: patch.title,
-      footerNote: patch.footerNote,
     },
   });
   await writeAudit('department.update', { name: updated.name, operator });
@@ -1155,9 +1178,6 @@ export async function updateDepartment(
     sortOrder: updated.sortOrder,
     enabled: updated.enabled,
     questionnaireType: updated.questionnaireType,
-    headerNote: updated.headerNote,
-    title: updated.title,
-    footerNote: updated.footerNote,
   };
 }
 
@@ -1286,19 +1306,37 @@ async function syncOrgDepartmentToDraftSessions(
         name,
         sortOrder,
         questionnaireType: template.questionnaireType,
-        title: template.title,
-        footerNote: template.footerNote,
       },
     });
-    await prisma.criterion.createMany({
-      data: template.criteria.map((item, index) => ({
-        departmentId: created.id,
-        sessionId: session.id,
-        name: item.name,
-        description: item.description,
-        sortOrder: index + 1,
-      })),
+    // 表头三件套真源在场次模板表（0010 起按类型一份，同类型部门共用）。headerNote
+    // 不传：新建行走列默认「附件1-1」，已有行保持管理员改过的值（PATCH 语义）。
+    await upsertTemplate(prisma, session.id, template.questionnaireType, {
+      title: template.title,
+      footerNote: template.footerNote,
     });
+    // 项点同样是场次级（按类型一份）：同一场次同步多个同类型部门时只补缺失项点，避免重复。
+    const existingNames = new Set(
+      (
+        await prisma.criterion.findMany({
+          where: { sessionId: session.id, templateType: template.questionnaireType },
+          select: { name: true },
+        })
+      ).map((row) => row.name),
+    );
+    const missing = template.criteria.filter((item) => !existingNames.has(item.name));
+    if (missing.length > 0) {
+      await prisma.criterion.createMany({
+        data: missing.map((item, index) => ({
+          departmentId: null,
+          sessionId: session.id,
+          templateType: template.questionnaireType,
+          name: item.name,
+          description: item.description,
+          sortOrder: existingNames.size + index + 1,
+        })),
+      });
+    }
+    // person 版式按被评职务列打分，照旧建列；workshop 是单列「得分」版式，无被评列。
     if (template.voteColumns.length > 0) {
       await prisma.voteColumn.createMany({
         data: template.voteColumns.map((columnName, index) => ({
@@ -1653,17 +1691,31 @@ function normalizeDescription(value: string | null | undefined): string | null {
   return text === '' ? null : text;
 }
 
-export async function listCriteria(
-  departmentId?: string,
-  sessionId?: string,
-): Promise<CriterionDto[]> {
+export async function listCriteria(opts: {
+  sessionId?: string;
+  departmentId?: string;
+  /** 模板项点类型过滤（person/workshop）；此时只查 departmentId 为空的模板行。 */
+  templateType?: string;
+}): Promise<CriterionDto[]> {
+  const where: {
+    sessionId?: string;
+    departmentId?: string | null;
+    templateType?: string;
+  } = { sessionId: opts.sessionId };
+  if (opts.templateType !== undefined) {
+    where.departmentId = null;
+    where.templateType = opts.templateType;
+  } else if (opts.departmentId !== undefined) {
+    where.departmentId = opts.departmentId;
+  }
   const rows = await prisma.criterion.findMany({
-    where: { departmentId, sessionId },
+    where,
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
   return rows.map((row) => ({
     id: row.id,
     departmentId: row.departmentId,
+    templateType: row.templateType,
     name: row.name,
     description: row.description,
     minScore: row.minScore,
@@ -1674,9 +1726,9 @@ export async function listCriteria(
 }
 
 export interface CriterionCreateInput {
-  departmentId: string;
-  /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
+  /** 模板项点：场次 + 类型（person/workshop）。 */
   sessionId?: string;
+  templateType?: string;
   name: string;
   description?: string | null;
   minScore: number;
@@ -1684,6 +1736,7 @@ export interface CriterionCreateInput {
   sortOrder?: number;
 }
 
+/** 新增模板项点。0010 起项点只在模板层维护（部门级项点仅为历史评分保留）。 */
 export async function createCriterion(
   input: CriterionCreateInput,
   operator: string,
@@ -1691,28 +1744,39 @@ export async function createCriterion(
   if (input.maxScore <= input.minScore) {
     throw ApiError.badRequest('最高分必须大于最低分', 'CRITERION_RANGE_INVALID');
   }
-
-  const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
-  if (!department) throw ApiError.badRequest('部门不存在');
-  if (input.sessionId !== undefined && input.sessionId !== department.sessionId) {
-    throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
+  if (input.templateType === undefined || !QUESTIONNAIRE_TYPES.includes(input.templateType)) {
+    throw ApiError.badRequest('必须指定问卷模板类型（个人问卷/车间问卷）', 'TEMPLATE_TYPE_INVALID');
   }
+
+  const sessionId = await resolveSessionId(input.sessionId);
+  // 追加到末尾：新项点排在该模板现有项点之后。
+  const last = await prisma.criterion.findFirst({
+    where: { sessionId, departmentId: null, templateType: input.templateType },
+    orderBy: { sortOrder: 'desc' },
+    select: { sortOrder: true },
+  });
 
   const created = await prisma.criterion.create({
     data: {
-      departmentId: input.departmentId,
-      sessionId: department.sessionId,
+      departmentId: null,
+      sessionId,
+      templateType: input.templateType,
       name: input.name.trim(),
       description: normalizeDescription(input.description),
       minScore: input.minScore,
       maxScore: input.maxScore,
-      sortOrder: input.sortOrder ?? 0,
+      sortOrder: input.sortOrder ?? (last?.sortOrder ?? -1) + 1,
     },
   });
-  await writeAudit('criterion.create', { name: created.name, department: department.name, operator });
+  await writeAudit('criterion.create', {
+    name: created.name,
+    templateType: created.templateType,
+    operator,
+  });
   return {
     id: created.id,
     departmentId: created.departmentId,
+    templateType: created.templateType,
     name: created.name,
     description: created.description,
     minScore: created.minScore,
@@ -1760,6 +1824,7 @@ export async function updateCriterion(
   return {
     id: updated.id,
     departmentId: updated.departmentId,
+    templateType: updated.templateType,
     name: updated.name,
     description: updated.description,
     minScore: updated.minScore,
@@ -1775,6 +1840,58 @@ export async function disableCriterion(id: string, operator: string): Promise<vo
   if (!current) throw ApiError.notFound('项点不存在');
   await prisma.criterion.update({ where: { id }, data: { enabled: false } });
   await writeAudit('criterion.disable', { name: current.name, operator });
+}
+
+// -----------------------------------------------------------------------------
+// 场次问卷模板（个人 / 车间各一套抬头配置）
+// -----------------------------------------------------------------------------
+
+/** 读一套模板。行不存在时返回默认值（新场次首访自动以默认文案展示，保存时才落行）。 */
+export async function listQuestionnaireTemplate(
+  sessionId: string,
+  type: string,
+): Promise<QuestionnaireTemplateDto> {
+  if (!QUESTIONNAIRE_TYPES.includes(type)) {
+    throw ApiError.badRequest('问卷模板类型只能是「个人问卷」或「车间问卷」', 'TEMPLATE_TYPE_INVALID');
+  }
+  // 该表的 Prisma 编译有 bug（P2022），读写一律走原生 SQL 封装 questionnaireTemplateStore。
+  const row = await findTemplate(prisma, sessionId, type);
+  return {
+    sessionId,
+    type,
+    headerNote: row?.headerNote ?? '附件1-1',
+    title: row?.title ?? '',
+    footerNote: row?.footerNote ?? '',
+  };
+}
+
+/** 改一套模板（附件号 / 标题 / 填写说明，PATCH 语义：缺省不改）。 */
+export async function updateQuestionnaireTemplate(
+  sessionId: string,
+  type: string,
+  patch: { headerNote?: string; title?: string; footerNote?: string },
+  operator: string,
+): Promise<QuestionnaireTemplateDto> {
+  if (!QUESTIONNAIRE_TYPES.includes(type)) {
+    throw ApiError.badRequest('问卷模板类型只能是「个人问卷」或「车间问卷」', 'TEMPLATE_TYPE_INVALID');
+  }
+  await resolveSessionId(sessionId);
+  const data: { headerNote?: string; title?: string; footerNote?: string } = {};
+  if (patch.headerNote !== undefined) data.headerNote = patch.headerNote.trim();
+  if (patch.title !== undefined) data.title = patch.title.trim();
+  if (patch.footerNote !== undefined) data.footerNote = patch.footerNote.trim();
+
+  // 该表的 Prisma 编译有 bug（P2022），读写一律走原生 SQL 封装 questionnaireTemplateStore。
+  // PATCH 语义（缺省不改）由 upsertTemplate 内部保持：先读现行值合并，再 UPSERT 落库。
+  const row = await upsertTemplate(prisma, sessionId, type, data);
+  await writeAudit('questionnaire_template.update', { type, operator });
+  return {
+    sessionId: row.sessionId,
+    type: row.type,
+    headerNote: row.headerNote,
+    title: row.title,
+    footerNote: row.footerNote,
+  };
 }
 
 // -----------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { VOTE_TOKEN_KEY } from '../../lib/api.js';
 import type { TicketTypeDto, VoteColumnBrief, VoteCriterionDto } from '../../lib/api.js';
@@ -441,6 +442,135 @@ describe('打分表页的错误汇总与失败保留', () => {
 
     expect(await screen.findByText(/一码一票不能重复提交/)).toBeInTheDocument();
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBeNull();
+  });
+});
+
+describe('双表流程（scoreScope=both）', () => {
+  /** both 场次的会话缓存：绑定部门（负责人评价）+ 一个车间，随机码两张表都要交。 */
+  function saveBothSession() {
+    sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
+    saveVoteSessionInfo({
+      ticketType: TICKET_TYPE,
+      departments: [
+        { id: 'd1', name: '生产部', questionnaireType: 'person' },
+        { id: 'd2', name: '检修车间', questionnaireType: 'workshop' },
+      ],
+      session: { id: 's1', name: '评议场次', status: 'voting', scoreScope: 'both' },
+    });
+  }
+
+  /** 车间问卷的打分表响应：单列「得分」，无被评人。 */
+  const workshopSheet = sheetBody({
+    department: { id: 'd2', name: '检修车间' },
+    questionnaireType: 'workshop',
+    headerNote: '附件1-2',
+    title: 'xx车间评价问卷',
+    voteColumns: [{ id: 'vs', name: '得分', employeeName: null }],
+  });
+
+  /** both 缓存有两个部门：先在部门下拉里选中一个，打分表才会出现。 */
+  async function pickDepartment(name: string) {
+    // antd Select 靠 mousedown 开浮层（fireEvent.click 不触发），走 userEvent 完整序列；
+    // antd 6 还有隐藏的 aria 镜像 option，必须点浮层里带 title 的可见项
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('combobox', { name: '请选择您要评议的部门' }));
+    await user.click(await screen.findByTitle(name));
+  }
+
+  function mockBothFlow(submitReply: () => { status: number; body: unknown }) {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/vote/sheet?departmentId=d1')) {
+        return Promise.resolve(reply(200, sheetBody()));
+      }
+      if (url.includes('/api/vote/sheet?departmentId=d2')) {
+        return Promise.resolve(reply(200, workshopSheet));
+      }
+      if (url.endsWith('/api/vote/submit')) {
+        return Promise.resolve(reply(submitReply().status, submitReply().body));
+      }
+      if (url.endsWith('/api/vote/progress')) {
+        return Promise.resolve(
+          reply(200, {
+            scoreScope: 'both',
+            required: ['person', 'workshop'],
+            submitted: ['person'],
+            remaining: ['workshop'],
+          }),
+        );
+      }
+      return Promise.resolve(reply(404, { error: { code: 'NOT_FOUND', message: '未预期的请求' } }));
+    });
+  }
+
+  it('交完负责人评价还差车间评价：留在打分页自动切到车间，提示进度且不清令牌', async () => {
+    saveBothSession();
+    mockBothFlow(() => ({ status: 200, body: { ok: true } }));
+    renderSheet('/vote/sheet');
+    await pickDepartment('生产部');
+
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
+    fireEvent.change(cell, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
+
+    // 进度提示出现，且自动切到剩余类型的车间表
+    expect(await screen.findByText('还差 1 张评价表')).toBeInTheDocument();
+    expect(screen.getByText(/已提交 负责人评价，还需完成「车间评价」/)).toBeInTheDocument();
+    expect(await screen.findByText('xx车间评价问卷')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/vote/sheet?departmentId=d2'),
+      expect.anything(),
+    );
+    // 随机码没核销（还差一张），不能进成功页
+    expect(screen.queryByText('已进入成功页')).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBe('tok-1');
+  });
+
+  it('该类型已提交过（409 SHEET_TYPE_SUBMITTED）时凭据仍有效，对齐进度切到剩余类型', async () => {
+    saveBothSession();
+    mockBothFlow(() => ({
+      status: 409,
+      body: { error: { code: 'SHEET_TYPE_SUBMITTED', message: '该类型评价表已提交' } },
+    }));
+    renderSheet('/vote/sheet');
+    await pickDepartment('生产部');
+
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
+    fireEvent.change(cell, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
+
+    // 不当「一码一票」终态处理：切到还差的车间表继续
+    expect(await screen.findByText('还差 1 张评价表')).toBeInTheDocument();
+    expect(await screen.findByText('xx车间评价问卷')).toBeInTheDocument();
+    expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBe('tok-1');
+    expect(screen.queryByText(/一码一票不能重复提交/)).not.toBeInTheDocument();
+  });
+
+  it('两张表齐交（remaining 为空）时进入成功页并清掉令牌', async () => {
+    saveBothSession();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/vote/sheet')) return Promise.resolve(reply(200, sheetBody()));
+      if (url.endsWith('/api/vote/submit')) return Promise.resolve(reply(200, { ok: true }));
+      if (url.endsWith('/api/vote/progress')) {
+        return Promise.resolve(
+          reply(200, {
+            scoreScope: 'both',
+            required: ['person', 'workshop'],
+            submitted: ['person', 'workshop'],
+            remaining: [],
+          }),
+        );
+      }
+      return Promise.resolve(reply(404, { error: { code: 'NOT_FOUND', message: '未预期的请求' } }));
+    });
+    renderSheet('/vote/sheet');
+    await pickDepartment('生产部');
+
+    const cell = await screen.findByRole('spinbutton', { name: /政治素质/ });
+    fireEvent.change(cell, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: /提交评分/ }));
+
+    expect(await screen.findByText('已进入成功页')).toBeInTheDocument();
     expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBeNull();
   });
 });

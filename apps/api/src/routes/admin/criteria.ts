@@ -1,5 +1,9 @@
 /**
- * 素质项点（打分表的列）。
+ * 素质项点（打分表的行）。
+ *
+ * 0010 起项点只在**模板层**维护：GET ?templateType=person|workshop 查场次模板项点，
+ * POST 创建模板项点（sessionId + templateType）。部门级项点（0010 前的存量行）
+ * 只为历史评分保留，本路由不再提供部门项点的创建入口。
  *
  * 硬要求：minScore / maxScore 必须为整数，且 maxScore > minScore —— 否则该项
  * 没有打分空间，计分归一化也会退化成除零。PATCH 时按「合并后的区间」校验，
@@ -23,11 +27,13 @@ import { IdParamSchema, operatorOf } from './helpers.js';
 const ListQuerySchema = z.object({
   departmentId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
+  /** 模板项点类型过滤：查该场次该类型的模板项点（departmentId 为空的行）。 */
+  templateType: z.enum(['person', 'workshop']).optional(),
 });
 
 const CreateSchema = z.object({
-  departmentId: z.string().min(1, '必须指定部门'),
   sessionId: z.string().min(1).optional(),
+  templateType: z.enum(['person', 'workshop']),
   name: z.string().trim().min(1, '项点名称不能为空').max(50),
   // 项点描述即参考表里项点名称下方那段长文字；留空表示没有描述
   description: z.string().trim().max(1000).nullable().optional(),
@@ -48,8 +54,14 @@ const PatchSchema = z.object({
 export const criteriaRouter: Router = Router();
 
 criteriaRouter.get('/', async (req, res) => {
-  const { departmentId, sessionId } = ListQuerySchema.parse(req.query);
-  res.json(await listCriteria(departmentId, await resolveSessionId(sessionId)));
+  const { departmentId, sessionId, templateType } = ListQuerySchema.parse(req.query);
+  res.json(
+    await listCriteria({
+      departmentId,
+      sessionId: await resolveSessionId(sessionId),
+      templateType,
+    }),
+  );
 });
 
 criteriaRouter.post('/', requirePermission('criteria.write'), async (req, res) => {

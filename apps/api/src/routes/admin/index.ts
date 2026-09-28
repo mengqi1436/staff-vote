@@ -5,6 +5,7 @@ import { criteriaRouter } from './criteria.js';
 import { departmentsRouter } from './departments.js';
 import { employeesRouter } from './employees.js';
 import { orgDepartmentsRouter } from './orgDepartments.js';
+import { questionnaireTemplatesRouter } from './questionnaireTemplates.js';
 import { rbacRouter } from './rbac.js';
 import { sessionsRouter } from './sessions.js';
 import { settingsRouter } from './settings.js';
@@ -41,13 +42,16 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   /org-departments   GET POST PATCH DELETE   全局部门字典；被场次引用时删除 409
  *                         （写需 departments.write，读=登录即可）
  *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false）；
- *                         PATCH 同时负责问卷表头配置（questionnaireType / headerNote /
- *                         title / footerNote）（写需 departments.write）
+ *                         PATCH 负责名称/排序/问卷类型（questionnaireType）
+ *                         （写需 departments.write）
+ *   /questionnaire-templates GET PATCH  场次级问卷模板（个人/车间各一套抬头配置，
+ *                         附件号+标题+填写说明；写需 departments.write）
  *   /vote-columns      GET POST PATCH DELETE   被评列：打分表的列，与职工名单分离
  *                         （写需 criteria.write，与项点同属问卷结构配置）
  *   /employees         GET POST PATCH DELETE   （写需 employees.write）
  *   /employees/import  POST  multipart xlsx/csv （employees.write）
- *   /criteria          GET POST PATCH DELETE   校验 max > min；含项点描述（criteria.write）
+ *   /criteria          GET POST PATCH DELETE   模板项点（?templateType= 过滤；创建带
+ *                         templateType）；校验 max > min；含项点描述（criteria.write）
  *   /settings          GET PUT                 系统标题（settings.write）；投票开放窗口按场次配置
  *   /stats/overview    GET  各票种发放/已用/剩余 + 各部门提交数（后台 5 秒轮询）
  *   /results           GET ?departmentId=      排名与明细
@@ -71,6 +75,7 @@ adminRouter.use('/tickets', ticketsRouter);
 adminRouter.use('/ticket-batches', ticketBatchesRouter);
 adminRouter.use('/org-departments', orgDepartmentsRouter);
 adminRouter.use('/departments', departmentsRouter);
+adminRouter.use('/questionnaire-templates', questionnaireTemplatesRouter);
 adminRouter.use('/vote-columns', voteColumnsRouter);
 adminRouter.use('/employees', employeesRouter);
 adminRouter.use('/criteria', criteriaRouter);

@@ -261,9 +261,12 @@ describe('场次管理页', () => {
     expect(values.closesAt).toBeNull();
     expect(values.opensAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
 
-    // 创建成功进入第 2 步（问卷网格），场次列表同步刷新
+    // 创建成功进入第 2 步（问卷网格），场次列表同步刷新；
+    // 问卷网格自身也会拉一次场次（scoreScope），所以是 ≥2 而非精确次数
     expect(await screen.findByText(/下一步：票别分配/)).toBeInTheDocument();
-    await waitFor(() => expect(vi.mocked(adminApi.sessions.list)).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(vi.mocked(adminApi.sessions.list).mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
   }, 20_000);
 
   it('新建场次向导第 3 步：权重合计实时校验，达 100 后提交 ticketPlan 并显示发码数', async () => {

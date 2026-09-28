@@ -177,6 +177,12 @@ export function QuestionnaireGrid({
   }, [departments.data, departmentId, selectDepartment]);
 
   // 切换部门时重新拉取部门列表：抬头（标题/说明/类型）来自列表缓存，
+  const current: DepartmentAdminDto | null =
+    departments.data?.find((item) => item.id === departmentId) ?? null;
+  const isWorkshop = current?.questionnaireType === 'workshop';
+  /** 项点与表头三件套都是场次级模板：按当前部门的问卷类型取（0010 模板层）。 */
+  const templateType = current?.questionnaireType;
+
   // 部门配置可能已在别处（其他页面、接口调用）被修改，切换时刷新以回显最新值；
   // 同时收起编辑态，避免上一个部门的编辑草稿 blur 时误写入新部门。
   const lastLoadedDepartmentId = useRef('');
@@ -200,12 +206,36 @@ export function QuestionnaireGrid({
 
   const loadCriteria = useCallback(
     () =>
-      departmentId
-        ? adminApi.criteria.list(departmentId, sessionId)
+      templateType
+        ? adminApi.criteria.list(templateType, sessionId)
         : Promise.resolve<CriterionDto[]>([]),
-    [departmentId, sessionId],
+    [templateType, sessionId],
   );
   const criteria = usePolling(loadCriteria, 0);
+
+  /** 场次问卷模板表头（附件号/标题/填写说明）：按问卷类型各存一份 */
+  const loadTemplateHeader = useCallback(
+    () =>
+      templateType
+        ? adminApi.questionnaireTemplates.get(templateType, sessionId)
+        : Promise.resolve(null),
+    [templateType, sessionId],
+  );
+  const templateHeader = usePolling(loadTemplateHeader, 0);
+  const header = templateHeader.data;
+
+  /** 场次打分范围（scoreScope）：both 时同一张码要交负责人 + 车间两张表 */
+  const loadSessionState = useCallback(
+    () =>
+      sessionId
+        ? adminApi.sessions
+            .list()
+            .then((res) => res.sessions.find((item) => item.id === sessionId) ?? null)
+        : Promise.resolve(null),
+    [sessionId],
+  );
+  const sessionState = usePolling(loadSessionState, 0);
+  const scoreScope = sessionState.data?.scoreScope ?? 'person';
 
   // 职工名单：被评列第二行「职务与姓名」里选人用的候选池
   const loadEmployees = useCallback(
@@ -221,6 +251,8 @@ export function QuestionnaireGrid({
   const { can } = useAuth();
   const canWriteDepartment = can('departments.write');
   const canWriteColumn = can('criteria.write');
+  /** 打分范围是场次级配置，权限与场次编辑一致。 */
+  const canWriteSession = can('settings.write');
 
   const [denied, setDenied] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -232,10 +264,6 @@ export function QuestionnaireGrid({
   /** 新增被评列草稿的重置序号：仅创建成功后递增，重挂载输入框清空草稿。 */
   const [columnDraftSeq, setColumnDraftSeq] = useState(0);
 
-  const current: DepartmentAdminDto | null =
-    departments.data?.find((item) => item.id === departmentId) ?? null;
-  const isWorkshop = current?.questionnaireType === 'workshop';
-
   const handleFailure = (caught: unknown, fallback = '操作失败，请重试'): void => {
     if (caught instanceof ApiError && caught.status === 403) {
       setDenied(caught.message);
@@ -244,44 +272,72 @@ export function QuestionnaireGrid({
     notify.error(describeError(caught, fallback));
   };
 
-  /** 抬头配置统一走部门 PATCH；成功后刷新部门数据让表格回显最新值。 */
+  /**
+   * 抬头配置：问卷类型归类走部门 PATCH（即时切换问卷版式）；
+   * 表头三件套（附件号/标题/填写说明）走场次模板——同一场次内
+   * 同类型部门共享一份，改一处全体生效。
+   */
   const saveHeader = async (patch: {
     questionnaireType?: string;
     headerNote?: string;
     title?: string;
     footerNote?: string;
   }): Promise<void> => {
-    if (!departmentId) return;
+    if (!departmentId || !current) return;
     try {
-      await adminApi.departments.update(departmentId, patch);
-      departments.refresh();
+      if (patch.questionnaireType !== undefined) {
+        await adminApi.departments.update(departmentId, {
+          questionnaireType: patch.questionnaireType,
+        });
+        departments.refresh();
+        return;
+      }
+      await adminApi.questionnaireTemplates.update(
+        { type: current.questionnaireType, ...patch },
+        sessionId,
+      );
+      templateHeader.refresh();
+    } catch (caught) {
+      handleFailure(caught, '保存失败，请重试');
+    }
+  };
+
+  /** 打分范围（场次级，settings.write）：both 双表齐交才核销。 */
+  const saveScoreScope = async (scope: 'person' | 'both'): Promise<void> => {
+    if (!sessionId) return;
+    try {
+      await adminApi.sessions.update(sessionId, { scoreScope: scope });
+      sessionState.refresh();
+      notify.success(
+        scope === 'both' ? '已开启双表打分：负责人 + 车间评价' : '已切回仅负责人评价',
+      );
     } catch (caught) {
       handleFailure(caught, '保存失败，请重试');
     }
   };
 
   const startTitleEdit = (): void => {
-    if (!current || !canWriteDepartment) return;
-    setTitleDraft(current.title);
+    if (!header || !canWriteDepartment) return;
+    setTitleDraft(header.title);
     setEditingTitle(true);
   };
 
   const commitTitle = (): void => {
     setEditingTitle(false);
-    if (current && titleDraft.trim() !== '' && titleDraft !== current.title) {
+    if (header && titleDraft.trim() !== '' && titleDraft !== header.title) {
       void saveHeader({ title: titleDraft });
     }
   };
 
   const startFooterEdit = (): void => {
-    if (!current || !canWriteDepartment) return;
-    setFooterDraft(current.footerNote);
+    if (!header || !canWriteDepartment) return;
+    setFooterDraft(header.footerNote);
     setEditingFooter(true);
   };
 
   const commitFooter = (): void => {
     setEditingFooter(false);
-    if (current && footerDraft !== current.footerNote) {
+    if (header && footerDraft !== header.footerNote) {
       void saveHeader({ footerNote: footerDraft });
     }
   };
@@ -352,11 +408,11 @@ export function QuestionnaireGrid({
   const commitDraftCriterion = async (name: string): Promise<void> => {
     setCriterionDraft(false);
     const trimmed = name.trim();
-    if (!trimmed || !departmentId) return;
+    if (!trimmed || !templateType) return;
     try {
       await adminApi.criteria.create(
         {
-          departmentId,
+          templateType,
           name: trimmed,
           description: null,
           minScore: 0,
@@ -407,7 +463,11 @@ export function QuestionnaireGrid({
   const enabledCriteria = (criteria.data ?? []).filter((item) => item.enabled);
   // 表尾空列头（内联新增被评列）：只有可写时出现
   const canAddColumn = canWriteColumn && Boolean(current);
-  const columnCount = 2 + voteColumns.length + (canAddColumn ? 1 : 0);
+  // 车间问卷固定三列（附件8 sheet2：序号 | 项点 | 得分，无被评人列）；
+  // 个人问卷列数 = 序号 + 项点 + 被评列 + 表尾新增列。
+  const columnCount = isWorkshop
+    ? 3
+    : 2 + voteColumns.length + (canAddColumn ? 1 : 0);
   const departmentOptions = (departments.data ?? []).map((item) => ({
     value: item.id,
     label: item.enabled ? item.name : `${item.name}（已停用）`,
@@ -418,7 +478,7 @@ export function QuestionnaireGrid({
    * 其余段原样展示。标题为空或不含占位符时，下拉退回到标题行末尾，
    * 保证任何时候都能通过它切换部门。
    */
-  const titleSegments = (current?.title ?? '').split(/(xx|XX)/);
+  const titleSegments = (header?.title ?? '').split(/(xx|XX)/);
   const hasDeptSlot = titleSegments.some((segment) => segment === 'xx' || segment === 'XX');
 
   return (
@@ -446,26 +506,47 @@ export function QuestionnaireGrid({
           marginBottom: 12,
         }}
       >
-        <Segmented
-          aria-label="问卷类型"
-          value={current?.questionnaireType ?? 'person'}
-          disabled={!current || !canWriteDepartment}
-          options={[
-            { value: 'person', label: '个人问卷' },
-            { value: 'workshop', label: '车间问卷' },
-          ]}
-          onChange={(value) => void saveHeader({ questionnaireType: String(value) })}
-        />
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+          <Tooltip title="打分范围：both 时同一张码要交「负责人评价」与「车间评价」两张表，齐交才核销随机码">
+            <Segmented
+              aria-label="打分范围"
+              value={scoreScope}
+              disabled={!sessionId || !canWriteSession}
+              options={[
+                { value: 'person', label: '仅负责人评价' },
+                { value: 'both', label: '负责人 + 车间评价' },
+              ]}
+              onChange={(value) => void saveScoreScope(value === 'both' ? 'both' : 'person')}
+            />
+          </Tooltip>
+          <Segmented
+            aria-label="问卷类型"
+            value={current?.questionnaireType ?? 'person'}
+            disabled={!current || !canWriteDepartment}
+            options={[
+              { value: 'person', label: '个人问卷' },
+              { value: 'workshop', label: '车间问卷' },
+            ]}
+            onChange={(value) => void saveHeader({ questionnaireType: String(value) })}
+          />
+        </div>
         <Button
           icon={<ReloadOutlined />}
           loading={
-            departments.loading || columns.loading || criteria.loading || employees.loading
+            departments.loading ||
+            columns.loading ||
+            criteria.loading ||
+            employees.loading ||
+            templateHeader.loading ||
+            sessionState.loading
           }
           onClick={() => {
             departments.refresh();
             columns.refresh();
             criteria.refresh();
             employees.refresh();
+            templateHeader.refresh();
+            sessionState.refresh();
           }}
         >
           刷新
@@ -497,7 +578,7 @@ export function QuestionnaireGrid({
                 <td colSpan={columnCount}>
                   <InlineInput
                     ariaLabel="附件号"
-                    value={current.headerNote}
+                    value={header?.headerNote ?? ''}
                     disabled={!canWriteDepartment}
                     className="cell-inline-input"
                     placeholder="点击填写附件号，如：附件1-1"
@@ -600,51 +681,58 @@ export function QuestionnaireGrid({
                     <span className="diag-criterion">评价项点</span>
                   </th>
                 )}
-                {voteColumns.map((column) => (
-                  <th key={column.id} className="cell-col-head">
-                    <InlineInput
-                      ariaLabel={`被评列：${column.name}`}
-                      value={column.name}
-                      disabled={!canWriteColumn}
-                      className="col-name-input"
-                      onCommit={(next) => void saveColumnName(column, next)}
-                    />
-                    {canWriteColumn ? (
-                      <Popconfirm
-                        title={`删除「${column.name}」？`}
-                        description="删除即停用：该列不再出现在打分表，历史评分保留。"
-                        okText="删除"
-                        cancelText="取消"
-                        okButtonProps={{ danger: true }}
-                        onConfirm={() => void removeColumn(column)}
-                      >
-                        <Button
-                          type="text"
-                          size="small"
-                          danger
-                          aria-label={`删除「${column.name}」`}
-                          className="col-remove"
-                        >
-                          ×
-                        </Button>
-                      </Popconfirm>
+                {isWorkshop ? (
+                  // 附件8 sheet2：车间问卷表头是「序号 | 项点 | 得分」，无被评人列
+                  <th className="cell-col-head">得分</th>
+                ) : (
+                  <>
+                    {voteColumns.map((column) => (
+                      <th key={column.id} className="cell-col-head">
+                        <InlineInput
+                          ariaLabel={`被评列：${column.name}`}
+                          value={column.name}
+                          disabled={!canWriteColumn}
+                          className="col-name-input"
+                          onCommit={(next) => void saveColumnName(column, next)}
+                        />
+                        {canWriteColumn ? (
+                          <Popconfirm
+                            title={`删除「${column.name}」？`}
+                            description="删除即停用：该列不再出现在打分表，历史评分保留。"
+                            okText="删除"
+                            cancelText="取消"
+                            okButtonProps={{ danger: true }}
+                            onConfirm={() => void removeColumn(column)}
+                          >
+                            <Button
+                              type="text"
+                              size="small"
+                              danger
+                              aria-label={`删除「${column.name}」`}
+                              className="col-remove"
+                            >
+                              ×
+                            </Button>
+                          </Popconfirm>
+                        ) : null}
+                      </th>
+                    ))}
+                    {canAddColumn ? (
+                      <th className="cell-col-head">
+                        {/* 表尾空列头：输入列名失焦即创建（契约：新增被评列不再跳页/弹窗）。
+                            key 绑定重置序号：创建成功后重挂载清空草稿，失败保留便于改错重试。 */}
+                        <InlineInput
+                          key={columnDraftSeq}
+                          ariaLabel="新增被评列"
+                          value=""
+                          className="col-name-input"
+                          placeholder="＋ 新增列"
+                          onCommit={(next) => void commitNewColumn(next)}
+                        />
+                      </th>
                     ) : null}
-                  </th>
-                ))}
-                {canAddColumn ? (
-                  <th className="cell-col-head">
-                    {/* 表尾空列头：输入列名失焦即创建（契约：新增被评列不再跳页/弹窗）。
-                        key 绑定重置序号：创建成功后重挂载清空草稿，失败保留便于改错重试。 */}
-                    <InlineInput
-                      key={columnDraftSeq}
-                      ariaLabel="新增被评列"
-                      value=""
-                      className="col-name-input"
-                      placeholder="＋ 新增列"
-                      onCommit={(next) => void commitNewColumn(next)}
-                    />
-                  </th>
-                ) : null}
+                  </>
+                )}
               </tr>
               {isWorkshop
                 ? null
@@ -774,10 +862,17 @@ export function QuestionnaireGrid({
                       </span>
                     ) : null}
                   </th>
-                  {voteColumns.map((column) => (
-                    <td key={column.id} aria-hidden="true" />
-                  ))}
-                  {canAddColumn ? <td aria-hidden="true" /> : null}
+                  {isWorkshop ? (
+                    // 附件8 sheet2：车间问卷每行只剩「得分」空格，无被评人列
+                    <td aria-hidden="true" />
+                  ) : (
+                    <>
+                      {voteColumns.map((column) => (
+                        <td key={column.id} aria-hidden="true" />
+                      ))}
+                      {canAddColumn ? <td aria-hidden="true" /> : null}
+                    </>
+                  )}
                 </tr>
               ))}
 
@@ -798,10 +893,17 @@ export function QuestionnaireGrid({
                       <span aria-hidden="true">：</span>
                     </div>
                   </th>
-                  {voteColumns.map((column) => (
-                    <td key={column.id} aria-hidden="true" />
-                  ))}
-                  {canAddColumn ? <td aria-hidden="true" /> : null}
+                  {isWorkshop ? (
+                    // 附件8 sheet2：车间问卷每行只剩「得分」空格，无被评人列
+                    <td aria-hidden="true" />
+                  ) : (
+                    <>
+                      {voteColumns.map((column) => (
+                        <td key={column.id} aria-hidden="true" />
+                      ))}
+                      {canAddColumn ? <td aria-hidden="true" /> : null}
+                    </>
+                  )}
                 </tr>
               ) : null}
 
@@ -842,10 +944,10 @@ export function QuestionnaireGrid({
                     />
                   ) : (
                     <span>
-                      {current.footerNote === '' ? (
+                      {(header?.footerNote ?? '') === '' ? (
                         <span className="sheet-placeholder">点击编辑填写说明</span>
                       ) : (
-                        renderFooterNote(current.footerNote)
+                        renderFooterNote(header?.footerNote ?? '')
                       )}
                       {canWriteDepartment ? (
                         <Tooltip title="编辑填写说明">

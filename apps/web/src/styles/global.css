@@ -252,8 +252,9 @@ body {
   border-collapse: collapse;
   table-layout: fixed;
   /* MDN：fixed 布局必须显式指定宽度，否则退回 auto 算法。
-     width:100% 让表格填满页面；列宽全部由 colgroup 决定。 */
-  width: 100%;
+     max-content = 列宽总和：列宽与附件8 逐列等宽（绝对 px），
+     容器放不下时由 .sheet-wrap 横向滚动，放得下时右侧留白（同 Excel 打开效果）。 */
+  width: max-content;
   background: #fff;
   color: #000;
   font-family: '宋体', SimSun, serif;
@@ -270,17 +271,17 @@ body {
 }
 
 /*
- * 列宽按附件8 比例：序号列固定窄宽（4.88 / 5.8 字符 → px）；
- * 被评列按原表占比用百分比（个人 17.5/121.38 ≈ 14.42%，车间 13.8/144.9 ≈ 9.52%）；
- * 项点列不设宽——MDN fixed 算法中未定宽的列吸收全部剩余空间，
- * 恰好落在原表 46.5 字符的占比附近（4 个被评列时约 40%），页面任何宽度下都铺满。
- * 被评列多到超过容器宽时，fixed 表格按列宽和撑开，由 .sheet-wrap 横向滚动。
+ * 列宽逐列对齐附件8（xlsx 字符宽 → px，1 字符 ≈ 7px + 5px 边距）：
+ *   个人问卷：序号 4.88 → 39px；项点 46.52 → 331px；被评列 17.5 → 127.5px
+ *   车间问卷：序号 5.8 → 46px；项点 125.31 → 882px；得分 13.8 → 102px
+ * 绝对列宽保证任何视口下每列与 Excel 完全一致。
  */
 .sheet-excel.is-person col.col-no { width: 39px; }
-.sheet-excel.is-person col.col-score { width: 14.42%; }
-/* 车间问卷：序号 5.8 字符、得分列 13.8 字符（项点列同样吸收剩余） */
+.sheet-excel.is-person col.col-criterion { width: 331px; }
+.sheet-excel.is-person col.col-score { width: 127.5px; }
 .sheet-excel.is-workshop col.col-no { width: 46px; }
-.sheet-excel.is-workshop col.col-score { width: 9.52%; }
+.sheet-excel.is-workshop col.col-criterion { width: 882px; }
+.sheet-excel.is-workshop col.col-score { width: 102px; }
 
 /* 抬头与表尾行：无框线（原表这几行 borderId=0） */
 .sheet-excel .row-caption > td,

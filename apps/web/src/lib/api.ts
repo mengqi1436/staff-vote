@@ -162,6 +162,8 @@ export interface AdminSessionDto {
   orgDepartmentName: string | null;
   /** draft 场次开始投票前的阻塞缺项；非空 = 配置未完成，开始按钮应禁用。非 draft 恒为空。 */
   startBlockers: string[];
+  /** 打分范围：person = 仅负责人评价；both = 负责人评价 + 车间评价两张表，齐交才核销 */
+  scoreScope: 'person' | 'both';
 }
 
 /**
@@ -204,6 +206,8 @@ function sessionIdQuery(sessionId?: string | null): string {
 export interface DepartmentBrief {
   id: string;
   name: string;
+  /** 问卷类型：both 场次的部门列表会带，用于投票端区分「负责人评价/车间评价」；缺省未知 */
+  questionnaireType?: string;
 }
 
 /** 后台部门视图：除基础字段外还带问卷表头配置（参考表的抬头与表尾说明）。 */
@@ -212,9 +216,6 @@ export interface DepartmentAdminDto extends DepartmentBrief {
   enabled: boolean;
   /** person = 个人问卷（多列被评职务），workshop = 车间问卷（单列得分） */
   questionnaireType: string;
-  headerNote: string;
-  title: string;
-  footerNote: string;
 }
 
 export interface TicketTypeDto {
@@ -243,11 +244,32 @@ export interface VoteSessionResult {
   ticketType: VoteTicketTypeDto;
   departments: DepartmentBrief[];
   /** 所在场次；旧后端不返回该字段，恒为 undefined，调用方必须容错 */
-  session?: { id: string; name: string; status: string };
+  session?: {
+    id: string;
+    name: string;
+    status: string;
+    /** person = 仅负责人评价一张表；both = 负责人 + 车间两张表齐交才核销（旧后端缺省） */
+    scoreScope?: 'person' | 'both';
+  };
+}
+
+/** 打分进度（GET /vote/progress）：both 场次判断还差哪类表用。 */
+export interface VoteProgressResult {
+  scoreScope: 'person' | 'both';
+  /** 必答的问卷类型（both = ['person','workshop']；单表 = [绑定部门类型]） */
+  required: string[];
+  /** 已提交的问卷类型 */
+  submitted: string[];
+  /** 还差的（required 减 submitted） */
+  remaining: string[];
 }
 
 export interface CriterionDto {
   id: string;
+  /** 模板项点为 null；0010 前的存量部门项点指向原部门。 */
+  departmentId: string | null;
+  /** 模板项点的问卷类型（person/workshop）；部门项点为 null。 */
+  templateType: string | null;
   name: string;
   /** 项点描述，显示在打分表项点名称下方（参考表里的那段长文字） */
   description: string | null;
@@ -255,6 +277,15 @@ export interface CriterionDto {
   maxScore: number;
   sortOrder: number;
   enabled: boolean;
+}
+
+/** 场次问卷模板表头：同一场次内按问卷类型各存一份（附件8 的附件号/标题/填写说明）。 */
+export interface QuestionnaireTemplateDto {
+  sessionId: string;
+  type: string;
+  headerNote: string;
+  title: string;
+  footerNote: string;
 }
 
 /** 被评列：打分表的「列」，与职工名单分离（主任、党支部书记、得分…）。 */
@@ -475,6 +506,9 @@ export const voteApi = {
 
   submit: (payload: SubmitPayload, token: string) =>
     request<{ ok: true }>('/vote/submit', { method: 'POST', body: payload, token }),
+
+  /** 打分进度：both 场次提交一张表后查询还差哪类表，齐交才核销。 */
+  progress: (token: string) => request<VoteProgressResult>('/vote/progress', { token }),
 };
 
 // -----------------------------------------------------------------------------
@@ -546,14 +580,20 @@ export const adminApi = {
       closesAt?: string | null;
     }) => request<{ session: AdminSessionDto }>('/admin/sessions', { method: 'POST', body: values }),
     /**
-     * 更新场次名称与开放窗口。
+     * 更新场次名称、开放窗口与打分范围。
      *
      * opensAt / closesAt 传 ISO 字符串或 null：null = 清空该侧限制，
      * 缺省 = 不修改。两者均非空时后端校验 opensAt < closesAt，违反返回 400。
+     * scoreScope：person = 仅负责人评价；both = 负责人 + 车间两张表，齐交才核销。
      */
     update: (
       id: string,
-      body: { name?: string; opensAt?: string | null; closesAt?: string | null },
+      body: {
+        name?: string;
+        opensAt?: string | null;
+        closesAt?: string | null;
+        scoreScope?: 'person' | 'both';
+      },
     ) => request<{ session: AdminSessionDto }>(`/admin/sessions/${id}`, { method: 'PATCH', body }),
     start: (id: string) =>
       request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/start`, { method: 'POST' }),
@@ -705,7 +745,7 @@ export const adminApi = {
         method: 'POST',
         body: sessionId ? { ...body, sessionId } : body,
       }),
-    /** 除名称/排序/启停外，PATCH 还负责问卷表头配置（问卷类型、附件号、标题、填写说明） */
+    /** 除名称/排序/启停外，PATCH 还负责问卷类型归类（表头三件套已移到场次模板层） */
     update: (
       id: string,
       body: {
@@ -713,9 +753,6 @@ export const adminApi = {
         sortOrder?: number;
         enabled?: boolean;
         questionnaireType?: string;
-        headerNote?: string;
-        title?: string;
-        footerNote?: string;
       },
     ) => request<DepartmentAdminDto>(`/admin/departments/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/departments/${id}`, { method: 'DELETE' }),
@@ -783,16 +820,17 @@ export const adminApi = {
     importTemplateUrl: () => downloadUrl('/admin/employees/import-template.xlsx'),
   },
 
+  /** 项点：场次级模板（departmentId=null + templateType），同一场次内两类问卷各一套 */
   criteria: {
-    list: (departmentId: string, sessionId?: string | null) => {
+    list: (templateType: string, sessionId?: string | null) => {
       const query = new URLSearchParams();
-      query.set('departmentId', departmentId);
+      query.set('templateType', templateType);
       if (sessionId) query.set('sessionId', sessionId);
       return request<CriterionDto[]>(`/admin/criteria?${query.toString()}`);
     },
     create: (
       body: {
-        departmentId: string;
+        templateType: string;
         name: string;
         description?: string | null;
         minScore: number;
@@ -805,6 +843,24 @@ export const adminApi = {
     update: (id: string, body: Partial<CriterionDto>) =>
       request<CriterionDto>(`/admin/criteria/${id}`, { method: 'PATCH', body }),
     remove: (id: string) => request<void>(`/admin/criteria/${id}`, { method: 'DELETE' }),
+  },
+
+  /** 场次问卷模板表头：附件号/标题/填写说明按问卷类型（person/workshop）各存一份 */
+  questionnaireTemplates: {
+    get: (type: string, sessionId?: string | null) => {
+      const query = new URLSearchParams();
+      query.set('type', type);
+      if (sessionId) query.set('sessionId', sessionId);
+      return request<QuestionnaireTemplateDto>(`/admin/questionnaire-templates?${query.toString()}`);
+    },
+    update: (
+      body: { type: string; headerNote?: string; title?: string; footerNote?: string },
+      sessionId?: string | null,
+    ) =>
+      request<QuestionnaireTemplateDto>('/admin/questionnaire-templates', {
+        method: 'PATCH',
+        body: sessionId ? { ...body, sessionId } : body,
+      }),
   },
 
   settings: {

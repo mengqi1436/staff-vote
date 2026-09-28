@@ -28,8 +28,8 @@ import { prisma } from '../db.js';
 export interface SampleStatRow {
   departmentId: string;
   departmentName: string;
-  /** 被评列 ID：同名被评列（如两个「副主任」）也各自唯一，前端 rowKey 依赖 */
-  voteColumnId: string;
+  /** 被评列 ID：同名被评列（如两个「副主任」）也各自唯一，前端 rowKey 依赖；车间虚拟得分列为 null */
+  voteColumnId: string | null;
   /** 被评对象：个人表为被评列名（主任…），车间表为车间名（部门自身） */
   targetName: string;
   /** 票种 ID；ABC汇总行为 null */
@@ -117,8 +117,11 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
 
   const departmentIds = departments.map((department) => department.id);
   const [criteria, voteColumns] = await Promise.all([
+    // 模板项点（departmentId=null，0010 起现行配置）+ 部门旧项点（历史答卷引用）都要。
     prisma.criterion.findMany({
-      where: { departmentId: { in: departmentIds } },
+      where: {
+        OR: [{ departmentId: { in: departmentIds } }, { sessionId, departmentId: null }],
+      },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     }),
     prisma.voteColumn.findMany({
@@ -128,11 +131,18 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
   ]);
 
   const codeById = new Map(ticketTypes.map((type) => [type.id, type.code]));
-  const criteriaByDepartment = new Map<string, typeof criteria>();
+  // Map 键允许 null：模板项点 departmentId 为 null，只按 templateType 归类。
+  const criteriaByDepartment = new Map<string | null, typeof criteria>();
+  const criteriaByTemplateType = new Map<string, typeof criteria>();
   for (const criterion of criteria) {
     const list = criteriaByDepartment.get(criterion.departmentId);
     if (list) list.push(criterion);
     else criteriaByDepartment.set(criterion.departmentId, [criterion]);
+    if (criterion.templateType !== null) {
+      const typed = criteriaByTemplateType.get(criterion.templateType);
+      if (typed) typed.push(criterion);
+      else criteriaByTemplateType.set(criterion.templateType, [criterion]);
+    }
   }
   const columnsByDepartment = new Map<string, typeof voteColumns>();
   for (const column of voteColumns) {
@@ -153,19 +163,27 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
 
   for (const department of departments) {
     const departmentSheets = sheetsByDepartment.get(department.id);
-    const departmentCriteria = criteriaByDepartment.get(department.id);
-    const departmentColumns = columnsByDepartment.get(department.id);
-    if (!departmentSheets?.length || !departmentCriteria?.length || !departmentColumns?.length) continue;
-
     const isWorkshop = department.questionnaireType === 'workshop';
+    // 现行口径 = 该类型的模板项点；历史答卷引用的部门旧项点并入尾部（去重）。
+    const templateCriteria = criteriaByTemplateType.get(department.questionnaireType) ?? [];
+    const legacyCriteria = criteriaByDepartment.get(department.id) ?? [];
+    const mergedCriteria = [
+      ...templateCriteria,
+      ...legacyCriteria.filter((c) => !templateCriteria.some((t) => t.id === c.id)),
+    ];
+    // 车间问卷没有被评列：以唯一一格虚拟「得分」列（null）参与计分。
+    const departmentColumns = isWorkshop ? [] : (columnsByDepartment.get(department.id) ?? []);
+    if (!departmentSheets?.length || !mergedCriteria.length) continue;
+    if (!isWorkshop && departmentColumns.length === 0) continue;
+
     const bucket = isWorkshop ? rawRows.workshop : rawRows.personal;
     if (criteriaNames[isWorkshop ? 'workshop' : 'personal'].length === 0) {
-      criteriaNames[isWorkshop ? 'workshop' : 'personal'] = departmentCriteria.map((c) => c.name);
+      criteriaNames[isWorkshop ? 'workshop' : 'personal'] = mergedCriteria.map((c) => c.name);
     }
 
     const scoring = computeResults({
-      voteColumnIds: departmentColumns.map((column) => column.id),
-      criteria: departmentCriteria.map((c) => ({ id: c.id, minScore: c.minScore, maxScore: c.maxScore })),
+      voteColumnIds: isWorkshop ? [null] : departmentColumns.map((column) => column.id),
+      criteria: mergedCriteria.map((c) => ({ id: c.id, minScore: c.minScore, maxScore: c.maxScore })),
       ticketTypes: ticketTypes.map((type) => ({ id: type.id, weightPercent: type.weightPercent })),
       sheets: departmentSheets.map((sheet) => ({
         ticketTypeId: sheet.ticketTypeId,
@@ -177,8 +195,11 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
       })),
     });
 
-    const criterionOrder = new Map(departmentCriteria.map((c, index) => [c.id, index]));
+    const criterionOrder = new Map(mergedCriteria.map((c, index) => [c.id, index]));
+    // 车间问卷的虚拟「得分」列没有 VoteColumn 行：null 显示为「得分」。
     const columnById = new Map(departmentColumns.map((column) => [column.id, column]));
+    const columnNameOf = (voteColumnId: string | null) =>
+      voteColumnId === null ? '得分' : (columnById.get(voteColumnId)?.name ?? '');
 
     // scoring 对「无票的列」也会填 0 分条目（criteria 非空），无法靠其判别有无票；
     // 用原始 items 统计 (票别, 被评列) 是否真有打分记录：无票 ≠ 0 分，样表只列有票
@@ -201,7 +222,7 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
           departmentId: department.id,
           departmentName: department.name,
           voteColumnId: column.voteColumnId,
-          targetName: columnById.get(column.voteColumnId)?.name ?? '',
+          targetName: columnNameOf(column.voteColumnId),
           ticketTypeId: ticketTypeResult.ticketTypeId,
           ticketCode: codeOf(ticketTypeResult.ticketTypeId, codeById),
           scores,
@@ -215,7 +236,8 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
     // ABC汇总行：票种加权口径（与「结果导出」一致）；任一票别都没打过的列不出现。
     const scoredColumns = new Set([...scoredKeys].map((key) => key.split('|')[1]));
     for (const column of scoring.voteColumns) {
-      if (!scoredColumns.has(column.voteColumnId)) continue;
+      // 模板串把 null（车间虚拟列）字符串化成 'null'，与 scoredKeys 的键格式保持一致
+      if (!scoredColumns.has(`${column.voteColumnId}`)) continue;
       const ordered = [...column.criteria].sort(
         (a, b) => (criterionOrder.get(a.criterionId) ?? 0) - (criterionOrder.get(b.criterionId) ?? 0),
       );
@@ -224,7 +246,7 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
         departmentId: department.id,
         departmentName: department.name,
         voteColumnId: column.voteColumnId,
-        targetName: columnById.get(column.voteColumnId)?.name ?? '',
+        targetName: columnNameOf(column.voteColumnId),
         ticketTypeId: null,
         ticketCode: SUMMARY_CODE,
         scores,

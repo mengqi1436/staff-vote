@@ -57,6 +57,8 @@ const UpdateSchema = z.object({
   name: z.string().trim().min(1, '场次名称不能为空').max(100).optional(),
   opensAt: isoTimeField().nullable().optional(),
   closesAt: isoTimeField().nullable().optional(),
+  /** 打分范围：person 仅个人问卷 / both 两张问卷都打。 */
+  scoreScope: z.enum(['person', 'both']).optional(),
 });
 
 const ActionParamSchema = z.object({

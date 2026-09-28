@@ -58,7 +58,9 @@ async function makeDepartment(
     data: { sessionId, name: `${TAG}部门-${label}${nextSeq()}`, questionnaireType: type, enabled: true },
   });
   const columns = [] as MadeDept['columns'];
-  for (const [index, name] of columnNames.entries()) {
+  // 0010 起车间问卷是单一「得分」虚拟列（score_items.vote_column_id 为 NULL），不再建真实被评列
+  const effectiveColumns = type === 'workshop' ? [] : columnNames;
+  for (const [index, name] of effectiveColumns.entries()) {
     const column = await prisma.voteColumn.create({
       data: { departmentId: department.id, sessionId, name, sortOrder: index + 1 },
     });
@@ -79,7 +81,7 @@ async function makeSheet(input: {
   sessionId: string;
   departmentId: string;
   ticketTypeId: string;
-  cells: Array<{ voteColumnId: string; criterionId: string; score: number }>;
+  cells: Array<{ voteColumnId: string | null; criterionId: string; score: number }>;
 }) {
   await prisma.scoreSheet.create({
     data: {
@@ -159,7 +161,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
       departmentId: workshop.id,
       ticketTypeId: typeA.id,
       cells: [
-        { voteColumnId: workshop.columns[0]!.id, criterionId: workshop.criteria[0]!.id, score: 90 },
+        { voteColumnId: null, criterionId: workshop.criteria[0]!.id, score: 90 },
       ],
     });
   });

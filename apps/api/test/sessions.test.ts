@@ -69,9 +69,11 @@ async function newSession(name: string): Promise<string> {
  */
 async function makeStartable(sessionId: string, code: string): Promise<void> {
   const department = await prisma.department.findFirstOrThrow({ where: { sessionId } });
+  // 0010 起项点在模板层：departmentId 为空 + templateType 标明个人/车间模板；
+  // sessionId 必须显式带（此时库里常有多个场次，不能依赖「唯一场次」自动解析）
   await agent
     .post('/api/admin/criteria')
-    .send({ departmentId: department.id, name: `${code}项点`, minScore: 0, maxScore: 100 });
+    .send({ sessionId, templateType: 'person', name: `${code}项点`, minScore: 0, maxScore: 100 });
   await agent.post('/api/admin/vote-columns').send({ departmentId: department.id, name: `${code}列` });
   const type = await newTicketType(sessionId, code);
   const generated = await agent
@@ -137,6 +139,8 @@ describeDb('场次管理', () => {
       ).map((row) => row.id);
       await prisma.employee.deleteMany({ where: { departmentId: { in: departmentIds } } });
       await prisma.criterion.deleteMany({ where: { departmentId: { in: departmentIds } } });
+      // 0010 起模板项点 departmentId 为空，按场次清掉才能删场次（外键 RESTRICT）
+      await prisma.criterion.deleteMany({ where: { sessionId: id, departmentId: null } });
       await prisma.voteColumn.deleteMany({ where: { departmentId: { in: departmentIds } } });
       await prisma.department.deleteMany({ where: { id: { in: departmentIds } } });
       await prisma.ticketType.deleteMany({ where: { id: { in: typeIds } } });

@@ -72,7 +72,27 @@ interface MadeDepartment {
   cell: { voteColumnId: string; criterionId: string };
 }
 
-/** 部门 + 1 被评列 + 1 项点（0-100），凑齐一格可提交的最小问卷。 */
+/** 0010 起项点在模板层共用：同场次共享一个模板项点（0-100），表完成条件不随部门数膨胀。 */
+const sharedCriteria = new Map<string, string>();
+
+async function sharedCriterionId(sessionId: string): Promise<string> {
+  const existing = sharedCriteria.get(sessionId);
+  if (existing) return existing;
+  const created = await prisma.criterion.create({
+    data: {
+      departmentId: null,
+      sessionId,
+      templateType: 'person',
+      name: `${TAG}项点-${nextSeq()}`,
+      minScore: 0,
+      maxScore: 100,
+    },
+  });
+  sharedCriteria.set(sessionId, created.id);
+  return created.id;
+}
+
+/** 部门 + 1 被评列，指向场次共享的模板项点，凑齐一格可提交的最小问卷。 */
 async function makeDepartment(
   sessionId: string,
   label: string,
@@ -84,16 +104,8 @@ async function makeDepartment(
   const column = await prisma.voteColumn.create({
     data: { departmentId: department.id, sessionId, name: `${TAG}被评列-${label}` },
   });
-  const criterion = await prisma.criterion.create({
-    data: {
-      departmentId: department.id,
-      sessionId,
-      name: `${TAG}项点-${label}`,
-      minScore: 0,
-      maxScore: 100,
-    },
-  });
-  return { id: department.id, cell: { voteColumnId: column.id, criterionId: criterion.id } };
+  const criterionId = await sharedCriterionId(sessionId);
+  return { id: department.id, cell: { voteColumnId: column.id, criterionId } };
 }
 
 async function makeEnabledTicketType(sessionId: string, label: string): Promise<{ id: string }> {
@@ -210,6 +222,8 @@ async function clearFixtures(): Promise<void> {
   await prisma.ticketType.deleteMany({ where: { id: { in: typeIds } } });
   await prisma.voteColumn.deleteMany({ where: { departmentId: { in: departmentIds } } });
   await prisma.criterion.deleteMany({ where: { departmentId: { in: departmentIds } } });
+  // 0010 起夹具项点在模板层（departmentId 为空、name 带 TAG 前缀），按名清掉
+  await prisma.criterion.deleteMany({ where: { name: { startsWith: TAG }, departmentId: null } });
   await prisma.department.deleteMany({ where: { id: { in: departmentIds } } });
   await prisma.voteSession.deleteMany({ where: { id: { in: sessionIds } } });
   sessionIds.length = 0;
@@ -295,7 +309,9 @@ describeDb('随机码绑定评议部门', () => {
       .set('X-Forwarded-For', `10.98.1.${++loginSeq}`)
       .send({ code });
     expect(res.status).toBe(200);
-    expect(res.body.departments).toEqual([{ id: bound.id, name: expect.any(String) }]);
+    expect(res.body.departments).toEqual([
+      { id: bound.id, name: expect.any(String), questionnaireType: expect.any(String) },
+    ]);
   });
 
   it('绑定码越权取其他部门打分表 → 403 TICKET_DEPARTMENT_MISMATCH', async () => {

@@ -15,7 +15,7 @@ export interface CachedVoteSession {
   ticketType: VoteTicketTypeDto;
   departments: DepartmentBrief[];
   /** 所在场次；旧后端不返回该字段，恒为 undefined */
-  session?: { id: string; name: string; status: string };
+  session?: { id: string; name: string; status: string; scoreScope?: 'person' | 'both' };
 }
 
 /** 写入缓存（入口页拿到会话后调用）。 */
