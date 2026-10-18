@@ -443,31 +443,6 @@ describeDb('随机码绑定评议部门', () => {
     expect(sheets[0]?.ticketTypeId).toBe(type.id);
   });
 
-  it('批次列表 DTO 带 departmentId / departmentName', async () => {
-    const sessionId = await makeSession('批次列表');
-    const type = await makeEnabledTicketType(sessionId, '列表');
-    const bound = await makeDepartment(sessionId, '列表');
-
-    const { body } = await generate({
-      sessionId,
-      ticketTypeId: type.id,
-      departmentId: bound.id,
-    });
-    const { batchId } = body as unknown as Generated;
-
-    const res = await operatorAgent
-      .get('/api/admin/ticket-batches')
-      .query({ sessionId });
-    expect(res.status).toBe(200);
-    const batch = (res.body as Array<{ id: string; departmentId: string | null; departmentName: string | null }>).find(
-      (row) => row.id === batchId,
-    );
-    expect(batch).toBeDefined();
-    expect(batch?.departmentId).toBe(bound.id);
-    expect(batch?.departmentName).toEqual(expect.any(String));
-    expect(batch?.departmentName).not.toBeNull();
-  });
-
   it('不绑定发码（缺省 departmentId）：批次 departmentId 为 null', async () => {
     const sessionId = await makeSession('不绑定');
     const type = await makeEnabledTicketType(sessionId, '不绑定');

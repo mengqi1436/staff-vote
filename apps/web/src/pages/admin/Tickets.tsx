@@ -16,13 +16,7 @@ import {
 } from 'antd';
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
-import {
-  adminApi,
-  downloadFile,
-  type TicketBatchDto,
-  type TicketDto,
-  type TicketTypeDto,
-} from '../../lib/api.js';
+import { adminApi, downloadFile, type TicketDto, type TicketTypeDto } from '../../lib/api.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { useAuth } from '../../lib/auth.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
@@ -102,18 +96,14 @@ export function AdminTickets() {
   const unusedKnown = tickets.data !== null;
   const unusedCount = tickets.data?.total ?? 0;
 
-  const loadBatches = useCallback(() => adminApi.batches.list({ sessionId }), [sessionId]);
-  const batches = usePolling(loadBatches, 0);
-
   /**
    * 码数量变化后要一起刷新的数据源。
    *
-   * 列表（含未使用总数）、批次、人员类别统计各走各的 usePolling（interval=0，不轮询），
+   * 列表（含未使用总数）与人员类别统计各走各的 usePolling（interval=0，不轮询），
    * 漏刷任何一个都会让页面上的某个计数停在旧值。
    */
   const refreshTicketViews = (): void => {
     tickets.refresh();
-    batches.refresh();
     ticketTypes.refresh();
   };
 
@@ -473,36 +463,6 @@ export function AdminTickets() {
     },
   ];
 
-  const batchColumns: TableColumnsType<TicketBatchDto> = [
-    {
-      title: '人员类别',
-      key: 'ticketType',
-      width: 180,
-      render: (_: unknown, row: TicketBatchDto) => `${row.ticketType.name}（${row.ticketType.code}）`,
-    },
-    {
-      title: '评议部门',
-      key: 'department',
-      width: 140,
-      render: (_: unknown, row: TicketBatchDto) =>
-        row.departmentName ?? <Typography.Text type="secondary">全部部门</Typography.Text>,
-    },
-    {
-      title: '数量',
-      dataIndex: 'count',
-      width: 110,
-      align: 'center',
-      render: (value: number) => <span className="tabular">{value} 张</span>,
-    },
-    { title: '操作人', dataIndex: 'operator', width: 160 },
-    {
-      title: '发放时间',
-      dataIndex: 'createdAt',
-      width: 150,
-      render: (value: string) => <span className="tabular">{formatDateTime(value)}</span>,
-    },
-  ];
-
   /** 本批码表：两栏「序号 + 随机码」，等宽字体便于逐行核对。 */
   const codePairColumns: TableColumnsType<CodePairRow> = [
     {
@@ -764,34 +724,6 @@ export function AdminTickets() {
     </>
   );
 
-  const batchesTab = (
-    <Card
-      title={
-        <HelpLabel help="每发放一次随机码记一条批次：数量是这批生成的数量，操作人是当时登录的管理员，用于事后核对。">
-          批次一览
-        </HelpLabel>
-      }
-    >
-      <Table<TicketBatchDto>
-        rowKey="id"
-        size="small"
-        loading={batches.loading}
-        columns={batchColumns}
-        dataSource={batches.data ?? []}
-        pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 个批次` }}
-        scroll={{ x: 'max-content' }}
-        locale={{
-          emptyText: (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="还没有发放批次；每次发码都会在这里留一条记录"
-            />
-          ),
-        }}
-      />
-    </Card>
-  );
-
   return (
     <>
       {ticketTypes.error && !ticketTypes.data ? (
@@ -807,10 +739,7 @@ export function AdminTickets() {
       {!ticketTypes.data && ticketTypes.loading ? (
         <LoadingState />
       ) : (
-        <>
-          {codesTab}
-          {batchesTab}
-        </>
+        codesTab
       )}
 
 

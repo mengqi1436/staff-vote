@@ -545,17 +545,6 @@ export interface TicketDto {
   ticketType: { id: string; code: string; name: string };
 }
 
-export interface TicketBatchDto {
-  id: string;
-  count: number;
-  operator: string;
-  createdAt: string;
-  ticketType: { id: string; code: string; name: string };
-  /** 评议部门绑定；null = 不限定（可评全部部门）。 */
-  departmentId: string | null;
-  departmentName: string | null;
-}
-
 export interface SettingsDto {
   'system.title': string;
 }
@@ -1202,28 +1191,6 @@ export async function revokeTicketsBulk(
   });
 
   return { revoked: updated.count };
-}
-
-/** 发码批次列表（倒序，管理端看最近发放）。 */
-export async function listTicketBatches(sessionId?: string): Promise<TicketBatchDto[]> {
-  const batches = await prisma.ticketBatch.findMany({
-    where: { sessionId },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    take: 500,
-    include: {
-      ticketType: { select: { id: true, code: true, name: true } },
-      department: { select: { id: true, name: true } },
-    },
-  });
-  return batches.map((batch) => ({
-    id: batch.id,
-    count: batch.count,
-    operator: batch.operator,
-    createdAt: batch.createdAt.toISOString(),
-    ticketType: batch.ticketType,
-    departmentId: batch.departmentId ?? null,
-    departmentName: batch.department?.name ?? null,
-  }));
 }
 
 // -----------------------------------------------------------------------------

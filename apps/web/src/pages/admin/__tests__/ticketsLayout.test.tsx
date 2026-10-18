@@ -52,7 +52,6 @@ vi.mock('../../../lib/api.js', async () => {
           { id: 'd1', name: '贵阳西车间', sortOrder: 1, enabled: true },
         ]),
       },
-      batches: { list: vi.fn(async () => []) },
     },
   };
 });

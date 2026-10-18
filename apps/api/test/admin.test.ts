@@ -346,7 +346,6 @@ describeDb('管理端接口', () => {
       anonymous.post('/api/admin/tickets/generate').send({ ticketTypeId: 'x', count: 1 }),
       anonymous.get('/api/admin/tickets/export'),
       anonymous.post('/api/admin/tickets/whatever/revoke'),
-      anonymous.get('/api/admin/ticket-batches'),
       anonymous.get('/api/admin/departments'),
       anonymous.get('/api/admin/employees'),
       anonymous.post('/api/admin/employees/import'),
@@ -362,7 +361,7 @@ describeDb('管理端接口', () => {
       anonymous.get('/api/admin/results/export.xlsx?departmentId=x'),
     ]);
 
-    expect(responses).toHaveLength(20);
+    expect(responses).toHaveLength(19);
     for (const res of responses) {
       expect(res.status).toBe(401);
       expect(res.body.error?.code).toBe('UNAUTHORIZED');
@@ -744,22 +743,6 @@ describeDb('管理端接口', () => {
     expect(usedRevoke.body.error.code).toBe('TICKET_ALREADY_USED');
 
     expect((await agent.post('/api/admin/tickets/not-exist/revoke')).status).toBe(404);
-  });
-
-  it('批次列表带人员类别与数量', async () => {
-    const ticketType = await newTicketType(100);
-    const generated = await agent
-      .post('/api/admin/tickets/generate')
-      .send({ ticketTypeId: ticketType.id, count: 4 });
-
-    const res = await agent.get('/api/admin/ticket-batches');
-    expect(res.status).toBe(200);
-    const row = (res.body as Array<{ id: string }>).find((item) => item.id === generated.body.batchId);
-    expect(row).toMatchObject({
-      count: 4,
-      operator: ADMIN_USERNAME,
-      ticketType: { id: ticketType.id, code: ticketType.code },
-    });
   });
 
   it('随机码导出 xlsx：列说明与行数符合预期', async () => {

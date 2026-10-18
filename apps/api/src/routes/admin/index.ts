@@ -11,7 +11,7 @@ import { sessionsRouter } from './sessions.js';
 import { settingsRouter } from './settings.js';
 import { staffDirectoryRouter, staffDirectorySyncRouter } from './staffDirectory.js';
 import { resultsRouter, statsRouter } from './stats.js';
-import { ticketBatchesRouter, ticketsRouter } from './tickets.js';
+import { ticketsRouter } from './tickets.js';
 import { ticketTypesRouter } from './ticketTypes.js';
 import { voteColumnsRouter } from './voteColumns.js';
 
@@ -40,7 +40,6 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   /tickets/:id/revoke POST → 作废单张未使用的码（tickets.revoke）
  *   /tickets/revoke-bulk POST { sessionId, ticketTypeId? } → 一键作废该场次范围内
  *                         全部未使用码；used / revoked 不动，返回 { revoked }（tickets.revoke）
- *   /ticket-batches    GET
  *   /org-departments   GET POST PATCH DELETE   全局部门字典；被场次引用时删除 409
  *                         （写需 departments.write，读=登录即可）
  *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false）；
@@ -79,7 +78,6 @@ adminRouter.use(sessionRouter);
 adminRouter.use('/sessions', sessionsRouter);
 adminRouter.use('/ticket-types', ticketTypesRouter);
 adminRouter.use('/tickets', ticketsRouter);
-adminRouter.use('/ticket-batches', ticketBatchesRouter);
 adminRouter.use('/org-departments', orgDepartmentsRouter);
 adminRouter.use('/departments', departmentsRouter);
 adminRouter.use('/questionnaire-templates', questionnaireTemplatesRouter);

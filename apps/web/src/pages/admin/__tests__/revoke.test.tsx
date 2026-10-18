@@ -36,7 +36,6 @@ vi.mock('../../../lib/api.js', async () => {
         revoke: vi.fn(),
         exportUrl: () => '/api/admin/tickets/export',
       },
-      batches: { list: vi.fn() },
     },
   };
 });
@@ -76,7 +75,6 @@ beforeEach(() => {
   vi.mocked(adminApi.ticketTypes.list).mockResolvedValue([
     { id: 'a', code: 'A', name: '领导班子', weightPercent: 100, sortOrder: 1, enabled: true },
   ]);
-  vi.mocked(adminApi.batches.list).mockResolvedValue([]);
   vi.mocked(adminApi.tickets.generate).mockResolvedValue({
     batchId: 'batch1',
     count: 1,

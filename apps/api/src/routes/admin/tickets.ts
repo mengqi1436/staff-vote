@@ -1,5 +1,5 @@
 /**
- * 随机码：发码、分页查询、导出、作废（单张与一键），以及发码批次列表。
+ * 随机码：发码、分页查询、导出、作废（单张与一键）。
  *
  * 作废只针对 `unused` 的码，且用带状态条件的原子更新实现（见 services/admin.ts），
  * 避免两次并发作废或「已核销后又被作废」。
@@ -13,7 +13,6 @@ import {
   findSessionName,
   findSessionNameByBatches,
   generateTickets,
-  listTicketBatches,
   listTickets,
   listTicketsByBatches,
   listTicketsForExport,
@@ -72,11 +71,6 @@ const GenerateSchema = z.object({
 const RevokeBulkSchema = z.object({
   sessionId: z.string().min(1, '缺少 sessionId'),
   ticketTypeId: z.string().min(1).optional(),
-});
-
-/** 批次列表的评议过滤。 */
-const BatchesQuerySchema = z.object({
-  sessionId: z.string().min(1).optional(),
 });
 
 export const ticketsRouter: Router = Router();
@@ -173,11 +167,4 @@ ticketsRouter.get('/:id/export.xlsx', requirePermission('results.export'), async
     `答卷-${answer.departmentName}-${fileStamp(answer.submittedAt)}.xlsx`,
     await workbookToBuffer(buildAnswerSheetWorkbook(answer)),
   );
-});
-
-export const ticketBatchesRouter: Router = Router();
-
-ticketBatchesRouter.get('/', async (req, res) => {
-  const { sessionId } = BatchesQuerySchema.parse(req.query);
-  res.json(await listTicketBatches(await resolveSessionId(sessionId)));
 });

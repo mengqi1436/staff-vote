@@ -390,18 +390,6 @@ export interface TicketDto {
   batchId: string;
 }
 
-export interface TicketBatchDto {
-  id: string;
-  count: number;
-  operator: string;
-  createdAt: string;
-  ticketType: { id: string; code: string; name: string };
-  /** 本批次绑定评议部门；null = 不限定（存量码/向导发码兼容，可评议全部部门） */
-  departmentId: string | null;
-  /** 冗余展示用部门名，与 departmentId 同源；null 同上 */
-  departmentName: string | null;
-}
-
 export interface Paged<T> {
   items: T[];
   total: number;
@@ -758,11 +746,6 @@ export const adminApi = {
      * 码未使用/已作废返回 409；无答卷或无映射返回 404，走 downloadFile 才能拦到。
      */
     exportAnswerUrl: (id: string) => downloadUrl(`/admin/tickets/${id}/export.xlsx`),
-  },
-
-  batches: {
-    list: (options: { sessionId?: string | null } = {}) =>
-      request<TicketBatchDto[]>(`/admin/ticket-batches${sessionIdQuery(options.sessionId)}`),
   },
 
   /**

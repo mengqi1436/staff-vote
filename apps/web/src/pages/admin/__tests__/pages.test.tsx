@@ -205,17 +205,6 @@ vi.mock('../../../lib/api.js', async () => {
         })),
         exportUrl: () => '/api/admin/tickets/export',
       },
-      batches: {
-        list: vi.fn(async () => [
-          {
-            id: 'batch12345678',
-            count: 10,
-            operator: 'admin',
-            createdAt: '2026-09-19T02:00:00.000Z',
-            ticketType: { id: 'a', code: 'A', name: '领导班子' },
-          },
-        ]),
-      },
       departments: {
         list: vi.fn(async () => departments),
         update: vi.fn(async (id: string, body: Record<string, unknown>) => ({
@@ -386,13 +375,11 @@ describe('后台页面渲染', () => {
     expect(await screen.findByText('职工代表')).toBeInTheDocument();
   });
 
-  it('发码页渲染批量发码表单、码明细与发放批次', async () => {
+  it('发码页渲染批量发码表单与码明细', async () => {
     renderPage(<AdminTickets />);
 
     expect(await screen.findByText('批量发码')).toBeInTheDocument();
     expect(await screen.findByText('ABCD2345')).toBeInTheDocument();
-    // 发放批次不再是二级页签：直接跟在统计之后，滚动即可看到
-    expect(await screen.findByText('批次一览')).toBeInTheDocument();
     // 状态列文字表意（Tag 颜色仅辅助）
     expect(await screen.findByText('未使用')).toBeInTheDocument();
   });
@@ -492,14 +479,5 @@ describe('后台页面渲染', () => {
     expect(await screen.findByRole('textbox', { name: /代码/ })).toBeInTheDocument();
     // 权重是 InputNumber，可访问角色为 spinbutton
     expect(await screen.findByRole('spinbutton', { name: /权重/ })).toBeInTheDocument();
-  });
-
-  it('发放批次直接展示在页面下方，无需切换页签', async () => {
-    renderPage(<AdminTickets />);
-
-    // 批次表不再显示内部 UUID 片段，按可核对的信息断言：操作人与数量
-    expect(await screen.findByText('批次一览')).toBeInTheDocument();
-    expect(await screen.findByText('10 张')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '操作人' })).toBeInTheDocument();
   });
 });

@@ -4,8 +4,7 @@
  * 覆盖：
  *   - 发码卡未选「评议部门」时提交被拦截（generate 不发起，提示必选）；
  *   - 选择部门后 generate 收到 departmentId；
- *   - 选「不限定（全部部门）」时出现确认弹窗，确认后 generate 不带 departmentId；
- *   - 批次一览表「评议部门」列：绑定显部门名，null 显「全部部门」。
+ *   - 选「不限定（全部部门）」时出现确认弹窗，确认后 generate 不带 departmentId。
  *
  * 后端强校验（DEPARTMENT_NOT_IN_SESSION / DEPARTMENT_DISABLED）由 apps/api 的接口测试覆盖。
  */
@@ -40,7 +39,6 @@ vi.mock('../../../lib/api.js', async () => {
         revoke: vi.fn(),
         exportUrl: () => '/api/admin/tickets/export',
       },
-      batches: { list: vi.fn() },
       departments: { list: vi.fn() },
     },
   };
@@ -51,7 +49,6 @@ const { AdminTickets } = await import('../Tickets.js');
 
 const generateMock = vi.mocked(adminApi.tickets.generate);
 const listMock = vi.mocked(adminApi.tickets.list);
-const batchesMock = vi.mocked(adminApi.batches.list);
 const departmentsMock = vi.mocked(adminApi.departments.list);
 
 /** 场内部门：一个启用（可作发码选项）、一个停用（不得出现在选项里）。 */
@@ -120,26 +117,6 @@ async function selectDepartment(
 beforeEach(() => {
   vi.clearAllMocks();
   listMock.mockResolvedValue({ items: [UNUSED_ROW], total: 1, page: 1, pageSize: 20 });
-  batchesMock.mockResolvedValue([
-    {
-      id: 'b1',
-      count: 5,
-      operator: 'admin',
-      createdAt: '2026-09-19T02:00:00.000Z',
-      ticketType: { id: 'a', code: 'A', name: '领导班子' },
-      departmentId: 'd1',
-      departmentName: '生产部',
-    },
-    {
-      id: 'b2',
-      count: 3,
-      operator: 'admin',
-      createdAt: '2026-09-19T01:00:00.000Z',
-      ticketType: { id: 'a', code: 'A', name: '领导班子' },
-      departmentId: null,
-      departmentName: null,
-    },
-  ]);
   departmentsMock.mockResolvedValue(DEPARTMENTS);
   generateMock.mockResolvedValue({ batchId: 'b9', count: 5, codes: ['NEWC2345'] });
 });
@@ -226,17 +203,5 @@ describe('发码卡的评议部门必选闸', () => {
     // 故不断言文案消失，只断言取消后始终未发请求
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(generateMock).not.toHaveBeenCalled();
-  }, 15_000);
-});
-
-describe('批次一览的评议部门列', () => {
-  it('绑定部门显部门名，未绑定显「全部部门」', async () => {
-    renderPage();
-    // 等 usePolling 首轮加载完成（页面 skeleton 消失、卡片渲染）
-    await screen.findByText('批量发码');
-
-    expect(await screen.findByText('生产部')).toBeInTheDocument();
-    expect(screen.getByText('全部部门')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '评议部门' })).toBeInTheDocument();
   }, 15_000);
 });
