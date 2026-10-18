@@ -7,25 +7,12 @@ import { DEFAULT_SETTINGS } from '../src/lib/settings.js';
 /**
  * 初始化数据。可重复执行：已存在的记录跳过，不覆盖管理员已改过的配置。
  *
+ * 不预置任何场次与票种：场次是管理员按评议周期自行创建的，票种归属场次、
+ * 由建场向导第三步分配。系统初始化只准备「权限目录 + 内置角色 + 管理员 + 设置项」
+ * 这些与业务数据无关的基础数据。
+ *
  * 运行：pnpm db:seed
  */
-
-interface TicketTypeSeed {
-  code: string;
-  name: string;
-  weightPercent: number;
-  sortOrder: number;
-}
-
-/**
- * 默认票种。权重合计 100，满足服务层校验。
- * 名称给出默认语义，管理员可在后台按本单位习惯修改。
- */
-const DEFAULT_TICKET_TYPES: TicketTypeSeed[] = [
-  { code: 'A', name: 'A 票（领导评议）', weightPercent: 50, sortOrder: 0 },
-  { code: 'B', name: 'B 票（部门互评）', weightPercent: 30, sortOrder: 1 },
-  { code: 'C', name: 'C 票（职工评议）', weightPercent: 20, sortOrder: 2 },
-];
 
 async function seedAdmin(roleId: string | null): Promise<void> {
   const username = env.ADMIN_USERNAME;
@@ -134,36 +121,6 @@ async function seedRoles(permissionIdByCode: Map<string, string>): Promise<Map<s
   return idByCode;
 }
 
-/** 迁移写入的默认场次 ID：存量数据与 seed 票种都归属它（与 0005 迁移一致）。 */
-const DEFAULT_SESSION_ID = '00000000-0000-7000-8000-000000000001';
-
-/**
- * 确保默认场次存在（迁移已建则跳过），返回其 ID。
- * 多场次时代码不在这里建新场次——那是管理员的操作。
- */
-async function ensureDefaultSession(): Promise<string> {
-  const existing = await prisma.voteSession.findUnique({ where: { id: DEFAULT_SESSION_ID } });
-  if (existing) return existing.id;
-  const created = await prisma.voteSession.create({ data: { id: DEFAULT_SESSION_ID, name: '默认场次' } });
-  console.log('[seed] 已创建默认场次');
-  return created.id;
-}
-
-async function seedTicketTypes(sessionId: string): Promise<void> {
-  for (const item of DEFAULT_TICKET_TYPES) {
-    // 票种编码在场次内唯一：查重按 (sessionId, code)，不同场次可各自建 A/B/C。
-    const existing = await prisma.ticketType.findUnique({
-      where: { sessionId_code: { sessionId, code: item.code } },
-    });
-    if (existing) {
-      console.log(`[seed] 票种 ${item.code} 已存在，跳过`);
-      continue;
-    }
-    await prisma.ticketType.create({ data: { ...item, sessionId } });
-    console.log(`[seed] 已创建票种 ${item.code}（权重 ${item.weightPercent}%）`);
-  }
-}
-
 async function seedSettings(): Promise<void> {
   for (const item of DEFAULT_SETTINGS) {
     await prisma.setting.upsert({
@@ -176,21 +133,10 @@ async function seedSettings(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const sessionId = await ensureDefaultSession();
   const permissionIdByCode = await seedPermissions();
   const roleIdByCode = await seedRoles(permissionIdByCode);
   await seedAdmin(roleIdByCode.get('super_admin') ?? null);
-  await seedTicketTypes(sessionId);
   await seedSettings();
-
-  const weights = await prisma.ticketType.findMany({
-    where: { enabled: true },
-    orderBy: { sortOrder: 'asc' },
-  });
-  const total = weights.reduce((sum, t) => sum + t.weightPercent, 0);
-  console.log(
-    `[seed] 启用票种权重合计：${total}%` + (total === 100 ? '（校验通过）' : ' ⚠ 必须为 100%，请在后台调整'),
-  );
 }
 
 main()

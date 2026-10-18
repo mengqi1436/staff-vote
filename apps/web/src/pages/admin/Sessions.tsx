@@ -50,6 +50,8 @@ export function AdminSessions() {
   const [wizardOpen, setWizardOpen] = useState(false);
   /** 正在流转中的场次 id：只让被操作的行进入 loading，其他行照常可点 */
   const [actingId, setActingId] = useState<string | null>(null);
+  /** 正在删除中的场次 id */
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   /** 正在编辑开放时间窗的场次；null 表示弹窗关闭 */
   const [windowRow, setWindowRow] = useState<AdminSessionDto | null>(null);
 
@@ -97,6 +99,25 @@ export function AdminSessions() {
     }
   };
 
+  /**
+   * 删除场次：后端仅在无答卷时放行。有答卷（409 SESSION_HAS_SHEETS）或正在投票
+   * （409 SESSION_VOTING）时返回中文原因，直接按普通错误提示展示。
+   */
+  const remove = async (row: AdminSessionDto): Promise<void> => {
+    setDeletingId(row.id);
+    try {
+      await adminApi.sessions.remove(row.id);
+      notify.success(`场次「${row.name}」已删除`);
+      refresh();
+      // 重拉场次列表：若删的是「当前场次」，sessionContext 会自动清掉它
+      reload();
+    } catch (caught) {
+      notify.error(describeError(caught, '删除失败，请重试'));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const columns: TableColumnsType<AdminSessionDto> = [
     { title: '场次名称', dataIndex: 'name' },
     {
@@ -130,7 +151,7 @@ export function AdminSessions() {
     {
       title: '操作',
       key: 'actions',
-      width: 320,
+      width: 400,
       render: (_: unknown, row: AdminSessionDto) => {
         const actions = sessionActions(row.status, row.startBlockers);
         return (
@@ -220,6 +241,42 @@ export function AdminSessions() {
             >
               {row.status === 'draft' ? '继续配置' : '进入工作台'}
             </Button>
+            {/*
+              删除：后端只放行无答卷的场次。投票中的行直接禁用并说明原因，
+              不必让用户点了才收到 409；「有答卷」只有后端知道，由 409 文案兜底。
+            */}
+            {!canWrite ? (
+              <Tooltip title="无「修改开放时间与系统设置」权限">
+                <Button size="small" type="link" danger style={{ padding: 0 }} disabled>
+                  删除
+                </Button>
+              </Tooltip>
+            ) : row.status === 'voting' ? (
+              <Tooltip title="场次正在投票，请先暂停或结束再删除">
+                <Button size="small" type="link" danger style={{ padding: 0 }} disabled>
+                  删除
+                </Button>
+              </Tooltip>
+            ) : (
+              <Popconfirm
+                title={`删除场次「${row.name}」？`}
+                description="该场次下的部门、职工、项点、票种与随机码会一并删除，不可恢复。已有答卷的场次不能删除。"
+                okText="确认删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void remove(row)}
+              >
+                <Button
+                  size="small"
+                  type="link"
+                  danger
+                  style={{ padding: 0 }}
+                  loading={deletingId === row.id}
+                >
+                  删除
+                </Button>
+              </Popconfirm>
+            )}
           </Space>
         );
       },

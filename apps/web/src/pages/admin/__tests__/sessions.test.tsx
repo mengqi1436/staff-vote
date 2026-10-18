@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -118,6 +118,8 @@ vi.mock('../../../lib/api.js', async () => {
         end: vi.fn(async (id: string) => ({
           session: { ...SESSION_ROWS.find((row) => row.id === id)!, status: 'ended' },
         })),
+        // 删除场次：成功返回 204（request 层解析为 undefined）
+        remove: vi.fn(async () => undefined),
         // 契约 D：票别规划返回建种与发码结果
         ticketPlan: vi.fn(async () => ({
           ticketTypes: [
@@ -155,6 +157,7 @@ vi.mock('../../../lib/api.js', async () => {
 const { AdminSessions } = await import('../Sessions.js');
 const { SessionWorkspace } = await import('../SessionWorkspace.js');
 const { formatWindow } = await import('../sessionShared.js');
+const { AdminSessionProvider, useAdminSession } = await import('../../../lib/sessionContext.js');
 
 beforeEach(() => {
   localStorage.clear();
@@ -386,6 +389,43 @@ describe('场次管理页', () => {
       }),
     );
   });
+
+  it('删除场次：投票中的行禁用，其余需二次确认后才调用 remove', async () => {
+    const user = userEvent.setup();
+    renderWithRoutes(<Route path="/admin/sessions" element={<AdminSessions />} />, '/admin/sessions');
+
+    await screen.findByText('内设机构');
+    const deleteButtons = screen.getAllByRole('button', { name: '删除' });
+    expect(deleteButtons.length).toBe(5);
+
+    // 投票中的 s2 行禁用并给出原因，不进入 Popconfirm
+    const votingDelete = deleteButtons[1]!;
+    expect(votingDelete).toBeDisabled();
+    await userEvent.hover(votingDelete);
+    expect(await screen.findByText(/场次正在投票，请先暂停或结束再删除/)).toBeInTheDocument();
+
+    // 其余行可点：第一行 s1（draft）
+    expect(adminApi.sessions.remove).not.toHaveBeenCalled();
+    await user.click(deleteButtons[0]!);
+    expect(adminApi.sessions.remove).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => expect(vi.mocked(adminApi.sessions.remove)).toHaveBeenCalledWith('s1'));
+  });
+
+  it('删除被 409 拒绝时提示后端文案（有答卷不可删）', async () => {
+    vi.mocked(adminApi.sessions.remove).mockRejectedValueOnce(
+      new ApiError(409, 'SESSION_HAS_SHEETS', '场次「内设机构」已收到 3 份答卷，不能删除（历史评分必须保留）'),
+    );
+    const user = userEvent.setup();
+    renderWithRoutes(<Route path="/admin/sessions" element={<AdminSessions />} />, '/admin/sessions');
+
+    const deleteButtons = await screen.findAllByRole('button', { name: '删除' });
+    await user.click(deleteButtons[0]!);
+    await user.click(await screen.findByRole('button', { name: '确认删除' }));
+
+    expect(await screen.findByText(/已收到 3 份答卷，不能删除/)).toBeInTheDocument();
+  });
 });
 
 describe('状态机按钮权限门控（只读账号）', () => {
@@ -404,6 +444,11 @@ describe('状态机按钮权限门控（只读账号）', () => {
     const ends = screen.getAllByRole('button', { name: '结束投票' });
     expect(ends).toHaveLength(2);
     for (const button of ends) expect(button).toBeDisabled();
+
+    // 删除同属 settings.write：无权限时保留但禁用（不是隐藏，整列消失会像缺功能）
+    const deletes = screen.getAllByRole('button', { name: '删除' });
+    expect(deletes).toHaveLength(5);
+    for (const button of deletes) expect(button).toBeDisabled();
 
     await userEvent.hover(pause);
     expect(
@@ -542,5 +587,27 @@ describe('场次工作台', () => {
     expect(screen.getByRole('button', { name: '返回场次列表' })).toBeInTheDocument();
     // 不存在的场次不写入上下文：不发生任何按场次取数的请求
     expect(vi.mocked(adminApi.departments.list)).not.toHaveBeenCalled();
+  });
+});
+
+describe('当前场次上下文', () => {
+  it('场次被删光后清空持久化的「当前场次」，避免继续带已删除 id 发请求', async () => {
+    localStorage.setItem('staff_vote_admin_session_id', 'gone');
+    // 列表已空 = 最后一个场次刚被删除（真实场景：删除按钮 → reload()）
+    vi.mocked(adminApi.sessions.list).mockResolvedValueOnce({ sessions: [] });
+
+    function Probe() {
+      const { sessionId, loading } = useAdminSession();
+      return <span>{loading ? 'loading' : (sessionId ?? 'none')}</span>;
+    }
+
+    render(
+      <AdminSessionProvider>
+        <Probe />
+      </AdminSessionProvider>,
+    );
+
+    expect(await screen.findByText('none')).toBeInTheDocument();
+    expect(localStorage.getItem('staff_vote_admin_session_id')).toBeNull();
   });
 });

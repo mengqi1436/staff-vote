@@ -10,6 +10,9 @@
  *   POST /:id/end    voting|paused → ended（写 endedAt，之后不可逆）
  * 非法流转返回 409 INVALID_SESSION_TRANSITION。
  *
+ * DELETE /:id       删除场次（settings.write）：无答卷才允许，有答卷 409 SESSION_HAS_SHEETS；
+ *                   正在投票 409 SESSION_VOTING；成功后连同本场配置一并物理删除，返回 204。
+ *
  * 票别分配 PUT /:id/ticket-plan：一次提交启用票种全集并自动发码，
  * 权限同时要求 ticketTypes.write 与 tickets.generate（既改票种又发码）。
  *
@@ -23,6 +26,7 @@ import { z } from 'zod';
 import {
   applyTicketPlan,
   createSession,
+  deleteSession,
   listSessions,
   transitionSession,
   updateSession,
@@ -102,6 +106,13 @@ sessionsRouter.patch('/:id', requirePermission('settings.write'), async (req, re
   const { id } = IdParamSchema.parse(req.params);
   const body = UpdateSchema.parse(req.body);
   res.json({ session: await updateSession(id, body, operatorOf(req)) });
+});
+
+/** 删除场次：仅无答卷时允许，连同本场的部门/职工/项点/票种/随机码一并清理。 */
+sessionsRouter.delete('/:id', requirePermission('settings.write'), async (req, res) => {
+  const { id } = IdParamSchema.parse(req.params);
+  await deleteSession(id, operatorOf(req));
+  res.status(204).end();
 });
 
 /**

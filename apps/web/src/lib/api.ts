@@ -602,6 +602,12 @@ export const adminApi = {
     end: (id: string) =>
       request<{ session: AdminSessionDto }>(`/admin/sessions/${id}/end`, { method: 'POST' }),
     /**
+     * 删除场次（物理删除，204）。仅无答卷时允许：
+     * 有答卷返回 409 SESSION_HAS_SHEETS，正在投票返回 409 SESSION_VOTING。
+     * 场次下的部门、职工、被评列、项点、票种、随机码与问卷模板会一并删除。
+     */
+    remove: (id: string) => request<void>(`/admin/sessions/${id}`, { method: 'DELETE' }),
+    /**
      * 票别规划（建场向导第 3 步）：本次提交集合 = 启用票种全集，
      * 逐票种 upsert 并按 count 建批发码（count=0 只建票种）；
      * 启用票种权重合计必须恰为 100，违反返回 422 WEIGHT_SUM。

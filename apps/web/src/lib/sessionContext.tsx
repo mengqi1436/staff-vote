@@ -84,12 +84,13 @@ export function AdminSessionProvider({ children }: { children: ReactNode }) {
     if (sessionId === null && sessions.length === 1) setSessionId(sessions[0]!.id);
   }, [sessionId, sessions, setSessionId]);
 
-  // 持久化的场次已被删除时清掉，避免带着一个不存在的 sessionId 发请求
+  // 持久化的场次已被删除时清掉，避免带着一个不存在的 sessionId 发请求。
+  // 必须等加载结束再判断：sessions 初值是空数组，加载中清空会误删本次选择；
+  // 列表变空（唯一场次被删）同样要清，否则会残留一个已删除的 id。
   useEffect(() => {
-    if (sessionId !== null && sessions.length > 0 && !sessions.some((item) => item.id === sessionId)) {
-      setSessionId(null);
-    }
-  }, [sessionId, sessions, setSessionId]);
+    if (loading || sessionId === null) return;
+    if (!sessions.some((item) => item.id === sessionId)) setSessionId(null);
+  }, [loading, sessionId, sessions, setSessionId]);
 
   const value = useMemo<SessionState>(
     () => ({ sessionId, setSessionId, sessions, loading, reload: () => setTick((n) => n + 1) }),

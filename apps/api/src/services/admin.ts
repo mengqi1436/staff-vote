@@ -294,6 +294,57 @@ export async function transitionSession(
 }
 
 /**
+ * 删除场次（物理删除）。
+ *
+ * 只在「没有答卷」时允许：答卷是历史评分，删掉无法恢复，因此一律 409 拒绝。
+ * 无答卷时，场次下的部门、职工、被评列、项点、票种、批次、随机码与问卷模板
+ * 都只是本案的配置，随场次一并清理，不会牵连其他场次的数据。
+ * 正在投票的场次也拒绝——码已经发出去了，先暂停或结束再删。
+ *
+ * 外键全部是 Restrict，删除顺序必须自底向上，否则数据库直接拒绝。
+ */
+export async function deleteSession(id: string, operator: string): Promise<void> {
+  const current = await prisma.voteSession.findUnique({
+    where: { id },
+    select: { name: true, status: true },
+  });
+  if (!current) throw ApiError.notFound('场次不存在', 'SESSION_NOT_FOUND');
+
+  if (current.status === 'voting') {
+    throw ApiError.conflict('场次正在投票，请先暂停或结束再删除', 'SESSION_VOTING');
+  }
+
+  const sheetCount = await prisma.scoreSheet.count({ where: { sessionId: id } });
+  if (sheetCount > 0) {
+    throw ApiError.conflict(
+      `场次「${current.name}」已收到 ${sheetCount} 份答卷，不能删除（历史评分必须保留）`,
+      'SESSION_HAS_SHEETS',
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // 答卷为空时 score_items 必然为空（外键 sheet → score_sheets 级联），
+    // 这里显式清一遍是为了让顺序在任何历史数据形态下都成立。
+    await tx.$executeRaw`DELETE FROM "score_items" WHERE "sheet_id" IN (SELECT "id" FROM "score_sheets" WHERE "session_id" = ${id})`;
+    await tx.sheetTicketMap.deleteMany({ where: { sessionId: id } });
+    await tx.scoreSheet.deleteMany({ where: { sessionId: id } });
+    await tx.ticket.deleteMany({ where: { sessionId: id } });
+    await tx.ticketBatch.deleteMany({ where: { sessionId: id } });
+    await tx.ticketType.deleteMany({ where: { sessionId: id } });
+    await tx.voteColumn.deleteMany({ where: { sessionId: id } });
+    await tx.criterion.deleteMany({ where: { sessionId: id } });
+    await tx.employee.deleteMany({ where: { sessionId: id } });
+    await tx.department.deleteMany({ where: { sessionId: id } });
+    // 模板表走原生 SQL：Prisma 7.10 对该模型的 API 会生成坏 SQL（见 schema 注释）。
+    // 注意主键全是 text（UUID 由应用生成，列不是 uuid 类型），参数不能加 ::uuid。
+    await tx.$executeRaw`DELETE FROM "session_questionnaire_templates" WHERE "session_id" = ${id}`;
+    await tx.voteSession.delete({ where: { id } });
+  });
+
+  await writeAudit('session.delete', { name: current.name, operator });
+}
+
+/**
  * 场次开始投票前的完整性校验（四类缺项，全部查出而不是查到第一个就停，
  * 管理员一次就能看到所有要补的地方）：
  *   1. 启用部门 ≥1；

@@ -24,7 +24,8 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   POST   /login  { username, password }  → 设置 httpOnly Cookie；用 adminLoginLimiter
  *   POST   /logout
  *   GET    /me
- *   /sessions           GET POST PATCH /:id/start|pause|end（写需 settings.write）；
+ *   /sessions           GET POST PATCH DELETE（写需 settings.write）；
+ *                       DELETE /:id 仅允许删除无答卷的场次（有答卷 409 SESSION_HAS_SHEETS）
  *                       POST /:id/start 前做配置完整性校验（缺项 409 SESSION_INCOMPLETE）
  *   /sessions/:id/ticket-plan PUT  票别分配聚合：提交启用票种全集并发码
  *                       （需 ticketTypes.write + tickets.generate）

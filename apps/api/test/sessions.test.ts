@@ -27,7 +27,7 @@ const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
 const { hashPassword } = await import('../src/lib/password.js');
 const { ALL_PERMISSION_CODES } = await import('../src/lib/permissions.js');
-const { createRole } = await import('./rbac-fixtures.js');
+const { createRole, createAdmin } = await import('./rbac-fixtures.js');
 const { ensureDefaultSession } = await import('./session-fixtures.js');
 
 const describeDb = suiteEnabled ? describe : describe.skip;
@@ -129,6 +129,9 @@ describeDb('场次管理', () => {
     // 按场次逐个清业务数据再删场次（外键 RESTRICT）：发码用例会留下批次与票，
     // 批次的 operator 是管理员用户名，不能按固定前缀清理。
     for (const id of sessionIds) {
+      // 「删除场次」用例会留下答卷夹具：必须先清，否则外键 RESTRICT 挡住后面的删除。
+      await prisma.sheetTicketMap.deleteMany({ where: { sessionId: id } });
+      await prisma.scoreSheet.deleteMany({ where: { sessionId: id } });
       const typeIds = (
         await prisma.ticketType.findMany({ where: { sessionId: id }, select: { id: true } })
       ).map((row) => row.id);
@@ -385,5 +388,68 @@ describeDb('场次管理', () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('SESSION_MISMATCH');
+  });
+
+  describe('删除场次', () => {
+    it('删除无答卷场次：204，场次及其配置数据一并消失', async () => {
+      const id = await newSession(`${TAG}场次-待删除`);
+      await newDepartment(id, `${TAG}待删部门`);
+      expect(await prisma.department.count({ where: { sessionId: id } })).toBeGreaterThan(0);
+
+      const res = await agent.delete(`/api/admin/sessions/${id}`);
+      expect(res.status).toBe(204);
+
+      const list = await agent.get('/api/admin/sessions');
+      expect(list.body.sessions.some((s: { id: string }) => s.id === id)).toBe(false);
+      expect(await prisma.department.count({ where: { sessionId: id } })).toBe(0);
+      expect(await prisma.criterion.count({ where: { sessionId: id } })).toBe(0);
+      expect(await prisma.voteSession.findUnique({ where: { id } })).toBeNull();
+    });
+
+    it('已收答卷的场次不能删除 → 409 SESSION_HAS_SHEETS，数据原样保留', async () => {
+      const id = await newSession(`${TAG}场次-有答卷`);
+      const department = await prisma.department.findFirstOrThrow({ where: { sessionId: id } });
+      const typeId = await newTicketType(id, `${TAG}D1`);
+      await prisma.scoreSheet.create({
+        data: { departmentId: department.id, ticketTypeId: typeId, sessionId: id },
+      });
+
+      const res = await agent.delete(`/api/admin/sessions/${id}`);
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('SESSION_HAS_SHEETS');
+      // 拒绝必须是「什么都没删」：场次、部门、票种都还在
+      expect(await prisma.voteSession.findUnique({ where: { id } })).not.toBeNull();
+      expect(await prisma.department.count({ where: { sessionId: id } })).toBeGreaterThan(0);
+      expect(await prisma.ticketType.count({ where: { sessionId: id } })).toBeGreaterThan(0);
+    });
+
+    it('投票中的场次不能删除 → 409 SESSION_VOTING', async () => {
+      const id = await newSession(`${TAG}场次-投票中删`);
+      await makeStartable(id, `${TAG}D2`);
+      expect((await agent.post(`/api/admin/sessions/${id}/start`)).status).toBe(200);
+
+      const res = await agent.delete(`/api/admin/sessions/${id}`);
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('SESSION_VOTING');
+    });
+
+    it('场次不存在 → 404；无 settings.write 权限 → 403 且数据不动', async () => {
+      const missing = await agent.delete(`/api/admin/sessions/${MISSING_SESSION_ID}`);
+      expect(missing.status).toBe(404);
+
+      // 只给 departments.write：能编辑部门，但不能删场次
+      const viewerRoleId = await createRole(`${TAG}viewer`, '测试-部门管理员', ['departments.write']);
+      await createAdmin(`${TAG}viewer`, PASSWORD, viewerRoleId);
+      const viewer = request.agent(app);
+      await viewer
+        .post('/api/admin/login')
+        .send({ username: `${TAG}viewer`, password: PASSWORD })
+        .expect(200);
+
+      const id = await newSession(`${TAG}场次-无权限删`);
+      const denied = await viewer.delete(`/api/admin/sessions/${id}`);
+      expect(denied.status).toBe(403);
+      expect(await prisma.voteSession.findUnique({ where: { id } })).not.toBeNull();
+    });
   });
 });
