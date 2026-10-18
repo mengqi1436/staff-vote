@@ -122,15 +122,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * 等待「未开放」内容出现。
+ *
+ * 内容是在列车动画结束后才挂载的（GateScene 的 settled 状态），
+ * 因此要放宽超时：jsdom 的 matchMedia 桩固定 matches:false，
+ * 两个媒体查询分支都不命中，只能等 gateMotion 的兜底定时器（约 1.9s）。
+ */
+function findClosedNotice(text: string | RegExp = '当前未开放投票') {
+  return screen.findByText(text, undefined, { timeout: 5000 });
+}
+
 describe('投票入口（Gate）', () => {
   it('未开放时整页提示，且不渲染随机码输入框', async () => {
     fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
     const { container } = renderGate('/');
 
-    expect(await screen.findByText('当前未开放投票')).toBeInTheDocument();
+    expect(await findClosedNotice()).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /进入打分/ })).not.toBeInTheDocument();
-    expectCurrentStep(container, '验证身份');
+    // 未开放时不显示流程步骤条：流程根本没开始，显示「1/3」是误导
+    expect(container.querySelector('.ant-steps')).toBeNull();
   });
 
   it('开放时渲染输入框，链接里的随机码自动填入，提交后存令牌并进入打分表', async () => {
@@ -216,15 +228,36 @@ describe('打分表页（Sheet）', () => {
 });
 
 describe('多场评议（Gate 容错）', () => {
-  it('状态接口场次非 voting 时整页拦截并说明场次名', async () => {
+  it('场次 paused 时拦截，标题按场次状态给「投票已暂停」并点出场次名', async () => {
     fetchMock.mockResolvedValueOnce(
       reply(200, { ...statusBody(true), session: { id: 's1', name: '安顺车站', status: 'paused' } }),
     );
     renderGate('/');
 
-    expect(await screen.findByText('当前场次未开放投票')).toBeInTheDocument();
+    // 后端单场部署时 session 恒非 null，因此标题必须读 session.status，
+    // 不能只因为「有场次名」就笼统说「未开放」——那会给错行动指引
+    expect(await findClosedNotice('投票已暂停')).toBeInTheDocument();
     expect(screen.getByText(/安顺车站/)).toBeInTheDocument();
+    expect(screen.getByText(/场次已暂停，恢复后即可继续/)).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('场次 ended 时标题给「本轮投票已结束」，且不展示时间窗（避免显示还能投的时间）', async () => {
+    fetchMock.mockResolvedValueOnce(
+      reply(200, {
+        ...statusBody(true),
+        // 提前结束：closesAt 还在未来，若展示时间窗会暗示到点后能投
+        opensAt: new Date(Date.now() - 3600_000).toISOString(),
+        closesAt: new Date(Date.now() + 3600_000).toISOString(),
+        session: { id: 's1', name: '安顺车站', status: 'ended' },
+      }),
+    );
+    renderGate('/');
+
+    expect(await findClosedNotice('本轮投票已结束')).toBeInTheDocument();
+    expect(screen.getByText(/本轮评议已归档/)).toBeInTheDocument();
+    // 场次非 voting 时不展示窗口
+    expect(screen.queryByText('结束时间')).not.toBeInTheDocument();
   });
 
   it('状态接口无 session 字段（旧后端）时按原逻辑放行', async () => {
@@ -340,23 +373,29 @@ describe('成功页（Done）', () => {
 });
 
 describe('未开放时的区分（Gate）', () => {
-  it('未开始时说明开始时间，仍然不渲染输入框', async () => {
+  it('未开始时标题改为「投票尚未开始」，并给出开始时间与下一步指引', async () => {
     const startAt = new Date(Date.now() + 3 * 3600_000).toISOString();
     fetchMock.mockResolvedValueOnce(reply(200, { open: false, message: '', opensAt: startAt, closesAt: null }));
     renderGate('/');
 
-    expect(await screen.findByText('当前未开放投票')).toBeInTheDocument();
+    expect(await findClosedNotice('投票尚未开始')).toBeInTheDocument();
+    // 时间窗区块给出具体时刻，副标题给出完整句子
+    expect(screen.getByText('开始时间')).toBeInTheDocument();
     expect(screen.getByText(/投票将于 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 开始/)).toBeInTheDocument();
+    // 空状态必须给出下一步，不能只留一句「未开放」
+    expect(screen.getByText(/请在开放时间内重新打开本页面/)).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /进入打分/ })).not.toBeInTheDocument();
   });
 
-  it('已结束时说明结束时间', async () => {
+  it('已结束时标题改为「本轮投票已结束」，并给出结束时间', async () => {
     const endAt = new Date(Date.now() - 3 * 3600_000).toISOString();
     fetchMock.mockResolvedValueOnce(reply(200, { open: false, message: '', opensAt: null, closesAt: endAt }));
     renderGate('/');
 
-    expect(await screen.findByText(/投票已于 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 结束，感谢参与/)).toBeInTheDocument();
+    expect(await findClosedNotice('本轮投票已结束')).toBeInTheDocument();
+    expect(screen.getByText('结束时间')).toBeInTheDocument();
+    expect(screen.getByText(/投票已于 \d{4}-\d{2}-\d{2} \d{2}:\d{2} 结束，感谢参与/)).toBeInTheDocument();
   });
 
   it('开放时用 .vote-surface 外壳包住页面', async () => {
@@ -365,6 +404,114 @@ describe('未开放时的区分（Gate）', () => {
 
     expect(await screen.findByRole('textbox')).toBeInTheDocument();
     expect(container.querySelector('.vote-surface')).not.toBeNull();
+  });
+});
+
+describe('高铁入场场景（Gate）', () => {
+  it('动画结束前内容不挂载，结束后才出现（本次核心行为）', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
+    const { container } = renderGate('/');
+
+    // 先等状态接口返回、离开 loading（loading 自身是立即渲染的，不属于动画窗口）
+    await waitFor(() => expect(screen.queryByText('正在核对投票状态……')).not.toBeInTheDocument());
+
+    // 此刻列车动画刚开始：内容根本不在 DOM 里，不是「透明」而是「不存在」。
+    // 这条是本轮改动的核心承诺，删掉 settled 逻辑时它必须变红。
+    expect(container.querySelector('.gate-stage')).not.toBeNull();
+    expect(screen.queryByText('当前未开放投票')).not.toBeInTheDocument();
+    // 同时告诉读屏「还在忙」
+    expect(container.querySelector('.gate-scene')).toHaveAttribute('aria-busy', 'true');
+
+    expect(await findClosedNotice()).toBeInTheDocument();
+    // 内容出现后不再 busy
+    expect(container.querySelector('.gate-scene')).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('未开放时渲染列车场景，且装饰层对读屏隐藏、不吃指针', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
+    const { container } = renderGate('/');
+
+    expect(await findClosedNotice()).toBeInTheDocument();
+
+    const stage = container.querySelector('.gate-stage');
+    expect(stage).not.toBeNull();
+    // 纯视觉：不参与读屏，也不拦截点击
+    expect(stage).toHaveAttribute('aria-hidden', 'true');
+    expect(container.querySelector('.gate-train')).not.toBeNull();
+    expect(container.querySelectorAll('.gate-light').length).toBeGreaterThan(10);
+    expect(container.querySelector('.gate-headlight')).not.toBeNull();
+  });
+
+  it('正常投票页不渲染列车，只保留内容（不抢关键操作的注意力）', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(true)));
+    const { container } = renderGate('/');
+
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+    expect(container.querySelector('.gate-content')).not.toBeNull();
+    expect(container.querySelector('.gate-stage')).toBeNull();
+  });
+
+  it('未开放时内容仍在场景之后可读：标题与提示文案不被装饰层替换', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
+    const { container } = renderGate('/');
+
+    // 等内容真正挂载（动画结束后才出现），再断言它落在 .gate-content 内
+    await findClosedNotice();
+
+    const content = container.querySelector('.gate-content');
+    expect(content).not.toBeNull();
+    expect(content).toHaveTextContent('当前未开放投票');
+    // 内容列落在 .gate-content 内，而不是和装饰层平级
+    expect(content!.querySelector('.gate-shell-inner')).not.toBeNull();
+    // 不用卡片容器包内容：入口只有一句话，白框是多余的视觉噪音
+    expect(content!.querySelector('.ant-card')).toBeNull();
+  });
+
+  it('8 辆编组：两端车头 + 6 节车厢 + 两个受电弓，且不画车门', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
+    const { container } = renderGate('/');
+
+    await findClosedNotice();
+
+    const svg = container.querySelector('svg.gate-train-body');
+    expect(svg).not.toBeNull();
+
+    // 8 节 = 2 个车头（01/08 车）+ 6 节中间车厢
+    const headGroups = [...svg!.querySelectorAll('g[transform]')].filter(
+      (g) => g.querySelector(':scope > path.gate-body') !== null,
+    );
+    expect(headGroups).toHaveLength(2);
+
+    const carGroups = [...svg!.querySelectorAll('g[transform]')].filter(
+      (g) => g.querySelector(':scope > rect.gate-body') !== null,
+    );
+    expect(carGroups).toHaveLength(6);
+
+    // 受电弓在 03、06 车
+    expect(svg!.querySelectorAll('.gate-pantograph')).toHaveLength(2);
+    // 缩略侧视里不画车门：1:20 比例下门只是一排小黑块，会破坏车身完整性
+    expect(svg!.querySelectorAll('.gate-door')).toHaveLength(0);
+    expect(svg!.querySelectorAll('.gate-doorway')).toHaveLength(0);
+  });
+
+  it('车头平直端贴车厢、鼻锥朝车外（两端镜像方向相反）', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
+    const { container } = renderGate('/');
+
+    await findClosedNotice();
+
+    const svg = container.querySelector('svg.gate-train-body');
+    const heads = [...svg!.querySelectorAll('g[transform]')].filter(
+      (g) => g.querySelector(':scope > path.gate-body') !== null,
+    );
+    expect(heads).toHaveLength(2);
+
+    // 前车头镜像（scale(-1)）→ 鼻锥朝左；尾车头不镜像 → 鼻锥朝右
+    const transforms = heads.map((g) => g.getAttribute('transform') ?? '');
+    expect(transforms.filter((t) => t.includes('scale(-1'))).toHaveLength(1);
+    expect(transforms.filter((t) => !t.includes('scale(-1'))).toHaveLength(1);
+    // 车灯两端各一个
+    expect(svg!.querySelectorAll('.gate-headlight')).toHaveLength(2);
   });
 });
 

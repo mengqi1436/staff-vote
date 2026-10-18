@@ -107,6 +107,16 @@ components:
 - 不引入动画库，没有弹跳（bounce）keyframes。
 - `prefers-reduced-motion` 兜底保留（global.css 全局）。
 
+**例外：投票入口的高铁主题场景（GSAP）**。这是唯一允许的动画库用法，边界固定如下，不得扩大：
+
+- 只允许出现在 `pages/vote/Gate.tsx` 的入口场景（`components/vote/GateScene.tsx` + `gateMotion.ts`），后台一律不准用。
+- 只动 `transform` / `opacity`，不写 CSS keyframes，不改 `.sheet-excel` 与 `.score-table` 任何版式规则。
+- 必须走 `gsap.matchMedia()` 的 `(prefers-reduced-motion: no-preference)` 分支，`reduce` 时直接落终态、不建补间。
+- 装饰层 `aria-hidden="true"` + `pointer-events: none`：不参与读屏、不挡操作。
+- 场景与内容用「内容居中 + 舞台绝对定位贴底」分离，两者不争布局；窄屏与矮屏（`max-height: 720px` 或 `max-width: 640px`）隐藏舞台，舞台不可见时内容必须立即交付、不许让人干等动画。
+- 未开放状态不用卡片容器：内容直接落在页面背景上，层级靠字号与留白建立。状态标题以**场次状态为主、时间窗为辅**判定（已结束 / 已暂停 / 尚未开始 / 未开放），四种状态给四种行动指引，不许一律说「未开放」。
+- 造型按 CR400AF 量产车实车绘制：银色底 + 黑色车窗带 + 车窗下红色线条（先头车收成箭头形），8 辆编组、转向架外露、车顶受电弓。**蓝色是样板车涂装，不是量产车，不要用**。这是场景自身的写实配色，不参与全局 token 体系。
+
 ## Shapes
 
 全局 `borderRadius: 10`（ConfigProvider 单值，组件圆角由它派生）。
@@ -150,7 +160,7 @@ components:
 
 - 不自造 Apple 规范之外的体系：色板、动效曲线、材质强度都按本文档契约，不各页自行发挥。
 - 不在内容区堆材质，不半透明叠半透明。
-- 不引入动画库、CSS 框架或第二组件库——Apple 化基于 antd 6 组件体系实现。
+- 不引入动画库、CSS 框架或第二组件库——Apple 化基于 antd 6 组件体系实现。唯一例外是投票入口的高铁场景（GSAP），边界见「动效」章节。
 - 不在职工可见文案出现后台术语（票种权重、归一化、批次）。
 - 不用 Alert 承载常驻提示（antd 6 Alert 固定 role="alert"，常驻内容会与动态错误抢唯一 alert 语义；常驻提示用静默样式，动态错误才用 Alert）。
 - 不用 emoji 当图标；图标统一 @ant-design/icons。

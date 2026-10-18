@@ -633,6 +633,311 @@ td.col-comprehensive {
 }
 
 /* =============================================================================
+   投票入口场景：高铁进站（GateScene + components/vote/gateMotion.ts）
+   编排交给 GSAP timeline；这里只定义几何与静态外观。站台、轨道与文字由主色
+   #0066cc 派生；列车是 CR400AF 写实涂装（银灰/黑窗带/红线），属 DESIGN.md
+   记录在案的例外，不参与全局 token 体系。动画只碰 transform / opacity，
+   不写任何 CSS keyframes，reduced-motion 由 gateMotion 的 matchMedia 兜底。
+   ============================================================================= */
+
+/* 内容严格居中：列车绝对定位到视口底部，不参与居中计算 */
+.gate-scene {
+  position: relative;
+  /* dvh 而非 vh：移动浏览器地址栏会算进 100vh，导致内容被推到可视区下方 */
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gate-content {
+  width: 100%;
+}
+
+/* 装饰舞台：贴视口底部，不吃指针事件，纯视觉，不影响操作 */
+.gate-stage {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  height: 230px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* 列车驶入时从左侧外进画，必须裁掉溢出 */
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/*
+ * 空间不足时隐藏场景，保证内容不被压住：
+ *   - 矮屏（笔记本、横屏手机）纵向不够；
+ *   - 窄屏（手机竖屏）列车会被压成一条灰带，且站台线/轨道是固定 px，
+ *     会与按 vw 缩放的列车错位到横穿车身。
+ * 隐藏后 gateMotion 检测到舞台不可见会立即交付内容，不会让人干等。
+ */
+@media (max-height: 720px), (max-width: 640px) {
+  .gate-stage {
+    display: none;
+  }
+}
+
+/* 站台：一条水平细线 + 线下渐隐浅面，暗示月台边缘 */
+.gate-platform {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 40px;
+  height: 1px;
+  background: rgba(0, 102, 204, 0.18);
+}
+
+.gate-platform::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1px;
+  height: 38px;
+  background: linear-gradient(to bottom, rgba(0, 102, 204, 0.05), rgba(0, 102, 204, 0));
+}
+
+/* 轨道：两条平行细线，scaleX 从左侧展开 */
+.gate-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 28px;
+  height: 6px;
+  border-top: 1px solid rgba(0, 102, 204, 0.22);
+  border-bottom: 1px solid rgba(0, 102, 204, 0.22);
+  transform-origin: left center;
+}
+
+/* =============================================================================
+   列车：CR400AF 量产车（见 components/vote/GateScene.tsx）
+   实车涂装依据维基百科「复兴号CR400AF型电力动车组」外觀一节：
+     1. 银色底漆；
+     2. 车窗黑色涂装；
+     3. 车窗下方红色线条，先头车收成箭头形。
+   注意：蓝色是 CR400AF 样板车（0207/0208）的涂装，不是量产车，勿混用。
+   轮廓必须用 SVG 画（流线鼻锥、转向架、受电弓都无法用 div 表达）。
+   ============================================================================= */
+
+.gate-train {
+  position: relative;
+  /*
+   * 8 节编组横向很长（viewBox 3320:200），显示宽度决定整体观感：
+   * 宽度给足单节车厢才有厚度，但不能超出视口，否则两端车头鼻锥被裁。
+   * 92vw 让整列完整入画，两侧各留一点边距。
+   */
+  width: 92vw;
+  max-width: 2400px;
+  margin-bottom: 22px;
+}
+
+.gate-train-body {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* 车身：银色底 + 极淡描边，接近实车铝合金车体的冷灰 */
+.gate-body {
+  fill: #e8eaed;
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-width: 1;
+}
+
+/* 黑色车窗带 */
+.gate-windowband {
+  fill: #1f2328;
+}
+
+/* 车窗：窗带上的浅色玻璃，GSAP 逐个点亮 */
+/* 车窗：窗带上的浅色玻璃。纯静态，不参与动画 */
+.gate-light {
+  fill: rgba(255, 255, 255, 0.72);
+}
+
+/* 红色线条：CR400AF 最醒目的识别色（真实涂装用红，不套用项目主蓝） */
+.gate-belt {
+  fill: #d70015;
+}
+
+/* 裙板与底架：转向架不完全覆盖，下缘露出深色结构 */
+.gate-skirt {
+  fill: #b9bec6;
+}
+
+/* 转向架：构架 + 两个轮对 */
+.gate-bogie rect {
+  fill: #6b7280;
+}
+
+.gate-bogie circle {
+  fill: #3f4650;
+  stroke: #9ca3af;
+  stroke-width: 2;
+}
+
+/* 受电弓：车顶升弓状态 */
+.gate-pantograph rect {
+  fill: #6b7280;
+}
+
+.gate-pantograph path {
+  fill: none;
+  stroke: #6b7280;
+  stroke-width: 4;
+  stroke-linejoin: round;
+}
+
+.gate-pantograph .gate-pantograph-bar {
+  fill: #3f4650;
+}
+
+/* 车头灯：位于鼻锥前缘（SVG 内用 circle，这里只留发光效果） */
+.gate-headlight {
+  fill: #fff;
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.95));
+}
+
+/* =============================================================================
+   投票入口（Gate）：无卡片容器的分层布局
+   之前用 antd Card 包住内容，页面上多出一个 520px 宽的白框。入口本身只有
+   「一句话 + 一个输入框」，白框没有分组价值，反而把注意力从文案上抢走。
+   现在层级只靠三件事建立：字号对比、留白、细分隔线——不用容器边界。
+   ============================================================================= */
+
+/* 外层：撑满视口并居中，本身透明 */
+.gate-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 20px;
+}
+
+/* 内容列：限定阅读宽度，全部居中 */
+/* 内容列：限定中文阅读宽度，全部居中 */
+.gate-shell-inner {
+  width: 100%;
+  max-width: 560px;
+  text-align: center;
+}
+
+/* ---- 未开放状态：六级信息层级 ---- */
+
+/*
+ * 状态徽章：表盘式双层圆，而不是「一个淡色圆点」。
+ *  - 外层实线圆 + 内层虚线环：虚线环读作钟面刻度，让「等待」这件事
+ *    不用文字就成立，也避免大圆里只有一个小图标的空洞感；
+ *  - 图标 28px、深一档主色（#0055aa），在浅蓝底上才压得住 34px 标题；
+ *  - 阴影带 2px 偏移与 12px 模糊（零偏移的彩色光晕只是装饰，不是深度）。
+ */
+.gate-notice-icon {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(0, 102, 204, 0.12), rgba(0, 102, 204, 0.04));
+  border: 1px solid rgba(0, 102, 204, 0.18);
+  color: #0055aa;
+  font-size: 28px;
+  box-shadow: 0 2px 12px rgba(0, 102, 204, 0.14);
+}
+
+/* 内层虚线环：钟面刻度 */
+.gate-notice-icon::after {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  border: 1px dashed rgba(0, 102, 204, 0.22);
+  pointer-events: none;
+}
+
+/* 主标题：全页唯一的大字号。中文标题不加负字距（笔画密会挤） */
+.gate-notice-title.ant-typography {
+  margin: 0 0 12px;
+  font-size: 34px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: normal;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+/* 场次名：介于标题与说明之间，字重中等 */
+.gate-notice-session {
+  margin-bottom: 12px;
+  font-size: 19px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.72);
+}
+
+/*
+ * 说明：次级信息。字号提到 17px（投票端基线 16px 之上，职工可能用手机看），
+ * 颜色从 0.5 提到 0.62——0.5 在浅灰底上只有约 4.0:1，不足 WCAG AA 的 4.5:1。
+ */
+.gate-notice-desc.ant-typography {
+  margin-bottom: 30px;
+  font-size: 17px;
+  line-height: 1.65;
+  color: rgba(0, 0, 0, 0.62);
+}
+
+/* 时间窗：上下细线夹住的键值对，替代原来的灰底块 */
+.gate-notice-times {
+  margin: 0 0 30px;
+  padding: 16px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+
+.gate-notice-times > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.gate-notice-times dt {
+  font-size: 15px;
+  color: rgba(0, 0, 0, 0.62);
+}
+
+.gate-notice-times dd {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+/*
+ * 下一步：层级最弱（字号最小），但可读性不能弱——这段是唯一告诉人
+ * 「该做什么」的文案，字号仍取 15px、颜色 0.62（原 13px / 0.4 只有约 3.1:1，
+ * 既小又淡，实际上等于没写）。
+ */
+.gate-notice-next {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: rgba(0, 0, 0, 0.62);
+  /* 中文长句：严格断行（不在标点前断），并让浏览器均衡分配每行字数，
+     避免放大字号后在词中间硬折（如把「评议」拆成「评 / 议」） */
+  line-break: strict;
+  text-wrap: pretty;
+}
+
+/* =============================================================================
    按压反馈：只给自建可点击元素用，antd 组件自带 active 态
    ============================================================================= */
 
