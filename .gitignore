@@ -22,6 +22,7 @@ apps/web/.impeccable/review/
 # 也不该进代码审查的范围
 .playwright-cli/
 .codegraph/
+.codebase-memory/
 .arts/
 .codeartsdoer/
 .merkle-snapshot.json
