@@ -36,18 +36,18 @@ cp apps/api/.env.example apps/api/.env
 # 建库（超级用户执行 sql/00_roles_and_databases.sql），然后：
 pnpm db:generate
 pnpm db:deploy      # 应用迁移
-pnpm db:seed        # 初始管理员 + 默认票种 A/B/C（权重 50/30/20）+ 设置项
+pnpm db:seed        # 权限目录 + 内置角色 + 管理员 + 设置项（不预置场次与票种）
 
 # 启动（开两个终端；VS Code 用户可直接用「全栈：后端 + 前端」调试配置一键拉起）
-pnpm dev:api        # 后端 http://127.0.0.1:3000
-pnpm dev:web        # 前端 http://localhost:5173（已配 /api 代理到后端）
+pnpm dev:api        # 后端 http://127.0.0.1:15667
+pnpm dev:web        # 前端 http://localhost:15666（已配 /api 代理到后端）
 ```
 
 前端监听所有地址，`localhost`、`127.0.0.1`、局域网 IP 都可访问；
 手机连同一局域网即可打开投票入口检查移动端布局。
 
-- 投票入口：<http://127.0.0.1:5173/>
-- 后台管理：<http://127.0.0.1:5173/admin>
+- 投票入口：<http://127.0.0.1:15666/>
+- 后台管理：<http://127.0.0.1:15666/admin>
 
 ## 目录结构
 

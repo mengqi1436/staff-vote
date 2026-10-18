@@ -7,16 +7,16 @@ export default defineConfig({
     // 显式监听所有地址（含局域网）。
     //
     // 起因：Vite 默认 host 是 'localhost'，在 Windows 上解析为 IPv6 的 ::1，
-    // 于是 http://127.0.0.1:5173 会被拒绝连接（只有 http://localhost:5173 能通），
+    // 于是 http://127.0.0.1:15666 会被拒绝连接（只有 http://localhost:15666 能通），
     // 这是个很难联想到配置的坑。显式 host: true 后两种写法都可用，
     // 同时手机连同一局域网也能打开投票入口验证移动端布局。
     host: true,
-    port: 5173,
+    port: 15666,
     strictPort: true,
     // 开发期把 /api 代理到后端，避免跨域；生产环境由 Nginx 反代同一路径。
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3000',
+        target: 'http://127.0.0.1:15667',
         changeOrigin: true,
       },
     },

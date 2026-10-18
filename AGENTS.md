@@ -8,8 +8,8 @@
 pnpm -r typecheck        # 类型检查（零错误才算过）
 pnpm -r test             # 全部测试
 pnpm -r build            # 两个应用构建
-pnpm dev:api             # 后端 http://127.0.0.1:3000
-pnpm dev:web             # 前端 http://localhost:5173（/api 代理到后端）
+pnpm dev:api             # 后端 http://127.0.0.1:15667
+pnpm dev:web             # 前端 http://localhost:15666（/api 代理到后端）
 pnpm db:generate|deploy|seed|drift   # Prisma 生成/迁移/种子/漂移检查
 ```
 

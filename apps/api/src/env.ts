@@ -8,7 +8,7 @@ import { z } from 'zod';
  */
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  PORT: z.coerce.number().int().min(1).max(65535).default(15667),
   TZ: z.string().default('Asia/Shanghai'),
 
   /** 应用库连接串。生产环境由部署人员填写。 */

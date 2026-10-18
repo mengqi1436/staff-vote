@@ -63,7 +63,7 @@ vi apps/api/.env                   # 见下方「必须填写的变量」
 cd apps/api                        # 以下脚本定义在 apps/api/package.json
 pnpm db:generate                   # 生成 Prisma Client
 pnpm db:deploy                     # 应用迁移（不创建 shadow 库、不重置数据）
-pnpm db:seed                       # 初始管理员 + 默认票种 + 设置项
+pnpm db:seed                       # 权限目录 + 内置角色 + 管理员 + 设置项（不预置场次与票种）
 pnpm build                         # tsc 产出 apps/api/dist
 ```
 
