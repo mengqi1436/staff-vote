@@ -2,11 +2,11 @@
  * 全局部门管理页（/admin/departments）的行为测试（契约 I 的页面部分）。
  *
  * 覆盖：
- *   - 列表渲染：名称/排序/状态文字/创建时间列与「字典口径」说明；
+ *   - 列表渲染：名称/排序/状态文字/创建时间列与「字典说明」说明；
  *   - 新增：主按钮在（departments.write），弹窗提交 create（名称 + 默认排序）；
  *   - 编辑：行内编辑回填表单，保存走 update；
  *   - 启停：开关即改 update({ enabled })，状态有文字不只靠颜色；
- *   - 删除被场次引用 409 ORG_DEPARTMENT_IN_USE：后端原文透出到提示；
+ *   - 删除被评议引用 409 ORG_DEPARTMENT_IN_USE：后端原文透出到提示；
  *   - 只读账号：主按钮不渲染，行内编辑/删除/开关保留但禁用并说明缺哪个权限。
  *
  * 权限的真防线在后端 requirePermission，这里只测前端门控与提交契约。
@@ -85,13 +85,15 @@ beforeEach(() => {
 });
 
 describe('全局部门管理页', () => {
-  it('渲染部门列表与字典口径说明（含停用状态文字）', async () => {
+  it('渲染部门列表与字典说明说明（含停用状态文字）', async () => {
+    const user = userEvent.setup();
     renderPage();
 
     expect(await screen.findByText('办公室')).toBeInTheDocument();
     expect(screen.getByText('财务科')).toBeInTheDocument();
-    // 删除被引用会被拒绝的口径写在页面上（产品原则 4）
-    expect(screen.getByText(/删除被场次引用的部门会被拒绝/)).toBeInTheDocument();
+    // 删除限制的说明收进「部门一览」旁的说明图标，悬停可见（产品原则 4）
+    await user.hover(screen.getByRole('button', { name: '查看说明' }));
+    expect(await screen.findByText(/已经被评议用过的部门不能删除/)).toBeInTheDocument();
     // 状态有文字表意，不靠开关颜色
     expect(screen.getByText('停用')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '创建时间' })).toBeInTheDocument();
@@ -138,10 +140,10 @@ describe('全局部门管理页', () => {
     await waitFor(() => expect(mocks.update).toHaveBeenCalledWith('od1', { enabled: false }));
   }, 20_000);
 
-  it('删除被场次引用（409 ORG_DEPARTMENT_IN_USE）时后端原文透出到提示', async () => {
+  it('删除被评议引用（409 ORG_DEPARTMENT_IN_USE）时后端原文透出到提示', async () => {
     const user = userEvent.setup();
     mocks.remove.mockRejectedValueOnce(
-      new ApiError(409, 'ORG_DEPARTMENT_IN_USE', '该部门已被场次引用，无法删除，请改用停用'),
+      new ApiError(409, 'ORG_DEPARTMENT_IN_USE', '该部门已被评议引用，无法删除，请改用停用'),
     );
     renderPage();
 
@@ -151,7 +153,7 @@ describe('全局部门管理页', () => {
     const confirmButtons = await screen.findAllByRole('button', { name: /^删\s*除$/ });
     await user.click(confirmButtons[confirmButtons.length - 1]!);
 
-    expect(await screen.findByText(/已被场次引用，无法删除/)).toBeInTheDocument();
+    expect(await screen.findByText(/已被评议引用，无法删除/)).toBeInTheDocument();
     // 删除失败不改数据
     expect(mocks.remove).toHaveBeenCalledTimes(1);
   }, 20_000);

@@ -237,7 +237,7 @@ export interface RoleCreateInput {
 export async function createRole(input: RoleCreateInput, operator: string): Promise<RoleDto> {
   const code = input.code.trim();
   if (await prisma.adminRole.findUnique({ where: { code } })) {
-    throw ApiError.conflict(`角色代码 ${code} 已存在`, 'ROLE_CODE_EXISTS');
+    throw ApiError.conflict(`角色标识 ${code} 已存在`, 'ROLE_CODE_EXISTS');
   }
   // 先解析权限再建角色：未知权限码直接 400，不留下一个没有权限的空角色
   const permissionIds = await permissionIdsByCode(input.permissions);

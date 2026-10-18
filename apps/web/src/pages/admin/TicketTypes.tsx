@@ -22,6 +22,7 @@ import { usePolling } from '../../lib/usePolling.js';
 import { describeError, summarizeWeights } from './lib.js';
 import {
   ErrorState,
+  HelpLabel,
   LoadingState,
   PageHeader,
   StaleDataAlert,
@@ -37,9 +38,9 @@ interface TicketTypeForm {
 }
 
 /**
- * 票种与权重管理（评议工作流「发票与票种」组，第 4 步）。
+ * 人员类别与权重管理（评议工作流「发票与人员类别」组，第 4 步）。
  *
- * 关键约束：启用票种的 weightPercent 合计必须恰好为 100，后端保存时会校验。
+ * 关键约束：启用人员类别的 weightPercent 合计必须恰好为 100，后端保存时会校验。
  * 表格上方用 Alert 常驻合计与差额（达标 success / 不达标 error），
  * 让管理员在提交前就看到还差多少；后端拒绝时的差额错误仍经 message 原文回显。
  */
@@ -65,7 +66,7 @@ export function AdminTicketTypes() {
       ? `还差 ${summary.diff}%`
       : `超出 ${-summary.diff}%`;
 
-  // ---- 权重分配：一次改完所有启用票种，再按「先降后升」逐条提交 ----
+  // ---- 权重分配：一次改完所有启用人员类别，再按「先降后升」逐条提交 ----
   const [edits, setEdits] = useState<Record<string, number | null>>({});
   const [savingWeights, setSavingWeights] = useState(false);
 
@@ -90,7 +91,7 @@ export function AdminTicketTypes() {
       : `超出 ${-draftDiff}%`;
 
   /**
-   * 本次要提交的改动：只含变化的票种，按 delta 升序 —— 降权（合计变小，后端恒通过）在前，
+   * 本次要提交的改动：只含变化的人员类别，按 delta 升序 —— 降权（合计变小，后端恒通过）在前，
    * 升权在后。于是中间每一步的合计都不超过 100%，都不会撞上后端「升权后必须正好 100」的 409。
    */
   const collectChanges = (): Array<{ id: string; next: number }> =>
@@ -168,7 +169,7 @@ export function AdminTicketTypes() {
     try {
       if (editing) await adminApi.ticketTypes.update(editing.id, values);
       else await adminApi.ticketTypes.create(values, sessionId);
-      notify.success(editing ? '票种已更新' : '票种已创建');
+      notify.success(editing ? '人员类别已更新' : '人员类别已创建');
       setModalOpen(false);
       refresh();
     } catch (caught) {
@@ -186,7 +187,7 @@ export function AdminTicketTypes() {
       notify.success(checked ? `已启用「${row.name}」` : `已停用「${row.name}」`);
       refresh();
     } catch (caught) {
-      // 启停会改变启用票种权重合计，后端可能因此拒绝；把后端原文直接给管理员
+      // 启停会改变启用人员类别权重合计，后端可能因此拒绝；把后端原文直接给管理员
       notify.error(describeError(caught));
     } finally {
       setTogglingId(null);
@@ -268,7 +269,7 @@ export function AdminTicketTypes() {
             编辑
           </Button>
           <Popconfirm
-            title="删除该票种？"
+            title="删除该人员类别？"
             description="删除即停用：已发出的随机码与历史评分保留，可随时再启用。"
             okText="删除"
             cancelText="取消"
@@ -286,7 +287,7 @@ export function AdminTicketTypes() {
 
   const weightColumns: TableColumnsType<TicketTypeDto> = [
     {
-      title: '票种',
+      title: '人员类别',
       dataIndex: 'name',
       render: (_: unknown, row: TicketTypeDto) => (
         <>
@@ -316,15 +317,15 @@ export function AdminTicketTypes() {
   return (
     <>
       <PageHeader
-        title="票种与权重"
-        description="票种决定计分权重：某票种权重 = 该类投票人对最终得分的贡献占比。启用的票种合计必须为 100%。"
+        title="人员类别与权重"
+        description="人员类别决定计分比重：某一人员类别提交的分数在最终得分里占多少。所有启用人员类别的比重加起来必须正好 100%。"
         extra={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
               刷新
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              新增票种
+              新增人员类别
             </Button>
           </>
         }
@@ -339,23 +340,19 @@ export function AdminTicketTypes() {
             type={balanced ? 'success' : 'error'}
             showIcon
             style={{ marginBottom: 16 }}
-            title={`启用票种权重合计 ${summary.total}%，${summaryTail}`}
-            description={`启用 ${summary.enabledCount} 个 · 停用 ${data.length - summary.enabledCount} 个不计入合计；与系统执行的「启用票种权重合计＝100」规则一致。`}
+            title={`启用人员类别权重合计 ${summary.total}%，${summaryTail}`}
+            description={`启用 ${summary.enabledCount} 个 · 停用 ${data.length - summary.enabledCount} 个不计入合计；合计正好 100% 才能提交，系统按同一条规则校验。`}
           />
 
           <Card
-            title="权重分配"
+            title={
+              <HelpLabel help="权重越高，这一人员类别提交的分数对最终得分影响越大。所有启用人员类别的权重加起来必须正好 100%。调整权重需「管理人员类别与权重」权限。改权重时一次改完所有类别再保存：保存时系统先降低、再提高，中途合计不会超过 100%，所以不会触发「合计不得超过 100%」的限制。">
+                权重分配
+              </HelpLabel>
+            }
             style={{ marginBottom: 16 }}
             extra={<Typography.Text type="secondary">合计必须恰好 100%</Typography.Text>}
           >
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-              title="一次改完再保存，系统按「先降权、后升权」逐条提交"
-              description="调整权重需「管理票种与权重」权限。降权先提交、升权后提交，中间每一步的合计都不会超过 100%，因此不会撞上「合计不得超过 100%」的上限；在单行编辑里改权重撞到该上限时，回到这里一次改完即可。"
-            />
-
             <Table<TicketTypeDto>
               rowKey="id"
               size="small"
@@ -366,7 +363,7 @@ export function AdminTicketTypes() {
                 emptyText: (
                   <Empty
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="没有启用的票种。先在下方一览里启用票种，才能分配权重"
+                    description="没有启用的人员类别。先在下方一览里启用人员类别，才能分配权重"
                   />
                 ),
               }}
@@ -401,39 +398,13 @@ export function AdminTicketTypes() {
           </Card>
 
           <Card
-            title="票种一览"
+            title={
+              <HelpLabel help="停用的人员类别不计入权重合计、也不参与计分，但已发出的随机码和历史评分都保留，仍可导出。新建人员类别时权重可以先低于 100%，把人员类别建齐后再逐个调整。删除只是停用：历史随机码和评分表都还引用着它，所以列表里永久保留记录。已发＝已经生成多少张随机码；已用＝已经提交投票、用掉了多少张；未用＝已发 − 已用 − 已作废。">
+                人员类别一览
+              </HelpLabel>
+            }
             extra={<Typography.Text type="secondary">单位：张</Typography.Text>}
           >
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-              title="口径说明"
-              description={
-                <ul style={{ margin: 0, paddingLeft: 18 }}>
-                  <li>
-                    系统按「启用票种权重合计＝100」把关，停用票种一律不计入合计；
-                    合计提示与实际执行口径一致，避免按两个不同的数字做决定。
-                  </li>
-                  <li>
-                    新建票种时可以先低于 100%（先建齐票种再逐个调权）；降权或停用会先腾出空间；
-                    升权后合计不等于 100% 会被拒绝并提示差额。
-                  </li>
-                  <li>合计与差额随列表实时重算，页面不轮询，保存或启停后自动刷新。</li>
-                  <li>
-                    启用且合计为 100% 的票种参与计分；停用票种不参与计分，
-                    但已发出的随机码与历史评分保留，仍可导出。
-                  </li>
-                  <li>已发＝已生成的随机码数；已用＝已提交投票并核销的码数；未用＝已发 − 已用 − 已作废。</li>
-                  <li>权重仅对启用票种生效；「停用」为文字状态，不靠颜色单独表意。</li>
-                  <li>
-                    删除即停用：历史随机码与评分表都引用票种，彻底删除会毁掉历史数据，
-                    因此列表永久保留记录。
-                  </li>
-                </ul>
-              }
-            />
-
             <Table<TicketTypeDto>
               rowKey="id"
               size="small"
@@ -446,7 +417,7 @@ export function AdminTicketTypes() {
                 emptyText: (
                   <Empty
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="尚未配置票种。至少需要配置一个票种，投票入口才能发码登录"
+                    description="尚未配置人员类别。至少需要配置一个人员类别，投票入口才能发码登录"
                   />
                 ),
               }}
@@ -459,7 +430,7 @@ export function AdminTicketTypes() {
       ) : null}
 
       <Modal
-        title={editing ? `编辑票种：${editing.name}` : '新增票种'}
+        title={editing ? `编辑人员类别：${editing.name}` : '新增人员类别'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={() => void handleSubmit()}
@@ -471,9 +442,8 @@ export function AdminTicketTypes() {
         <Form<TicketTypeForm> form={form} layout="vertical" requiredMark={false}>
           <Form.Item
             name="code"
-            label="代码"
-            rules={[{ required: true, message: '请输入票种代码' }]}
-            extra="用于在发放与统计中区分票种，建议用简短英文或数字，例如 A、B、01"
+            label={<HelpLabel help="用于发放和统计时区分人员类别，建议用简短英文或数字，比如 A、B、01。">代码</HelpLabel>}
+            rules={[{ required: true, message: '请输入人员类别代码' }]}
           >
             <Input placeholder="例如：A" maxLength={32} />
           </Form.Item>
@@ -481,21 +451,27 @@ export function AdminTicketTypes() {
           <Form.Item
             name="name"
             label="名称"
-            rules={[{ required: true, message: '请输入票种名称' }]}
+            rules={[{ required: true, message: '请输入人员类别名称' }]}
           >
             <Input placeholder="例如：领导班子" maxLength={64} />
           </Form.Item>
 
           <Form.Item
             name="weightPercent"
-            label="权重（%）"
+            label={
+              <HelpLabel help="比重越高，这类投票人的打分对最终得分影响越大。只有启用的人员类别计入合计，所有启用人员类别的权重加起来要正好 100%。">
+                权重（%）
+              </HelpLabel>
+            }
             rules={[{ required: true, message: '请输入权重' }]}
-            extra="仅对启用的票种生效；启用票种权重合计不得超过 100，目标值为 100"
           >
             <InputNumber min={0} max={100} precision={0} style={{ width: '100%' }} suffix="%" />
           </Form.Item>
 
-          <Form.Item name="sortOrder" label="排序" extra="数字小的排在前面">
+          <Form.Item
+            name="sortOrder"
+            label={<HelpLabel help="数字小的排在前面，决定列表和发放时的先后顺序。">排序</HelpLabel>}
+          >
             <InputNumber min={0} precision={0} style={{ width: '100%' }} />
           </Form.Item>
 

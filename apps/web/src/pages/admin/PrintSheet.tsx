@@ -106,7 +106,7 @@ export function AdminPrintSheet() {
       </Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <span style={{ fontSize: 12, color: 'rgba(0, 0, 0, 0.45)' }}>
-          打印建议：A4 横向、页边距「窄」；表格线是边框，与「背景图形」开关无关。
+          打印提示：选 A4 横向、页边距「窄」；表格线是实线边框，不开「背景图形」也能打印出来。
         </span>
         <Button type="primary" icon={<PrinterOutlined />} onClick={() => window.print()}>
           打印 / 另存为 PDF
@@ -121,7 +121,7 @@ export function AdminPrintSheet() {
         <style>{PRINT_STYLE}</style>
         {toolbar}
         <div style={{ maxWidth: 720, margin: '0 auto', padding: 32 }}>
-          <Card title="缺少部门参数">
+          <Card title="请先选择部门">
             <p style={{ margin: '0 0 16px' }}>
               正式打分表按部门生成：请先进入场次工作台的「结果导出」页签选定部门，再点「打印打分表」进入本页。
             </p>

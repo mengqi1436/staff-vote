@@ -1,24 +1,24 @@
 import type { DepartmentBrief, VoteTicketTypeDto } from '../../lib/api.js';
 
 /**
- * 投票会话的展示数据缓存。
+ * 投票登录状态的展示数据缓存。
  *
  * 令牌本身由 lib/api.ts 管理（同样存在 sessionStorage，关掉标签即失效）。
- * 这里只缓存 session 接口返回的票种与部门列表 —— 没有它，打分表页一刷新
+ * 这里只缓存 session 接口返回的人员类别与部门列表 —— 没有它，打分表页一刷新
  * 就会因为拿不到部门列表而被退回入口，已经填了一半的职工会白填。
  */
 
 const KEY = 'staff_vote_session_info';
 
-/** 缓存内容：票种、部门列表与所在场次（场次为多场评议新增，旧后端没有，恒可缺省）。 */
+/** 缓存内容：人员类别、部门列表与所在评议（评议为多场评议新增，旧后端没有，恒可缺省）。 */
 export interface CachedVoteSession {
   ticketType: VoteTicketTypeDto;
   departments: DepartmentBrief[];
-  /** 所在场次；旧后端不返回该字段，恒为 undefined */
-  session?: { id: string; name: string; status: string; scoreScope?: 'person' | 'both' };
+  /** 所在评议；旧后端不返回该字段，恒为 undefined */
+  session?: { id: string; name: string; status: string; scoreScope?: 'person' | 'workshop' | 'both' };
 }
 
-/** 写入缓存（入口页拿到会话后调用）。 */
+/** 写入缓存（入口页拿到登录状态后调用）。 */
 export function saveVoteSessionInfo(info: CachedVoteSession): void {
   sessionStorage.setItem(KEY, JSON.stringify(info));
 }
@@ -38,7 +38,7 @@ export function readVoteSessionInfo(): CachedVoteSession | null {
     return {
       ticketType: parsed.ticketType,
       departments: parsed.departments,
-      // 场次是可选字段：旧缓存/旧后端没有就不带，调用方必须容错
+      // 评议是可选字段：旧缓存/旧后端没有就不带，调用方必须容错
       session: parsed.session,
     };
   } catch {

@@ -38,13 +38,13 @@ import {
 import { IdParamSchema, operatorOf } from './helpers.js';
 
 const RoleCreateSchema = z.object({
-  code: z.string().trim().min(1, '请输入角色代码').max(64),
+  code: z.string().trim().min(1, '请输入角色标识').max(64),
   name: z.string().trim().min(1, '请输入角色名称').max(64),
   description: z.string().trim().max(200).nullish(),
   permissions: z.array(z.string().min(1)).default([]),
 });
 
-/** 刻意没有 code：角色代码是权限判定的锚点，随请求体传进来也会被剥掉。 */
+/** 刻意没有 code：角色标识是权限判定的锚点，随请求体传进来也会被剥掉。 */
 const RolePatchSchema = z.object({
   name: z.string().trim().min(1, '请输入角色名称').max(64).optional(),
   description: z.string().trim().max(200).nullish(),

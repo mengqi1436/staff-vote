@@ -22,9 +22,9 @@ export interface VoteWindowState {
   open: boolean;
   /** 给前端直接显示的文案 */
   message: string;
-  /** 场次计划开放时间（未设置则为 null），前端可提前告知职工 */
+  /** 评议计划开放时间（未设置则为 null），前端可提前告知职工 */
   opensAt: string | null;
-  /** 场次开放截止时间（未设置则为 null） */
+  /** 评议开放截止时间（未设置则为 null） */
   closesAt: string | null;
 }
 

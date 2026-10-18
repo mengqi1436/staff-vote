@@ -9,7 +9,6 @@
  * 按钮藏起来不等于接口安全。
  */
 import { configure, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { MemoryRouter } from 'react-router';
 import type { ReactElement } from 'react';
@@ -58,6 +57,30 @@ vi.mock('../../../lib/api.js', async () => {
         remove: vi.fn(),
         import: vi.fn(),
       },
+      /** 职工页已改为人员管理：数据源是全局人员目录 */
+      staffDirectory: {
+        list: vi.fn(async () => [
+          {
+            id: 's1',
+            employeeNo: '1001',
+            name: '张三',
+            gender: '男',
+            age: 35,
+            title: '高级工程师',
+            orgDepartmentId: 'od1',
+            orgDepartmentName: '贵阳西车间',
+            enabled: true,
+          },
+        ]),
+        create: vi.fn(),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+      orgDepartments: {
+        list: vi.fn(async () => ({
+          departments: [{ id: 'od1', name: '贵阳西车间', sortOrder: 1, enabled: true }],
+        })),
+      },
       criteria: {
         list: vi.fn(async () => [
           { id: 'c1', name: '政治素质', minScore: 0, maxScore: 100, sortOrder: 1, enabled: true },
@@ -76,7 +99,6 @@ vi.mock('../../../lib/api.js', async () => {
   };
 });
 
-const { ApiError } = await import('../../../lib/api.js');
 const { AdminDepartments } = await import('../Departments.js');
 const { AdminEmployees } = await import('../Employees.js');
 const { AdminSettings } = await import('../Settings.js');
@@ -111,16 +133,17 @@ describe('后台三页写操作权限门控', () => {
     expect(screen.getByRole('button', { name: /刷\s*新/ })).toBeInTheDocument();
   });
 
-  it('职工页：有权限渲染「新增职工」与导入入口，只读账号两者都不渲染', async () => {
+  it('人员管理页：有权限渲染「新增人员」，只读账号不渲染', async () => {
     const granted = renderPage(<AdminEmployees />, ALL_PERMISSIONS);
-    expect(await screen.findByRole('button', { name: /新增职工/ })).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /导入 Excel\/CSV/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /新增人员/ })).toBeInTheDocument();
     granted.unmount();
 
     renderPage(<AdminEmployees />, []);
     expect(await screen.findByText('张三')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /新增职工/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /导入 Excel\/CSV/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /新增人员/ })).not.toBeInTheDocument();
+    // 读操作不受影响：刷新与搜索仍在
+    expect(screen.getByRole('button', { name: /刷\s*新/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /搜\s*索/ })).toBeInTheDocument();
   });
 
   it('设置页：有权限渲染「保存设置」，只读账号不渲染', async () => {
@@ -130,7 +153,7 @@ describe('后台三页写操作权限门控', () => {
 
     renderPage(<AdminSettings />, []);
     // 先等数据到货，避免把「还在加载」误判成「保存按钮被隐藏」
-    expect(await screen.findByLabelText('系统标题')).toBeInTheDocument();
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
     expect(screen.queryAllByRole('button', { name: /保\s*存设置/ })).toHaveLength(0);
   });
 
@@ -167,9 +190,10 @@ describe('后台三页写操作权限门控', () => {
     for (const button of removes) expect(button).toBeEnabled();
   });
 
-  it('职工页：只读账号的行内开关同样保留但禁用', async () => {
+  it('人员管理页：只读账号的行内编辑/停用保留但禁用', async () => {
     renderPage(<AdminEmployees />, []);
-    expect(await screen.findByRole('switch', { name: /停用「张三」/ })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: /编\s*辑/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /停\s*用/ })).toBeDisabled();
   });
 
   // ---------------------------------------------------------------------------

@@ -52,7 +52,7 @@ model VoteSession {
   closesAt        DateTime?     @map("closes_at") @db.Timestamptz(3)
   /// 所属全局部门（字典）。空 = 历史场次，建场次向导之前的存量数据。
   orgDepartmentId String?       @map("org_department_id")
-  /// 打分范围：person = 仅个人问卷；both = 个人 + 车间两张问卷都要打分（投票端两表齐填才核销）。
+  /// 打分范围：person = 只评负责人；workshop = 只评车间；both = 两张问卷齐交才核销。
   scoreScope      String        @default("person") @map("score_scope")
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
@@ -84,8 +84,33 @@ model OrgDepartment {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   sessions VoteSession[]
+  staffEntries StaffDirectoryEntry[]
 
   @@map("org_departments")
+}
+
+/// 全局人员目录。人员数据的唯一真源，由外部系统定期推送同步（见 staffDirectory.sync）。
+/// 与场次内的 employees 副本分工：本表跨场次复用、可被问卷选人全局搜索；
+/// 副本只承载「这一场次里选了谁」的打印与统计口径。
+model StaffDirectoryEntry {
+  id              String   @id @default(uuid(7))
+  /// 工号。同步的幂等键——姓名会重名，不能作键（现有 Excel 导入按姓名去重是历史局限）。
+  employeeNo      String   @unique @map("employee_no")
+  name            String
+  gender          String?
+  age             Int?
+  title           String?
+  /// 所属车间，挂全局部门字典；同步时按部门名称匹配。
+  orgDepartmentId String?  @map("org_department_id")
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  orgDepartment OrgDepartment? @relation(fields: [orgDepartmentId], references: [id], onDelete: Restrict)
+
+  @@index([orgDepartmentId])
+  @@index([name])
+  @@map("staff_directory")
 }
 
 /// 随机码状态。用数据库原生 enum，避免字符串字面量漂移。
@@ -222,6 +247,9 @@ model Employee {
   id           String   @id @default(uuid(7))
   departmentId String   @map("department_id")
   sessionId    String   @map("session_id")
+  /// 工号。来自全局人员目录（StaffDirectoryEntry.employeeNo），由目录带入时写入；
+  /// 手工新增/Excel 导入的历史行为没有工号，保持可空。同一场次内唯一，作为带入幂等键。
+  employeeNo   String?  @map("employee_no")
   name         String
   /// 性别：男/女，可空（导入的名单可能缺省）
   gender       String?
@@ -243,6 +271,7 @@ model Employee {
 
   @@index([departmentId])
   @@index([sessionId])
+  @@unique([sessionId, employeeNo])
   @@map("employees")
 }
 

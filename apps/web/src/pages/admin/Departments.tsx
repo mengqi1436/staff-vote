@@ -22,6 +22,7 @@ import { usePolling } from '../../lib/usePolling.js';
 import { describeError } from './lib.js';
 import {
   ErrorState,
+  HelpLabel,
   LoadingState,
   PageHeader,
   StaleDataAlert,
@@ -41,7 +42,7 @@ interface DepartmentForm {
  *
  * 部门是打分表的范围（一码只评一个部门）。已产生评分数据的部门不能物理删除，
  * 后端会返回冲突；因此删除即「停用」（软删除）：停用后历史评分仍可读、
- * 结果页仍可导出，可随时再启用。口径用 Alert 写在表格上方（产品原则 4）。
+ * 结果页仍可导出，可随时再启用。说明用 Alert 写在表格上方（产品原则 4）。
  */
 export function AdminDepartments() {
   const { sessionId } = useAdminSession();
@@ -201,7 +202,7 @@ export function AdminDepartments() {
     <>
       <PageHeader
         title="部门管理"
-        description="部门是被评议的集合，同时也是投票时选择的范围（一张票只评一个部门）。"
+        description="投票时按部门分组评议，一张票只评一个部门。"
         extra={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
@@ -233,21 +234,14 @@ export function AdminDepartments() {
       {!data && error ? <ErrorState error={error} onRetry={refresh} /> : null}
 
       {data ? (
-        <Card title="部门一览" extra={`共 ${data.length} 个`}>
-          {/* 软删除语义与排序口径（产品原则 4）：内容保留，形式改为 Alert */}
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            title="删除即停用"
-            description={
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
-                <li>停用后不再出现在投票入口，历史评分仍可导出，可随时再启用。</li>
-                <li>重命名不影响已有评分数据的归属。</li>
-                <li>排序数字小的排在前面，决定部门在投票入口与结果页中的顺序。</li>
-              </ul>
-            }
-          />
+        <Card
+          title={
+            <HelpLabel help="删除其实是停用：停用后不再出现在投票入口，历史评分仍可导出，也能随时再启用。改名字不影响已有的评分记录。排序数字小的排在前面，决定部门在投票入口和结果页里的先后顺序。">
+              部门一览
+            </HelpLabel>
+          }
+          extra={`共 ${data.length} 个`}
+        >
           <Table<DepartmentRow>
             rowKey="id"
             loading={loading}
@@ -280,7 +274,11 @@ export function AdminDepartments() {
           >
             <Input placeholder="例如：办公室" maxLength={64} />
           </Form.Item>
-          <Form.Item name="sortOrder" label="排序" extra="数字小的排在前面" style={{ marginBottom: 0 }}>
+          <Form.Item
+            name="sortOrder"
+            label={<HelpLabel help="数字小的排在前面，决定部门在投票入口和结果页里的先后顺序。">排序</HelpLabel>}
+            style={{ marginBottom: 0 }}
+          >
             <InputNumber min={0} precision={0} style={{ width: '100%' }} />
           </Form.Item>
         </Form>

@@ -26,19 +26,19 @@ export function formatDate(value: string | null | undefined): string {
 }
 
 export interface WeightSummary {
-  /** 启用票种的权重合计 */
+  /** 启用人员类别的权重合计 */
   total: number;
   /** 距 100 的差额：正数表示还差多少，负数表示超出多少 */
   diff: number;
-  /** 启用票种数量 */
+  /** 启用人员类别数量 */
   enabledCount: number;
 }
 
 /**
- * 汇总启用票种的权重。
+ * 汇总启用人员类别的权重。
  *
- * 后端校验的是「启用票种权重合计 = 100」，因此停用票种一律不计入，
- * 否则管理员会被一个与后端口径不同的数字误导。
+ * 后端校验的是「启用人员类别权重合计 = 100」，因此停用人员类别一律不计入，
+ * 否则管理员会被一个与后端说明不同的数字误导。
  */
 export function summarizeWeights(
   types: Array<{ weightPercent: number; enabled: boolean }>,
@@ -51,12 +51,12 @@ export function summarizeWeights(
 /**
  * 统一提取错误文案：后端 zod 字段明细拼在消息后面，
  * 让管理员一眼知道是哪个字段不合法，而不是只看「请求失败」。
- * SESSION_REQUIRED（多场时未选场次）单独给指引文案，落到「请先选择场次」这一个动作上。
+ * SESSION_REQUIRED（多场时未选评议）单独给指引文案，落到「请先选择评议」这一个动作上。
  */
 export function describeError(caught: unknown, fallback = '操作失败，请重试'): string {
   if (!(caught instanceof Error)) return fallback;
   if (caught instanceof ApiError) {
-    if (caught.code === 'SESSION_REQUIRED') return '请先选择场次';
+    if (caught.code === 'SESSION_REQUIRED') return '请先选择评议';
     if (caught.fields?.length) {
       const detail = caught.fields.map((field) => `${field.path}: ${field.message}`).join('；');
       return `${caught.message}（${detail}）`;

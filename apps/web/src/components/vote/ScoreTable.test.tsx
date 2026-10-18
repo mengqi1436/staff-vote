@@ -8,7 +8,7 @@ import type { VoteCriterionDto } from '../../lib/api.js';
 /**
  * 打分表的测试。
  *
- * 表形与 docs/参考表.xlsx 一致：行 = 评价项点，列 = 被评列。
+ * 表形与 docs/参考表.xlsx 一致：行 = 评议项目，列 = 被评议人列。
  * 这里刻意用受控外壳（Harness）而不是直接渲染组件：打分表本身只负责渲染与即时标红，
  * 「填满且合法才能提交」是页面用 collectScoreErrors 做的门禁，两者一起才是职工真实走的路。
  */
@@ -23,7 +23,7 @@ const VOTE_COLUMNS: VoteColumnBrief[] = [
   { id: 'v2', name: '党支部书记', employeeName: null },
 ];
 
-/** 单元格位置：[项点行, 被评列]。 */
+/** 单元格位置：[评议项目行, 被评议人列]。 */
 function cellAt(row: number, col: number): HTMLInputElement {
   const input = document.querySelector<HTMLInputElement>(`[data-row="${row}"][data-col="${col}"]`);
   if (input === null) throw new Error(`没有找到第 ${row} 行第 ${col} 列的输入框`);
@@ -54,8 +54,8 @@ function Harness({
   voteColumns = VOTE_COLUMNS,
   questionnaireType = 'person',
   headerNote = '附件1-1',
-  title = 'xx车间负责人评价问卷',
-  footerNote = '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+  title = 'xx车间负责人评价打分表',
+  footerNote = '填写说明：每一条评议项目满分20分，弃权、不填视为0分。',
   onSubmit = () => undefined,
 }: HarnessProps) {
   const [values, setValues] = useState<ScoreValues>({});
@@ -101,20 +101,20 @@ function Harness({
 }
 
 describe('ScoreTable 渲染（参考表版式）', () => {
-  it('抬头、表标题、序号列、项点行、填写说明都按参考表渲染', () => {
+  it('抬头、表标题、序号列、评议项目行、填写说明都按参考表渲染', () => {
     render(<Harness />);
 
     // 抬头与标题（都在表格上方，无框线）
     expect(screen.getByText('附件1-1')).toBeInTheDocument();
-    expect(screen.getByText('xx车间负责人评价问卷')).toBeInTheDocument();
-    // 序号列 + 项点列表头（由两行文字组成）
+    expect(screen.getByText('xx车间负责人评价打分表')).toBeInTheDocument();
+    // 序号列 + 评议项目列表头（由两行文字组成）
     expect(screen.getByRole('columnheader', { name: '序号' })).toBeInTheDocument();
     expect(screen.getByText('职务与姓名')).toBeInTheDocument();
-    expect(screen.getByText('评价项点')).toBeInTheDocument();
-    // 被评列就是列头
+    expect(screen.getByText('评议项目')).toBeInTheDocument();
+    // 被评议人列就是列头
     expect(screen.getByRole('columnheader', { name: '主任' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '党支部书记' })).toBeInTheDocument();
-    // 行 = 项点（含描述）
+    // 行 = 评议项目（含描述）
     expect(screen.getByRole('rowheader', { name: /政治素质/ })).toBeInTheDocument();
     expect(screen.getByText('信念坚定、对党忠诚。')).toBeInTheDocument();
     expect(screen.getByRole('rowheader', { name: /敬业担当/ })).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe('ScoreTable 渲染（参考表版式）', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
-  it('个人问卷的表头是两行：列名只占第一行，第二行留空；序号与项点跨两行', () => {
+  it('个人打分表的表头是两行：列名只占第一行，第二行留空；序号与评议项目跨两行', () => {
     const { container } = render(<Harness />);
     const headRows = container.querySelectorAll('.score-table thead tr');
     // 附件行 + 标题行 + 表头两行
@@ -133,13 +133,13 @@ describe('ScoreTable 渲染（参考表版式）', () => {
 
     const [captionRow, titleRow, firstHeadRow, secondHeadRow] = headRows;
     expect(captionRow?.querySelector('th')?.textContent).toBe('附件1-1');
-    expect(titleRow?.querySelector('th')?.textContent).toBe('xx车间负责人评价问卷');
+    expect(titleRow?.querySelector('th')?.textContent).toBe('xx车间负责人评价打分表');
 
-    // 第一行：序号(rowSpan=2) + 项点(rowSpan=2) + 各被评列
+    // 第一行：序号(rowSpan=2) + 评议项目(rowSpan=2) + 各被评议人列
     const first = [...(firstHeadRow?.children ?? [])] as HTMLTableCellElement[];
     expect(first.map((cell) => cell.textContent)).toEqual([
       '序号',
-      '职务与姓名评价项点',
+      '职务与姓名评议项目',
       '主任',
       '党支部书记',
     ]);
@@ -147,24 +147,24 @@ describe('ScoreTable 渲染（参考表版式）', () => {
     expect(first[1]?.rowSpan).toBe(2);
     expect(first[2]?.rowSpan).toBe(1);
 
-    // 第二行只有各被评列的空格，数量与列数一致
+    // 第二行只有各被评议人列的空格，数量与列数一致
     expect(secondHeadRow?.children).toHaveLength(2);
 
-    // 「职务与姓名」靠右、「评价项点」靠左（参考表用两行错位代替斜线）
+    // 「职务与姓名」靠右、「评议项目」靠左（参考表用两行错位代替斜线）
     expect(first[1]?.querySelector('.head-name')).not.toBeNull();
     expect(first[1]?.querySelector('.head-criterion')).not.toBeNull();
   });
 
-  it('个人问卷表头第二行显示职务对应的被评人姓名（未选人为空）', () => {
+  it('个人打分表表头第二行显示职务对应的被评议人姓名（未选人为空）', () => {
     const { container } = render(<Harness />);
 
     const headRows = container.querySelectorAll('.score-table thead tr');
-    // 表头第二行只有被评列的姓名格（序号与斜线格跨行）；抬头行数由 harness 默认值决定，取最后一行
+    // 表头第二行只有被评议人列的姓名格（序号与斜线格跨行）；抬头行数由 harness 默认值决定，取最后一行
     const names = [...(headRows[headRows.length - 1]?.children ?? [])].map((cell) => cell.textContent);
     expect(names).toEqual(['张三', '']);
   });
 
-  it('车间问卷的表头是单行「序号 / 项点 / 得分」', () => {    const { container } = render(
+  it('车间打分表的表头是单行「序号 / 评议项目 / 得分」', () => {    const { container } = render(
       <Harness
         questionnaireType="workshop"
         voteColumns={[{ id: 'v9', name: '得分', employeeName: null }]}
@@ -174,9 +174,9 @@ describe('ScoreTable 渲染（参考表版式）', () => {
     const headRows = container.querySelectorAll('.score-table thead tr');
     expect(headRows).toHaveLength(3);
     const headCells = [...(headRows[2]?.children ?? [])] as HTMLTableCellElement[];
-    expect(headCells.map((cell) => cell.textContent)).toEqual(['序号', '项点', '得分']);
+    expect(headCells.map((cell) => cell.textContent)).toEqual(['序号', '评议项目', '得分']);
     expect(headCells.every((cell) => cell.rowSpan === 1)).toBe(true);
-    // 车间问卷的表格带 workshop 类（列头字号用 12pt 那一档）
+    // 车间打分表的表格带 workshop 类（列头字号用 12pt 那一档）
     expect(container.querySelector('.score-table')?.classList.contains('workshop')).toBe(true);
   });
 
@@ -184,13 +184,13 @@ describe('ScoreTable 渲染（参考表版式）', () => {
     render(<Harness headerNote="" title="" footerNote="   " />);
 
     expect(screen.queryByText('附件1-1')).not.toBeInTheDocument();
-    expect(screen.queryByText('xx车间负责人评价问卷')).not.toBeInTheDocument();
-    // 表头仍然是完整的：序号 + 项点 + 被评列
+    expect(screen.queryByText('xx车间负责人评价打分表')).not.toBeInTheDocument();
+    // 表头仍然是完整的：序号 + 评议项目 + 被评议人列
     expect(screen.getByRole('columnheader', { name: '序号' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '主任' })).toBeInTheDocument();
   });
 
-  it('按项点渲染行、按被评列渲染列，每格带 min/max/step', () => {
+  it('按评议项目渲染行、按被评议人列渲染列，每格带 min/max/step', () => {
     render(<Harness />);
 
     // 2 行 × 2 列
@@ -207,7 +207,7 @@ describe('ScoreTable 渲染（参考表版式）', () => {
     expect(second).toHaveAttribute('max', '20');
   });
 
-  it('每格的可访问名称同时点明项点与被评列', () => {
+  it('每格的可访问名称同时点明评议项目与被评议人列', () => {
     render(<Harness />);
 
     expect(cellAt(0, 0)).toHaveAttribute('aria-label', '第 1 项 政治素质 —— 主任');
@@ -300,7 +300,7 @@ describe('填满且合法才能提交', () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />);
 
-    // 行是项点、列是被评列：c1 区间 0–10，c2 区间 5–20
+    // 行是评议项目、列是被评议人列：c1 区间 0–10，c2 区间 5–20
     fill(0, 0, '8');
     fill(0, 1, '10');
     fill(1, 0, '6');
@@ -312,7 +312,7 @@ describe('填满且合法才能提交', () => {
     expect(cellInputs().some((input) => input.classList.contains('invalid'))).toBe(false);
   });
 
-  it('有小数或越界时拦下提交并指到具体项点与被评列', () => {
+  it('有小数或越界时拦下提交并指到具体评议项目与被评议人列', () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />);
 
@@ -343,7 +343,7 @@ describe('validateScore', () => {
 });
 
 describe('打分表的无障碍关联', () => {
-  it('每格有稳定的锚点 id，并用 aria-describedby 关联该项点的区间说明', () => {
+  it('每格有稳定的锚点 id，并用 aria-describedby 关联该评议项目的区间说明', () => {
     render(<Harness />);
 
     const cell = cellAt(0, 0);

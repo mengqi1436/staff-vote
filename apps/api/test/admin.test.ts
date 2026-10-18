@@ -10,7 +10,7 @@
  * 不做全表清空。因此即使被指向与别的测试文件相同的库，也不会清掉别人的夹具。
  * 票种权重是全局约束，相关用例先读取当前启用合计再构造场景，两种库上都能跑。
  *
- * 覆盖：鉴权、登录/登出、票种权重合计、发码/作废/批次、导出 xlsx、部门/被评列/职工/项点
+ * 覆盖：鉴权、登录/登出、人员类别权重合计、发码/作废/批次、导出 xlsx、部门/被评列/职工/项点
  * CRUD 与软删除、部门问卷表头配置、名单导入、设置、统计口径、结果计分与多 sheet 导出。
  */
 import 'dotenv/config';
@@ -123,7 +123,7 @@ async function clearOwnAdmin(): Promise<void> {
   await prisma.adminRole.deleteMany({ where: { code: { startsWith: TAG } } });
 }
 
-/** 直接写库造票种（夹具用，绕开接口的权重校验；校验本身另有专门用例）。 */
+/** 直接写库造人员类别（夹具用，绕开接口的权重校验；校验本身另有专门用例）。 */
 async function newTicketType(
   weightPercent = 100,
   enabled = true,
@@ -133,7 +133,7 @@ async function newTicketType(
     data: {
       sessionId: await ensureDefaultSession(prisma),
       code,
-      name: `${TAG}票种-${code}`,
+      name: `${TAG}人员类别-${code}`,
       weightPercent,
       enabled,
     },
@@ -180,7 +180,7 @@ async function createCriterion(
   return res.body as { id: string; name: string };
 }
 
-/** 被评列即打分表的列（个人问卷下是各职务），与职工名单无关。 */
+/** 被评议人列即打分表的列（个人打分表下是各职务），与职工名单无关。 */
 async function createVoteColumn(
   departmentId: string,
   name: string,
@@ -210,7 +210,7 @@ async function submitSheet(
   return sheet.id;
 }
 
-/** 「两被评列 × 两项点 + 一个票种有分」的部门，供结果与导出用例复用。 */
+/** 「两被评议人列 × 两评议项目 + 一个人员类别有分」的部门，供结果与导出用例复用。 */
 async function setupScoredDepartment(): Promise<{
   deptId: string;
   first: { id: string; name: string };
@@ -369,7 +369,7 @@ describeDb('管理端接口', () => {
     }
   });
 
-  it('伪造的会话 Cookie 被拒', async () => {
+  it('伪造的登录状态 Cookie 被拒', async () => {
     const res = await request(app)
       .get('/api/admin/me')
       .set('Cookie', `${ADMIN_COOKIE}=forged-token`);
@@ -427,7 +427,7 @@ describeDb('管理端接口', () => {
     expect(res.body.error.code).toBe('VALIDATION_FAILED');
   });
 
-  it('登出后会话失效', async () => {
+  it('登出后登录状态失效', async () => {
     const client = request.agent(app);
     const login = await client
       .post('/api/admin/login')
@@ -448,7 +448,7 @@ describeDb('管理端接口', () => {
   // 票种与权重
   // ---------------------------------------------------------------------------
 
-  it('GET /ticket-types 返回票种与发放/使用计数', async () => {
+  it('GET /ticket-types 返回人员类别与发放/使用计数', async () => {
     const ticketType = await newTicketType(100);
     const generated = await agent
       .post('/api/admin/tickets/generate')
@@ -489,7 +489,7 @@ describeDb('管理端接口', () => {
     const fillerWeight = headroom >= 2 ? headroom - 2 : 0;
     const created = await agent
       .post('/api/admin/ticket-types')
-      .send({ code: nextCode(), name: `${TAG}票种-新建`, weightPercent: fillerWeight });
+      .send({ code: nextCode(), name: `${TAG}人员类别-新建`, weightPercent: fillerWeight });
     expect(created.status).toBe(200);
     expect(created.body.weightPercent).toBe(fillerWeight);
     const total = sum + fillerWeight;
@@ -498,7 +498,7 @@ describeDb('管理端接口', () => {
     // 2) 再新建一个会越过 100 的票种 → 409 且提示差额
     const over = await agent
       .post('/api/admin/ticket-types')
-      .send({ code: nextCode(), name: `${TAG}票种-超限`, weightPercent: 100 - total + 1 });
+      .send({ code: nextCode(), name: `${TAG}人员类别-超限`, weightPercent: 100 - total + 1 });
     expect(over.status).toBe(409);
     expect(over.body.error.code).toBe('WEIGHT_SUM_INVALID');
     expect(over.body.error.message).toContain('101%');
@@ -537,7 +537,7 @@ describeDb('管理端接口', () => {
     // 5) 停用的票种不计入合计，可以随便建
     const disabled = await agent
       .post('/api/admin/ticket-types')
-      .send({ code: nextCode(), name: `${TAG}票种-停用`, weightPercent: 10, enabled: false });
+      .send({ code: nextCode(), name: `${TAG}人员类别-停用`, weightPercent: 10, enabled: false });
     expect(disabled.status).toBe(200);
     expect(disabled.body.enabled).toBe(false);
     expect(await enabledWeightSum()).toBe(100);
@@ -545,9 +545,9 @@ describeDb('管理端接口', () => {
     // 6) 只改名称不触发权重校验
     const renamed = await agent
       .patch(`/api/admin/ticket-types/${created.body.id}`)
-      .send({ name: `${TAG}票种-改名` });
+      .send({ name: `${TAG}人员类别-改名` });
     expect(renamed.status).toBe(200);
-    expect(renamed.body.name).toBe(`${TAG}票种-改名`);
+    expect(renamed.body.name).toBe(`${TAG}人员类别-改名`);
 
     expect(
       (await agent.patch('/api/admin/ticket-types/not-exist').send({ weightPercent: 0 })).status,
@@ -591,21 +591,21 @@ describeDb('管理端接口', () => {
     expect(over.body.error.message).toContain('101%');
   });
 
-  it('新建票种编码重复返回 409', async () => {
+  it('新建人员类别编码重复返回 409', async () => {
     const code = nextCode();
     const first = await agent
       .post('/api/admin/ticket-types')
-      .send({ code, name: `${TAG}票种-A`, weightPercent: 0 });
+      .send({ code, name: `${TAG}人员类别-A`, weightPercent: 0 });
     expect(first.status).toBe(200);
 
     const duplicate = await agent
       .post('/api/admin/ticket-types')
-      .send({ code, name: `${TAG}票种-B`, weightPercent: 0 });
+      .send({ code, name: `${TAG}人员类别-B`, weightPercent: 0 });
     expect(duplicate.status).toBe(409);
     expect(duplicate.body.error.code).toBe('TICKET_TYPE_EXISTS');
   });
 
-  it('删除票种是软删除，停用后仍可查询', async () => {
+  it('删除人员类别是软删除，停用后仍可查询', async () => {
     const ticketType = await newTicketType(0);
     expect((await agent.delete(`/api/admin/ticket-types/${ticketType.id}`)).status).toBe(204);
 
@@ -644,7 +644,7 @@ describeDb('管理端接口', () => {
     );
   });
 
-  it('非法发码参数被拒：数量越界、票种不存在、票种停用', async () => {
+  it('非法发码参数被拒：数量越界、人员类别不存在、人员类别停用', async () => {
     const ticketType = await newTicketType(100);
 
     const tooFew = await agent
@@ -670,7 +670,7 @@ describeDb('管理端接口', () => {
     expect(disabled.body.error.code).toBe('TICKET_TYPE_DISABLED');
   });
 
-  it('随机码列表分页与按状态/票种过滤', async () => {
+  it('随机码列表分页与按状态/人员类别过滤', async () => {
     const typeA = await newTicketType(100);
     const typeB = await newTicketType(0);
     await agent.post('/api/admin/tickets/generate').send({ ticketTypeId: typeA.id, count: 3 });
@@ -712,7 +712,7 @@ describeDb('管理端接口', () => {
     expect(unknownStatus.status).toBe(200);
   });
 
-  it('作废仅限未使用的码，重复作废与作废已核销都是 409', async () => {
+  it('作废仅限未使用的码，重复作废与作废已使用都是 409', async () => {
     const ticketType = await newTicketType(100);
     const generated = await agent
       .post('/api/admin/tickets/generate')
@@ -746,7 +746,7 @@ describeDb('管理端接口', () => {
     expect((await agent.post('/api/admin/tickets/not-exist/revoke')).status).toBe(404);
   });
 
-  it('批次列表带票种与数量', async () => {
+  it('批次列表带人员类别与数量', async () => {
     const ticketType = await newTicketType(100);
     const generated = await agent
       .post('/api/admin/tickets/generate')
@@ -762,7 +762,7 @@ describeDb('管理端接口', () => {
     });
   });
 
-  it('随机码导出 xlsx：列口径与行数符合预期', async () => {
+  it('随机码导出 xlsx：列说明与行数符合预期', async () => {
     const typeA = await newTicketType(100);
     const typeB = await newTicketType(0);
     await agent.post('/api/admin/tickets/generate').send({ ticketTypeId: typeA.id, count: 3 });
@@ -770,7 +770,7 @@ describeDb('管理端接口', () => {
 
     const workbook = await getWorkbook(`/api/admin/tickets/export?ticketTypeId=${typeA.id}`);
     const table = readTable(workbook.getWorksheet('随机码清单'), '随机码');
-    expect(table.header).toEqual(['随机码', '票种', '批次', '创建时间']);
+    expect(table.header).toEqual(['随机码', '人员类别', '批次', '创建时间']);
     expect(table.rows).toHaveLength(3);
     expect(table.rows[0]?.[1]).toContain(typeA.code);
 
@@ -845,8 +845,8 @@ describeDb('管理端接口', () => {
     expect(restored.body.name).toBe(`${TAG}部门-启停`);
   });
 
-  it('部门 PATCH 保存问卷类型；模板表头（附件号/标题/填写说明）在场次模板层读改', async () => {
-    const created = await createDepartment(`${TAG}部门-问卷`);
+  it('部门 PATCH 保存打分表类型；模板表头（附件号/标题/填写说明）在评议模板层读改', async () => {
+    const created = await createDepartment(`${TAG}部门-打分表`);
     const id = created.id;
 
     // 新建部门默认个人问卷；表头三件套 0010 起在模板层（新场次返回默认文案）
@@ -854,7 +854,7 @@ describeDb('管理端接口', () => {
     expect((initial.body as Array<{ id: string }>).find((row) => row.id === id)).toMatchObject({
       questionnaireType: 'person',
     });
-    // 模板行是场次级持久数据，可能被其它用例/轮次残留，先重置为默认文案
+    // 模板行是评议级持久数据，可能被其它用例/轮次残留，先重置为默认文案
     const reset = await agent.patch('/api/admin/questionnaire-templates').send({
       type: 'person',
       headerNote: '附件1-1',
@@ -875,7 +875,7 @@ describeDb('管理端接口', () => {
       footerNote: '',
     });
 
-    const title = `${TAG}车间评价问卷`;
+    const title = `${TAG}车间评价打分表`;
     const footerNote = '请如实填写，不填视为弃权。';
     const switched = await agent
       .patch(`/api/admin/departments/${id}`)
@@ -902,7 +902,7 @@ describeDb('管理端接口', () => {
     const reread = await agent.get('/api/admin/questionnaire-templates?type=workshop');
     expect(reread.body).toMatchObject({ headerNote: '附件2-1', title, footerNote });    expect((await prisma.department.findUnique({ where: { id } }))?.questionnaireType).toBe('workshop');
 
-    // 问卷类型只接受 person / workshop：路由层 zod 先拦下（service 里另有
+    // 打分表类型只接受 person / workshop：路由层 zod 先拦下（service 里另有
     // QUESTIONNAIRE_TYPE_INVALID 分支，只有越过分区校验的调用才会走到），非法值不落库
     const invalid = await agent
       .patch(`/api/admin/departments/${id}`)
@@ -969,8 +969,8 @@ describeDb('管理端接口', () => {
     expect(template.headers['content-type']).toContain('spreadsheetml');
   });
 
-  it('项点必须为整数且 maxScore > minScore（创建与修改都校验）', async () => {
-    const department = await createDepartment(`${TAG}部门-项点`);
+  it('评议项目必须为整数且 maxScore > minScore（创建与修改都校验）', async () => {
+    const department = await createDepartment(`${TAG}部门-评议项目`);
 
     const equal = await agent
       .post('/api/admin/criteria')
@@ -1014,9 +1014,9 @@ describeDb('管理端接口', () => {
     expect(invalidType.status).toBe(400);
   });
 
-  it('被评列 CRUD：同名可重复、改名与软删除后从打分表消失', async () => {
-    const department = await createDepartment(`${TAG}部门-被评列`);
-    const other = await createDepartment(`${TAG}部门-被评列其他`);
+  it('被评议人列 CRUD：同名可重复、改名与软删除后从打分表消失', async () => {
+    const department = await createDepartment(`${TAG}部门-被评议人列`);
+    const other = await createDepartment(`${TAG}部门-被评议人列其他`);
 
     const createdRes = await agent
       .post('/api/admin/vote-columns')
@@ -1070,7 +1070,7 @@ describeDb('管理端接口', () => {
       data: {
         sessionId: deptRow.sessionId,
         code: `${TAG}TP${Date.now()}`,
-        name: `${TAG}打分表票种`,
+        name: `${TAG}打分表人员类别`,
         weightPercent: 100,
       },
     });
@@ -1113,7 +1113,7 @@ describeDb('管理端接口', () => {
     ).toBe(400);
   });
 
-  it('被评列选人：职务列绑定本部门职工，null 清除，跨部门与不存在的人被拒绝', async () => {
+  it('被评议人列选人：职务列绑定本部门职工，null 清除，跨部门与不存在的人被拒绝', async () => {
     const department = await createDepartment(`${TAG}部门-选人`);
     const other = await createDepartment(`${TAG}部门-选人其他`);
     const employee = await createEmployee(department.id, '张三');
@@ -1161,7 +1161,7 @@ describeDb('管理端接口', () => {
     expect(withEmployee.body).toMatchObject({ employeeId: employee.id, employeeName: '张三' });
   });
 
-  it('软删除部门/被评列/项点后历史评分仍然可读', async () => {
+  it('软删除部门/被评议人列/评议项目后历史评分仍然可读', async () => {
     const department = await createDepartment(`${TAG}部门-软删`);
     const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
@@ -1304,7 +1304,7 @@ describeDb('管理端接口', () => {
   // 统计
   // ---------------------------------------------------------------------------
 
-  it('统计口径：票种计数、总量自洽、部门进度与投票窗口', async () => {
+  it('统计说明：人员类别计数、总量自洽、部门进度与投票窗口', async () => {
     const department = await createDepartment(`${TAG}部门-统计`);
     await createEmployee(department.id, '张三');
     const second = await createEmployee(department.id, '李四');
@@ -1388,7 +1388,7 @@ describeDb('管理端接口', () => {
   // 结果与导出
   // ---------------------------------------------------------------------------
 
-  it('结果口径：项点归一化、综合得分与排名', async () => {
+  it('结果说明：评议项目归一化、综合得分与排名', async () => {
     const { deptId, first, second, criterionB } = await setupScoredDepartment();
 
     const res = await agent.get(`/api/admin/results?departmentId=${deptId}`);
@@ -1424,7 +1424,7 @@ describeDb('管理端接口', () => {
     expect(normalized).toMatchObject({ rawScore: 45, normalizedScore: 90 });
   });
 
-  it('结果按实际收到票的票种加权归一化', async () => {
+  it('结果按实际收到票的人员类别加权归一化', async () => {
     const department = await createDepartment(`${TAG}部门-加权`);
     const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
@@ -1448,13 +1448,13 @@ describeDb('管理端接口', () => {
     ).toEqual([typeA.id, typeB.id].sort());
   });
 
-  it('某部门某票种零票时按有票票种归一化，不按 0 分计入', async () => {
-    const department = await createDepartment(`${TAG}部门-缺票种`);
+  it('某部门某人员类别零票时按有票人员类别归一化，不按 0 分计入', async () => {
+    const department = await createDepartment(`${TAG}部门-缺人员类别`);
     const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
     const typeC = await newTicketType(20);
 
-    // 只有 20% 权重的票种有票，均分 90：归一化后仍是 90，而不是 90×20/100
+    // 只有 20% 权重的人员类别有票，均分 90：归一化后仍是 90，而不是 90×20/100
     await submitSheet(department.id, typeC.id, [
       { voteColumnId: column.id, criterionId: criterion.id, score: 90 },
     ]);
@@ -1488,7 +1488,7 @@ describeDb('管理端接口', () => {
     expect(rankOf(third.id)).toBe(3);
   });
 
-  it('没有任何评分的被评列得 0 分并排在末位', async () => {
+  it('没有任何评分的被评议人列得 0 分并排在末位', async () => {
     const { deptId } = await setupScoredDepartment();
     const column = await createVoteColumn(deptId, '副主任', 2);
     const res = await agent.get(`/api/admin/results?departmentId=${deptId}`);
@@ -1523,7 +1523,7 @@ describeDb('管理端接口', () => {
     const workbook = await getWorkbook(`/api/admin/results/export.xlsx?departmentId=${deptId}`);
 
     const ranking = readTable(workbook.getWorksheet('综合排名'), '排名');
-    expect(ranking.header).toEqual(['排名', '被评对象', '综合得分', '计分项点数']);
+    expect(ranking.header).toEqual(['排名', '被评对象', '综合得分', '计分评议项目数']);
     expect(ranking.rows).toHaveLength(2);
     expect(ranking.rows[0]?.[1]).toBe('主任');
     expect(ranking.rows[0]?.[2]).toBe('90');
@@ -1532,15 +1532,15 @@ describeDb('管理端接口', () => {
 
     // 明细行数 = 被评列数 × 有数据的项点数
     const details = readTable(workbook.getWorksheet('各项明细'), '被评对象');
-    expect(details.header).toEqual(['被评对象', '项点', '原始分', '归一化分', '参与票种']);
+    expect(details.header).toEqual(['被评对象', '评议项目', '原始分', '归一化分', '参与人员类别']);
     expect(details.rows).toHaveLength(4);
     expect(details.rows.filter((row) => row[1] === criterionA.name)).toHaveLength(2);
     expect(details.rows.filter((row) => row[1] === criterionB.name)).toHaveLength(2);
     expect(details.rows.every((row) => row[4] !== '')).toBe(true);
 
     // 参与票种口径：本次参与计分的票种标「是」，其余标「否」
-    const involved = readTable(workbook.getWorksheet('参与票种口径'), '票种');
-    expect(involved.header).toEqual(['票种', '名称', '权重百分比', '是否参与计分']);
+    const involved = readTable(workbook.getWorksheet('参与人员类别说明'), '人员类别');
+    expect(involved.header).toEqual(['人员类别', '名称', '权重百分比', '是否参与计分']);
     expect(involved.rows.filter((row) => row[3] === '是')).toHaveLength(1);
 
     // 一个部门一套项点列，跨部门汇总没有意义：缺参数直接 400

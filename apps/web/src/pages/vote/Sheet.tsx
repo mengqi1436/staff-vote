@@ -13,10 +13,10 @@ import { VoteSurface } from '../../components/VoteSurface.js';
 /**
  * 打分表页（流程第 2 步：填写打分）。
  *
- * 版式与 docs/参考表.xlsx 一致：表头是附件号与表标题，列头是「序号 / 项点 / 各被评列」，
- * 每行一个评价项点（含描述），表尾是填写说明。项点与被评列全部来自后台配置。
+ * 版式与 docs/参考表.xlsx 一致：表头是附件号与表标题，列头是「序号 / 评议项目 / 各被评议人列」，
+ * 每行一个评议项目（含描述），表尾是填写说明。评议项目与被评议人列全部来自后台配置。
  *
- * 流程：选部门（只有一个部门时直接进入）→ 拉该部门的问卷 → 在表格上逐格录入 →
+ * 流程：选部门（只有一个部门时直接进入）→ 拉该部门的打分表 → 在表格上逐格录入 →
  * 提交前全表校验（缺填、小数、越界都会被拦下并指到具体位置）。
  *
  * 三条纪律写在这里：一是不询问也不展示职工身份（职工可见文案也不出现后台术语），
@@ -52,9 +52,9 @@ function submitErrorText(error: unknown): string {
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /** 提交后不可修改的提示，页面里只写一处文案。 */
-const IRREVERSIBLE_HINT = '一码一票，提交即核销、不可再改。请核对无误后再提交；本页不记录您的姓名与身份。';
+const IRREVERSIBLE_HINT = '一码一票，提交后即失效、不可再改。请核对无误后再提交；本页不记录您的姓名与身份。';
 
-/** 问卷类型的展示名：进度提示里用中文，不用后端的类型枚举值。 */
+/** 打分表类型的展示名：进度提示里用中文，不用后端的类型枚举值。 */
 const TYPE_LABELS: Record<string, string> = { person: '负责人评价', workshop: '车间评价' };
 
 /** error summary 的标题 id：容器的 aria-labelledby 与聚焦目标都用它。 */
@@ -172,7 +172,7 @@ export function VoteSheet() {
   const [loadError, setLoadError] = useState<string | null>(null);
   /** 重新拉取的序号：加载失败后「重新加载」用它再触发一次 effect。 */
   const [reloadSeq, setReloadSeq] = useState(0);
-  /** 不可恢复的终态（凭据失效、票已核销）：显示说明并引导回入口，不再渲染表格。 */
+  /** 不可恢复的终态（凭据失效、票已使用）：显示说明并引导回入口，不再渲染表格。 */
   const [fatal, setFatal] = useState<string | null>(null);
 
   const [values, setValues] = useState<ScoreValues>({});
@@ -185,10 +185,10 @@ export function VoteSheet() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   /** 双表流程（scoreScope=both）的打分进度：非 null 表示已交过表、还差 remaining 里的类型。 */
   const [bothPending, setBothPending] = useState<VoteProgressResult | null>(null);
-  /** 本场次是否双表流程：负责人评价 + 车间评价两张表齐交才核销。 */
+  /** 本评议是否双表流程：负责人评价 + 车间评价两张表齐交才使用。 */
   const isBothScope = sessionInfo?.session?.scoreScope === 'both';
 
-  // 拉取该部门的问卷；切部门时把上一份填写内容与校验结果一起丢掉
+  // 拉取该部门的打分表；切部门时把上一份填写内容与校验结果一起丢掉
   useEffect(() => {
     if (token === null || deptId === null) return;
     let cancelled = false;
@@ -209,7 +209,7 @@ export function VoteSheet() {
         if (error instanceof ApiError && error.status === 401) {
           clearVoteToken();
           clearVoteSessionInfo();
-          setFatal('本轮投票凭据已失效，请回到入口重新输入随机码。');
+          setFatal('本次投票的登录状态已失效，请回到入口重新输入随机码。');
           return;
         }
         setLoadError(loadErrorText(error));
@@ -242,7 +242,7 @@ export function VoteSheet() {
   /**
    * 可填区间的说明。
    *
-   * 参考表的区间写在填写说明里（「每一条评价项点满分 20 分」），所以表内不占版面；
+   * 参考表的区间写在填写说明里（「每一条评议项目满分 20 分」），所以表内不占版面；
    * 但每项区间由后台单独配置，各项不一致时必须说清去哪儿看，不能让职工自己猜。
    */
   const rangeHint = useMemo(() => {
@@ -253,7 +253,7 @@ export function VoteSheet() {
     );
     return uniform
       ? `每格只能填 ${first.minScore}–${first.maxScore} 之间的整数，所有格子填完才能提交。`
-      : '每格只能填整数，允许的区间见上方各行的项点说明；所有格子填完才能提交。';
+      : '每格只能填整数，允许的区间见上方各行的评议项目说明；所有格子填完才能提交。';
   }, [sheet]);
 
   // 填了但没提交时挡住误刷新：令牌还在，但没人愿意把整张表重填一遍
@@ -304,7 +304,7 @@ export function VoteSheet() {
         }
         await voteApi.submit({ departmentId: sheet.department.id, items }, token);
         if (isBothScope) {
-          // 双表流程：两张表齐交后端才核销。还差表就留在本页——清空已填内容、
+          // 双表流程：两张表齐交后端才使用。还差表就留在本页——清空已填内容、
           // 切到剩余类型的部门，让职工接着填下一张。
           const progress = await voteApi.progress(token);
           if (progress.remaining.length === 0) {
@@ -354,7 +354,7 @@ export function VoteSheet() {
               if (nextDept !== undefined && nextDept.id !== deptId) setDeptId(nextDept.id);
               return;
             } catch {
-              // 进度也查不到（凭据其实已失效）：退回下面的核销语义
+              // 进度也查不到（凭据其实已失效）：退回下面的使用语义
             }
           }
           clearVoteToken();
@@ -365,7 +365,7 @@ export function VoteSheet() {
         if (error instanceof ApiError && error.status === 401) {
           clearVoteToken();
           clearVoteSessionInfo();
-          setFatal('本轮投票凭据已失效，请回到入口重新输入随机码。');
+          setFatal('本次投票的登录状态已失效，请回到入口重新输入随机码。');
           return;
         }
         setSubmitError(submitErrorText(error));
@@ -407,7 +407,7 @@ export function VoteSheet() {
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 16px 48px' }}>
         <Card>
           <VoteSteps current={1} />
-          {/* 多场评议：所在场次名（旧后端没有 session 字段时不显示，不影响流程） */}
+          {/* 多场评议：所在评议名（旧后端没有 session 字段时不显示，不影响流程） */}
           {sessionInfo.session ? (
             <Typography.Text
               type="secondary"
@@ -444,7 +444,7 @@ export function VoteSheet() {
                 <Typography.Text type="secondary">
                   {`已提交 ${bothPending.submitted.map((type) => TYPE_LABELS[type] ?? type).join('、')}，还需完成「${bothPending.remaining
                     .map((type) => TYPE_LABELS[type] ?? type)
-                    .join('、')}」——请从上方切换部门继续填写并提交，全部交完随机码才会核销。`}
+                    .join('、')}」——请从上方切换部门继续填写并提交，两张表都交完随机码才会失效。`}
                 </Typography.Text>
               </StaticNotice>
             </div>
@@ -516,7 +516,7 @@ export function VoteSheet() {
                   focusTarget={focusTarget}
                 />
 
-                {/* 填写说明：口径写在表下，不让职工去猜 */}
+                {/* 填写说明：说明写在表下，不让职工去猜 */}
                 <StaticNotice tone="info" title="填写说明">
                   <ol style={{ margin: 0, paddingLeft: '1.4em' }}>
                     <li>{rangeHint}</li>

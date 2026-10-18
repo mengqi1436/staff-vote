@@ -3,7 +3,7 @@
  * 票别分配（ticket-plan）与整场整合导出。
  *
  * 状态机（draft → voting ⇄ paused → ended，ended 终态）：
- *   PATCH /:id       更新名称与开放时间窗（opensAt / closesAt，null=清空）
+ *   PATCH /:id       更新名称与开放时间（opensAt / closesAt，null=清空）
  *   POST /:id/start  draft|paused → voting（首次 start 写 startAt）；
  *                    draft→voting 前做完整性校验，缺项 409 SESSION_INCOMPLETE
  *   POST /:id/pause  voting → paused
@@ -44,7 +44,7 @@ import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
 
 const CreateSchema = z.object({
-  name: z.string().trim().min(1, '场次名称不能为空').max(64, '场次名称最长 64 个字符'),
+  name: z.string().trim().min(1, '评议名称不能为空').max(64, '评议名称最长 64 个字符'),
   orgDepartmentId: z.string().uuid('部门标识不合法'),
   opensAt: isoTimeField(),
   /** 可空：留空（null/缺省）= 永久开放。 */
@@ -58,11 +58,11 @@ function isoTimeField() {
 
 /** PATCH 语义：缺省（undefined）= 不改；显式 null = 清空（该侧恢复不限制）。 */
 const UpdateSchema = z.object({
-  name: z.string().trim().min(1, '场次名称不能为空').max(100).optional(),
+  name: z.string().trim().min(1, '评议名称不能为空').max(100).optional(),
   opensAt: isoTimeField().nullable().optional(),
   closesAt: isoTimeField().nullable().optional(),
-  /** 打分范围：person 仅个人问卷 / both 两张问卷都打。 */
-  scoreScope: z.enum(['person', 'both']).optional(),
+  /** 打分范围：person 负责人 / workshop 车间 / both 两张打分表都打。 */
+  scoreScope: z.enum(['person', 'workshop', 'both']).optional(),
 });
 
 const ActionParamSchema = z.object({
@@ -71,13 +71,13 @@ const ActionParamSchema = z.object({
   action: z.enum(['start', 'pause', 'end']),
 });
 
-/** 票别分配的一行：编码 1-8 字符、名称 1-32 字符、权重整数、数量 ≥0。 */
+/** 人员类别分配的一行：编码 1-8 字符、名称 1-32 字符、权重整数、数量 ≥0。 */
 const TicketPlanSchema = z.object({
   types: z
     .array(
       z.object({
-        code: z.string().trim().min(1, '票种编码不能为空').max(8, '票种编码最长 8 个字符'),
-        name: z.string().trim().min(1, '票种名称不能为空').max(32, '票种名称最长 32 个字符'),
+        code: z.string().trim().min(1, '人员类别编码不能为空').max(8, '人员类别编码最长 8 个字符'),
+        name: z.string().trim().min(1, '人员类别名称不能为空').max(32, '人员类别名称最长 32 个字符'),
         weightPercent: z.number().int('权重必须为整数').min(0, '权重不能为负'),
         count: z.number().int('数量必须为整数').min(0, '数量不能为负'),
       }),
@@ -85,7 +85,7 @@ const TicketPlanSchema = z.object({
     // 同一次提交里编码重复会让「启用票种全集」出现歧义，直接在校验层拦下。
     .refine(
       (types) => new Set(types.map((type) => type.code)).size === types.length,
-      '票种编码在本次提交中重复',
+      '人员类别编码在本次提交中重复',
     ),
 });
 
@@ -101,14 +101,14 @@ sessionsRouter.post('/', requirePermission('settings.write'), async (req, res) =
   res.json({ session: await createSession(body, operatorOf(req)) });
 });
 
-/** 更新名称与开放时间窗：{ session: {...} }，形状同 create。 */
+/** 更新名称与开放时间：{ session: {...} }，形状同 create。 */
 sessionsRouter.patch('/:id', requirePermission('settings.write'), async (req, res) => {
   const { id } = IdParamSchema.parse(req.params);
   const body = UpdateSchema.parse(req.body);
   res.json({ session: await updateSession(id, body, operatorOf(req)) });
 });
 
-/** 删除场次：仅无答卷时允许，连同本场的部门/职工/项点/票种/随机码一并清理。 */
+/** 删除评议：仅无答卷时允许，连同本场的部门/职工/评议项目/票种/随机码一并清理。 */
 sessionsRouter.delete('/:id', requirePermission('settings.write'), async (req, res) => {
   const { id } = IdParamSchema.parse(req.params);
   await deleteSession(id, operatorOf(req));
@@ -135,7 +135,7 @@ sessionsRouter.put(
 sessionsRouter.get('/:id/export.xlsx', requirePermission('results.export'), async (req, res) => {
   const { id } = IdParamSchema.parse(req.params);
   const session = await prisma.voteSession.findUnique({ where: { id }, select: { name: true } });
-  if (!session) throw ApiError.notFound('场次不存在');
+  if (!session) throw ApiError.notFound('评议不存在');
 
   // 每个启用部门一组：结果页与导出共用 computeDepartmentResults 的同一次计算。
   const departments = await prisma.department.findMany({

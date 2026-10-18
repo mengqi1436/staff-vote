@@ -10,9 +10,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  findSessionName,
+  findSessionNameByBatches,
   generateTickets,
   listTicketBatches,
   listTickets,
+  listTicketsByBatches,
   listTicketsForExport,
   resolveSessionId,
   revokeTicket,
@@ -21,8 +24,10 @@ import {
 import { loadTicketAnswerExport } from '../../services/results.js';
 import {
   buildAnswerSheetWorkbook,
+  buildTicketsByTypeWorkbook,
   buildTicketsWorkbook,
   fileStamp,
+  safeFileLabel,
   sendWorkbook,
   workbookToBuffer,
 } from '../../lib/xlsx.js';
@@ -43,6 +48,17 @@ const ExportQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
 });
 
+/** 发码结果导出：按批次取码，一次最多 20 个批次（一次发码每个人员类别一个批次）。 */
+const BatchExportSchema = z.object({
+  batchIds: z
+    .string()
+    .min(1, '缺少 batchIds')
+    .refine(
+      (value) => value.split(',').filter((id) => id.trim().length > 0).length <= 20,
+      '一次最多导出 20 个批次',
+    ),
+});
+
 const GenerateSchema = z.object({
   sessionId: z.string().min(1).optional(),
   ticketTypeId: z.string().min(1),
@@ -58,7 +74,7 @@ const RevokeBulkSchema = z.object({
   ticketTypeId: z.string().min(1).optional(),
 });
 
-/** 批次列表的场次过滤。 */
+/** 批次列表的评议过滤。 */
 const BatchesQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
 });
@@ -70,13 +86,13 @@ ticketsRouter.get('/', async (req, res) => {
   res.json(await listTickets({ ...query, sessionId: await resolveSessionId(query.sessionId) }));
 });
 
-/** 导出随机码清单（发放对账材料，仅未使用的码；列：随机码、票种、批次、创建时间）。 */
+/** 导出随机码清单（发放对账材料，仅未使用的码；列：随机码、人员类别、批次、创建时间）。 */
 ticketsRouter.get('/export', async (req, res) => {
   const filter = ExportQuerySchema.parse(req.query);
-  const rows = await listTicketsForExport({
-    ...filter,
-    sessionId: await resolveSessionId(filter.sessionId),
-  });
+  const sessionId = await resolveSessionId(filter.sessionId);
+  const rows = await listTicketsForExport({ ...filter, sessionId });
+  const sessionName = await findSessionName(sessionId);
+  const label = safeFileLabel(sessionName ?? '');
   const workbook = buildTicketsWorkbook(
     rows.map((row) => ({
       code: row.code,
@@ -85,7 +101,37 @@ ticketsRouter.get('/export', async (req, res) => {
       createdAt: row.createdAt,
     })),
   );
-  sendWorkbook(res, `随机码清单-${fileStamp()}.xlsx`, await workbookToBuffer(workbook));
+  sendWorkbook(res, `${label}-随机码清单-${fileStamp()}.xlsx`, await workbookToBuffer(workbook));
+});
+
+/**
+ * 发码结果导出：**一列一个票别**，列下是该票别的随机码。
+ *
+ * 按批次在服务端取码（前端刚生成的那几个批次），不接受回传的码本身：
+ * 码是敏感材料，不走上行请求体，也不进日志。每个票别一次发码产生一个批次。
+ */
+ticketsRouter.get('/export-by-type.xlsx', async (req, res) => {
+  const { batchIds } = BatchExportSchema.parse(req.query);
+  const ids = batchIds
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  const rows = await listTicketsByBatches(ids);
+
+  // 按票别分组，组顺序沿用查询里的票种 sortOrder（Map 保持插入顺序）
+  const groups = new Map<string, { header: string; codes: string[] }>();
+  for (const row of rows) {
+    const header = `${row.ticketType.name}（${row.ticketType.code}）`;
+    const group = groups.get(header) ?? { header, codes: [] };
+    group.codes.push(row.code);
+    groups.set(header, group);
+  }
+
+  // 文件名用场次名：一次发码可能跨多个票别，但都属于同一个场次
+  const sessionName = await findSessionNameByBatches(ids);
+  const label = safeFileLabel(sessionName ?? '');
+  const workbook = buildTicketsByTypeWorkbook([...groups.values()]);
+  sendWorkbook(res, `${label}-随机码-${fileStamp()}.xlsx`, await workbookToBuffer(workbook));
 });
 
 ticketsRouter.post('/generate', requirePermission('tickets.generate'), async (req, res) => {

@@ -17,7 +17,7 @@ const EnvSchema = z.object({
   /** 集成测试库连接串；仅开发/测试环境需要。 */
   TEST_DATABASE_URL: z.string().optional(),
 
-  /** 会话令牌签名密钥。短于此长度的密钥可被暴力还原。 */
+  /** 登录状态令牌签名密钥。短于此长度的密钥可被暴力还原。 */
   JWT_SECRET: z.string().min(32),
 
   /** 预留：pgcrypto 加密敏感字段时使用的对称密钥。本期可不配置。 */
@@ -26,6 +26,13 @@ const EnvSchema = z.object({
   /** 首次 seed 时写入的初始管理员。 */
   ADMIN_USERNAME: z.string().min(1).default('admin'),
   ADMIN_PASSWORD: z.string().min(8).optional(),
+
+  /**
+   * 人员目录同步令牌。外部系统在 `X-Sync-Token` 头里带它调用
+   * `POST /api/admin/staff-directory/sync`。
+   * 未配置 = 同步端点关闭（503）：默认不开放一条无鉴权的写入口。
+   */
+  STAFF_SYNC_TOKEN: z.string().min(16).optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

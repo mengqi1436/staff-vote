@@ -34,7 +34,7 @@ export interface ScoringTicketType {
 }
 
 export interface ScoringItem {
-  /** 被评列。null = 车间问卷的虚拟「得分」列（0010：车间表没有被评人列）。 */
+  /** 被评议人列。null = 车间打分表的虚拟「得分」列（0010：车间表没有被评议人列）。 */
   voteColumnId: string | null;
   criterionId: string;
   score: number;
@@ -46,7 +46,7 @@ export interface ScoringSheet {
 }
 
 export interface ScoringInput {
-  /** 被评列 ID 列表；车间问卷传 [null]（唯一一格虚拟「得分」列）。 */
+  /** 被评议人列 ID 列表；车间打分表传 [null]（唯一一格虚拟「得分」列）。 */
   voteColumnIds: Array<string | null>;
   criteria: ScoringCriterion[];
   ticketTypes: ScoringTicketType[];
@@ -55,38 +55,38 @@ export interface ScoringInput {
 
 export interface CriterionResult {
   criterionId: string;
-  /** 票种加权后的原始分（仍在该项点的 min/max 区间内） */
+  /** 人员类别加权后的原始分（仍在该评议项目的 min/max 区间内） */
   rawScore: number;
   /** 归一化到 0-100 的分数 */
   normalizedScore: number;
-  /** 本单元格实际参与计算的票种 ID，用于结果页标注口径 */
+  /** 本单元格实际参与计算的人员类别 ID，用于结果页标注说明 */
   participatingTicketTypeIds: string[];
 }
 
 export interface VoteColumnResult {
-  /** null = 车间问卷的虚拟「得分」列。 */
+  /** null = 车间打分表的虚拟「得分」列。 */
   voteColumnId: string | null;
   /** 综合得分：各项归一化分的等权平均；无任何有效评分时为 0 */
   comprehensiveScore: number;
   criteria: CriterionResult[];
 }
 
-/** 单票别对单个项点格的平均分（缺格/弃权计 0，分母为该票种的表数）。 */
+/** 单人员类别对单个评议项目格的平均分（缺格/弃权计 0，分母为该票种的表数）。 */
 export interface TicketTypeCriterionAvg {
   criterionId: string;
   avg: number;
 }
 
-/** 单票别对单个被评列的结果：每格平均分 + 列内均分。 */
+/** 单人员类别对单个被评议人列的结果：每格平均分 + 列内均分。 */
 export interface TicketTypeColumnResult {
-  /** null = 车间问卷的虚拟「得分」列。 */
+  /** null = 车间打分表的虚拟「得分」列。 */
   voteColumnId: string | null;
   criteria: TicketTypeCriterionAvg[];
-  /** 该票种对该被评列的均分：各格平均分的等权平均 */
+  /** 该人员类别对该被评议人列的均分：各格平均分的等权平均 */
   average: number;
 }
 
-/** 单票别的全部口径（统计四口径里的「票别 × 被评列 × 项点」与「票别 × 被评列」）。 */
+/** 单人员类别的全部说明（统计四说明里的「人员类别 × 被评议人列 × 评议项目」与「人员类别 × 被评议人列」）。 */
 export interface TicketTypeResult {
   ticketTypeId: string;
   voteColumns: TicketTypeColumnResult[];
@@ -94,9 +94,9 @@ export interface TicketTypeResult {
 
 export interface ScoringResult {
   voteColumns: VoteColumnResult[];
-  /** 本次计算中真正贡献了分数的票种 */
+  /** 本次计算中真正贡献了分数的人员类别 */
   ticketTypesInvolved: string[];
-  /** 每个有票票种的独立口径（零票种排除：一张表都没有的票种不出现） */
+  /** 每个有票人员类别的独立说明（零人员类别排除：一张表都没有的人员类别不出现） */
   perTicketType: TicketTypeResult[];
 }
 
@@ -126,7 +126,7 @@ function normalizeScore(raw: number, min: number, max: number): number {
  * 计算全部被评列的成绩。
  *
  * 复杂度 O(票种数 × 表数 × 单元格数) 的线性遍历：先把评分按
- * `票种 → 表 → (被评列|项点) → 分数` 建索引，再逐格聚合，不做嵌套扫描。
+ * `人员类别 → 表 → (被评议人列|评议项目) → 分数` 建索引，再逐格聚合，不做嵌套扫描。
  *
  * @param input 被评列、项点、票种与已提交的打分表
  * @returns 每个被评列的各项结果与综合得分

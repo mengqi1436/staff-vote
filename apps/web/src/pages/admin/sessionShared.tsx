@@ -1,16 +1,16 @@
 /**
- * 场次列表与场次工作台共享的场次模块。
+ * 评议列表与评议工作台共享的评议模块。
  *
  * 状态机按钮的「哪个状态有哪些操作」与开放窗口编辑弹窗都只有这一份实现：
  * 两处各自决定渲染形态（列表用小号链接按钮、工作台用普通按钮），
  * 但操作集合、确认框文案与提交契约不再各写一份，避免漂移。
  */
 import { useEffect } from 'react';
-import { DatePicker, Form, Modal, Typography } from 'antd';
+import { DatePicker, Form, Modal } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import { adminApi, type AdminSessionDto } from '../../lib/api.js';
 import { describeError, formatDateTime } from './lib.js';
-import { useNotify } from './shared.js';
+import { HelpLabel, useNotify } from './shared.js';
 
 /** 状态不靠颜色单独表意：文字才是表意手段，Tag 颜色只是辅助。 */
 export const SESSION_STATUS_META: Record<
@@ -24,13 +24,13 @@ export const SESSION_STATUS_META: Record<
 };
 
 const END_CONFIRM = {
-  title: '结束本场投票？',
-  description: '结束后不可恢复，本场次将无法再接收投票。',
+  title: '结束本次评议的投票？',
+  description: '结束后不可恢复，本次评议将无法再接收投票。',
   okText: '结束投票',
 };
 
 /**
- * 场次状态机操作集（数据描述，不渲染）。
+ * 评议状态机操作集（数据描述，不渲染）。
  *
  * 状态机：draft → voting → paused ⇄ voting → ended（终态，不可逆）。
  * - draft：开始投票；voting：暂停 / 结束；paused：继续 / 结束；ended：无操作。
@@ -40,7 +40,7 @@ const END_CONFIRM = {
  */
 export function sessionActions(
   status: AdminSessionDto['status'],
-  /** draft 场次的开始投票阻塞缺项（后端 startBlockers）；非空时开始按钮禁用 */
+  /** draft 评议的开始投票阻塞缺项（后端 startBlockers）；非空时开始按钮禁用 */
   startBlockers: string[] = [],
 ): Array<{
   key: 'start' | 'pause' | 'end';
@@ -89,7 +89,7 @@ interface WindowForm {
 }
 
 /**
- * 开放时间窗编辑弹窗（场次列表行内与工作台页头共用）。
+ * 开放时间编辑弹窗（评议列表行内与工作台页头共用）。
  *
  * 起止任一侧留空表示该侧不限制：开始留空 = 不限开始，
  * 结束留空 = 长期开放（界面上必须写明）。提交契约：
@@ -104,13 +104,13 @@ export function SessionWindowModal({
   session: AdminSessionDto | null;
   open: boolean;
   onClose: () => void;
-  /** 保存成功后回调（带后端返回的最新场次），调用方负责刷新自己的数据源 */
+  /** 保存成功后回调（带后端返回的最新评议），调用方负责刷新自己的数据源 */
   onSaved: (session: AdminSessionDto) => void;
 }) {
   const [form] = Form.useForm<WindowForm>();
   const notify = useNotify();
 
-  // 每次打开都按目标场次灌初值，关闭后不残留上一次的编辑内容
+  // 每次打开都按目标评议灌初值，关闭后不残留上一次的编辑内容
   useEffect(() => {
     if (open && session) {
       form.setFieldsValue({
@@ -142,7 +142,7 @@ export function SessionWindowModal({
         opensAt: start ? start.toISOString() : null,
         closesAt: end ? end.toISOString() : null,
       });
-      notify.success('开放时间窗已保存');
+      notify.success('开放时间已保存');
       onSaved(result.session);
       onClose();
     } catch (caught) {
@@ -152,7 +152,7 @@ export function SessionWindowModal({
 
   return (
     <Modal
-      title={`开放时间窗 · ${session?.name ?? ''}`}
+      title={`开放时间 · ${session?.name ?? ''}`}
       open={open}
       onCancel={onClose}
       onOk={() => void handleSubmit()}
@@ -160,11 +160,11 @@ export function SessionWindowModal({
       cancelText="取消"
       destroyOnHidden
     >
-      <Typography.Paragraph type="secondary">
-        开始时间留空表示不限开始；结束时间为空视为长期开放。
-      </Typography.Paragraph>
       <Form<WindowForm> form={form} layout="vertical" requiredMark={false}>
-        <Form.Item name="range" label="开放时间段">
+        <Form.Item
+          name="range"
+          label={<HelpLabel help="开始时间留空表示不限开始；结束时间为空表示一直开放。">时间范围</HelpLabel>}
+        >
           <DatePicker.RangePicker
             showTime={{ format: 'HH:mm' }}
             format="YYYY-MM-DD HH:mm"
@@ -179,7 +179,7 @@ export function SessionWindowModal({
 }
 
 /**
- * 场次开放窗口的单行描述：「开始 ～ 结束」，任一侧留空给出对应含义。
+ * 评议开放窗口的单行描述：「开始 ～ 结束」，任一侧留空给出对应含义。
  * formatDateTime 已把 null 显示为「-」，这里换成更明确的说法。
  */
 export function formatWindow(

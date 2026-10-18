@@ -32,6 +32,49 @@ body {
 }
 
 /* =============================================================================
+   说明图标（?）
+   后台各页的口径、字段含义、操作后果统一收进这个图标，页面正文不再被
+   解释性文字占满。错误与警告不走这里，仍用 Alert 常显。
+   ============================================================================= */
+
+.help-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 15px; /* 图标按 1em 缩放，标题里也不会跟着 22px 放大 */
+  line-height: 1;
+  vertical-align: middle;
+  cursor: help;
+  border-radius: 50%;
+  transition:
+    background-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.help-tip:hover {
+  color: #0066cc;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.help-tip:focus-visible {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+/* 表单标签与说明图标同行，标签文字不被图标挤断 */
+.help-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* =============================================================================
    打分表（投票入口核心）
    粘性表头 + 粘性姓名列：几十行几列时始终知道在给谁打分、打到哪一项。
    颜色与全局 token 一致：焦点 Apple 蓝 #0066cc、非法 #d70015。

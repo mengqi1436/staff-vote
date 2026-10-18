@@ -12,12 +12,12 @@ import { computeSessionSampleStats } from '../../services/sampleStats.js';
 import { getStatsOverview } from '../../services/stats.js';
 import { buildResultsWorkbook, fileStamp, sendWorkbook, workbookToBuffer } from '../../lib/xlsx.js';
 
-/** 结果按部门出：项点列是每部门一套，跨部门汇总没有可比性。 */
+/** 结果按部门出：评议项目列是每部门一套，跨部门汇总没有可比性。 */
 const ResultsQuerySchema = z.object({
   departmentId: z.string().min(1, '缺少 departmentId 参数'),
 });
 
-/** 统计的场次过滤：未带时单场自动解析，多场 400 SESSION_REQUIRED。 */
+/** 统计的评议过滤：未带时单场自动解析，多场 400 SESSION_REQUIRED。 */
 const StatsQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
 });
@@ -32,7 +32,7 @@ statsRouter.get('/overview', async (req, res) => {
 /**
  * 参考样表统计（docs/附件文件包/参考样表.xlsx）：被评对象 × 票别的
  * 项点得分 / 1-5合计 / 综合评价得分 / 排序，分个人问卷表与车间问卷表。
- * 与 /results 同一计分口径（lib/scoring.ts），只读计算、无副作用。
+ * 与 /results 同一计分说明（lib/scoring.ts），只读计算、无副作用。
  */
 statsRouter.get('/samples', async (req, res) => {
   const { sessionId } = StatsQuerySchema.parse(req.query);
@@ -46,7 +46,7 @@ resultsRouter.get('/', async (req, res) => {
   res.json((await computeDepartmentResults(departmentId)).dto);
 });
 
-/** 多 sheet 导出：综合排名、各项明细、参与票种口径、票别单项/合计明细。 */
+/** 多 sheet 导出：综合排名、各项明细、参与人员类别说明、人员类别单项/合计明细。 */
 resultsRouter.get('/export.xlsx', async (req, res) => {
   const { departmentId } = ResultsQuerySchema.parse(req.query);
   const { dto, details, ticketTypes, perTicketType } = await computeDepartmentResults(departmentId);

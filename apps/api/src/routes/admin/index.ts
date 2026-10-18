@@ -9,6 +9,7 @@ import { questionnaireTemplatesRouter } from './questionnaireTemplates.js';
 import { rbacRouter } from './rbac.js';
 import { sessionsRouter } from './sessions.js';
 import { settingsRouter } from './settings.js';
+import { staffDirectoryRouter, staffDirectorySyncRouter } from './staffDirectory.js';
 import { resultsRouter, statsRouter } from './stats.js';
 import { ticketBatchesRouter, ticketsRouter } from './tickets.js';
 import { ticketTypesRouter } from './ticketTypes.js';
@@ -45,16 +46,19 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   /departments       GET POST PATCH DELETE   删除为软删除（enabled=false）；
  *                         PATCH 负责名称/排序/问卷类型（questionnaireType）
  *                         （写需 departments.write）
- *   /questionnaire-templates GET PATCH  场次级问卷模板（个人/车间各一套抬头配置，
+ *   /questionnaire-templates GET PATCH  评议级打分表模板（个人/车间各一套抬头配置，
  *                         附件号+标题+填写说明；写需 departments.write）
  *   /vote-columns      GET POST PATCH DELETE   被评列：打分表的列，与职工名单分离
  *                         （写需 criteria.write，与项点同属问卷结构配置）
  *   /employees         GET POST PATCH DELETE   （写需 employees.write）
  *   /employees/import  POST  multipart xlsx/csv （employees.write）
+ *   /staff-directory   GET POST PATCH DELETE   全局人员目录（人员管理），写需 employees.write
+ *   /staff-directory/sync POST  外部系统定期推送，鉴权走 X-Sync-Token，
+ *                         因此挂在 adminAuth 之前；未配置 STAFF_SYNC_TOKEN 时 503
  *   /criteria          GET POST PATCH DELETE   模板项点（?templateType= 过滤；创建带
  *                         templateType）；校验 max > min；含项点描述（criteria.write）
  *   /settings          GET PUT                 系统标题（settings.write）；投票开放窗口按场次配置
- *   /stats/overview    GET  各票种发放/已用/剩余 + 各部门提交数（后台 5 秒轮询）
+ *   /stats/overview    GET  各人员类别发放/已用/剩余 + 各部门提交数（后台 5 秒轮询）
  *   /results           GET ?departmentId=      排名与明细
  *   /results/export.xlsx GET
  *   /permissions       GET                     权限目录（按 groupName + sortOrder）
@@ -68,6 +72,8 @@ import { voteColumnsRouter } from './voteColumns.js';
 export const adminRouter: Router = Router();
 
 adminRouter.use(loginRouter);
+// 外部同步先挂：它用 X-Sync-Token 鉴权，不能落到下面的 adminAuth 上。
+adminRouter.use('/staff-directory', staffDirectorySyncRouter);
 adminRouter.use(adminAuth);
 adminRouter.use(sessionRouter);
 adminRouter.use('/sessions', sessionsRouter);
@@ -79,6 +85,7 @@ adminRouter.use('/departments', departmentsRouter);
 adminRouter.use('/questionnaire-templates', questionnaireTemplatesRouter);
 adminRouter.use('/vote-columns', voteColumnsRouter);
 adminRouter.use('/employees', employeesRouter);
+adminRouter.use('/staff-directory', staffDirectoryRouter);
 adminRouter.use('/criteria', criteriaRouter);
 adminRouter.use('/settings', settingsRouter);
 adminRouter.use('/stats', statsRouter);

@@ -4,7 +4,7 @@ import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { ApiError, adminApi, type SettingsDto } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
 import { usePolling } from '../../lib/usePolling.js';
-import { ErrorState, LoadingState, PageHeader, StaleDataAlert, useNotify } from './shared.js';
+import { ErrorState, HelpLabel, LoadingState, PageHeader, StaleDataAlert, useNotify } from './shared.js';
 
 interface SettingsForm {
   title: string;
@@ -18,7 +18,7 @@ function toFormValues(settings: SettingsDto): SettingsForm {
 /**
  * 系统设置。
  *
- * 开放时间窗已下沉到每个场次（场次列表 / 场次工作台里设置），
+ * 开放时间已下沉到每次评议（评议列表 / 评议工作台里设置），
  * 全局设置只剩系统标题：它同时用于后台、投票入口与打印版抬头（默认「职工素质评议」），
  * 不得虚构单位名称。
  */
@@ -79,7 +79,7 @@ export function AdminSettings() {
     <>
       <PageHeader
         title="系统设置"
-        description="全局设置只剩系统标题；各场次的开放时间窗请在「场次管理」或场次工作台里设置。"
+        description="全局设置只剩系统标题；每次评议的开放时间在「评议管理」或评议工作台里设置。"
         extra={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
@@ -113,12 +113,7 @@ export function AdminSettings() {
       {!data && loading ? <LoadingState rows={3} /> : null}
 
       {data ? (
-        <Card title="系统标题">
-          {/* 口径说明（产品原则 4）：静默文字，不用 Alert 承载常驻提示 */}
-          <p style={{ margin: '0 0 16px', color: 'rgba(0, 0, 0, 0.45)', maxWidth: '78ch' }}>
-            开放时间窗属于单个场次：开始与结束时间在「场次管理」列表或对应场次的工作台里设置，
-            结束时间为空视为长期开放。
-          </p>
+        <Card title={<HelpLabel help="开放时间属于单次评议：开始与结束时间在「评议管理」列表或对应评议的工作台里设置，结束时间为空表示一直开放。">系统标题</HelpLabel>}>
           <Form<SettingsForm>
             form={form}
             layout="vertical"
@@ -128,9 +123,8 @@ export function AdminSettings() {
           >
             <Form.Item
               name="title"
-              label="系统标题"
+              label={<HelpLabel help="同时用于后台、投票入口与打印版抬头（默认「职工素质评议」）。">系统标题</HelpLabel>}
               rules={[{ required: true, message: '请输入系统标题' }]}
-              extra="同时用于后台、投票入口与打印版抬头（默认「职工素质评议」）。"
             >
               <Input placeholder="例如：某某单位职工素质评议" maxLength={64} />
             </Form.Item>

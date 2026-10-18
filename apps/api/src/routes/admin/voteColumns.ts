@@ -31,15 +31,19 @@ const CreateSchema = z.object({
   departmentId: z.string().min(1, '必须指定部门'),
   sessionId: z.string().min(1).optional(),
   name: z.string().trim().min(1, '列名不能为空').max(50),
-  /** 该职务列的具体被评人；null/undefined = 未选人。 */
+  /** 该职务列的具体被评议人；null/undefined = 未选人。仅限本部门。 */
   employeeId: z.string().min(1).nullable().optional(),
+  /** 从全局人员目录选人（允许跨部门），后端按工号幂等落评议副本。 */
+  staffDirectoryId: z.string().min(1).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
 });
 
 const PatchSchema = z.object({
   name: z.string().trim().min(1).max(50).optional(),
-  /** 传 null 清除已选的被评人。 */
+  /** 传 null 清除已选的被评议人。 */
   employeeId: z.string().min(1).nullable().optional(),
+  /** 从全局人员目录选人（允许跨部门），与 employeeId 同时传时以本字段为准。 */
+  staffDirectoryId: z.string().min(1).nullable().optional(),
   sortOrder: z.number().int().min(0).optional(),
   enabled: z.boolean().optional(),
 });

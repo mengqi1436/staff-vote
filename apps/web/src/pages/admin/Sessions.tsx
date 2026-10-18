@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   Empty,
-  Modal,
   Popconfirm,
   Space,
   Table,
@@ -19,7 +18,7 @@ import { useAuth } from '../../lib/auth.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
 import { usePolling } from '../../lib/usePolling.js';
 import { describeError, formatDateTime } from './lib.js';
-import { ErrorState, LoadingState, PageHeader, StaleDataAlert, useNotify } from './shared.js';
+import { ErrorState, HelpLabel, LoadingState, PageHeader, StaleDataAlert, useNotify } from './shared.js';
 import { SessionCreateWizard } from './SessionCreateWizard.js';
 import {
   formatWindow,
@@ -29,12 +28,12 @@ import {
 } from './sessionShared.js';
 
 /**
- * 场次管理（评议工作流第 0 步：一场评议一个场次）。
+ * 评议管理（评议工作流第 0 步：一次评议对应一条记录）。
  *
- * 新建走三步向导（SessionCreateWizard：基本信息 → 问卷基础表 → 票别分配），
+ * 新建走三步向导（SessionCreateWizard：基本信息 → 打分表基础表 → 人员类别分配），
  * 不再是单字段弹窗。状态机操作与开放窗口编辑弹窗来自 sessionShared（与工作台共用）；
  * 本页是列表形态：状态机按钮渲染为小号链接，行内另有「编辑窗口」与「进入工作台」。
- * draft 场次的行内入口文案是「继续配置」——进工作台补齐问卷与票别才能开始投票。
+ * draft 评议的行内入口文案是「继续配置」——进工作台补齐打分表与人员类别才能开始投票。
  */
 
 export function AdminSessions() {
@@ -48,11 +47,11 @@ export function AdminSessions() {
   const canWrite = can('settings.write');
 
   const [wizardOpen, setWizardOpen] = useState(false);
-  /** 正在流转中的场次 id：只让被操作的行进入 loading，其他行照常可点 */
+  /** 正在流转中的评议 id：只让被操作的行进入 loading，其他行照常可点 */
   const [actingId, setActingId] = useState<string | null>(null);
-  /** 正在删除中的场次 id */
+  /** 正在删除中的评议 id */
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  /** 正在编辑开放时间窗的场次；null 表示弹窗关闭 */
+  /** 正在编辑开放时间的评议；null 表示弹窗关闭 */
   const [windowRow, setWindowRow] = useState<AdminSessionDto | null>(null);
 
   const sessions = data?.sessions ?? [];
@@ -63,12 +62,12 @@ export function AdminSessions() {
    */
   const showIncomplete = (row: AdminSessionDto, detail: string): void => {
     modal.warning({
-      title: `场次「${row.name}」配置未完成，还不能开始投票`,
+      title: `评议「${row.name}」配置未完成，还不能开始投票`,
       content: (
         <div style={{ whiteSpace: 'pre-wrap' }}>
           {detail}
           <div style={{ marginTop: 8, color: 'rgba(0, 0, 0, 0.45)' }}>
-            在工作台补齐问卷与票别后即可开始投票。
+            在工作台补齐打分表和人员类别后即可开始投票。
           </div>
         </div>
       ),
@@ -83,7 +82,7 @@ export function AdminSessions() {
     setActingId(row.id);
     try {
       const result = await adminApi.sessions[action](row.id);
-      notify.success(`场次「${row.name}」${SESSION_STATUS_META[result.session.status].text}`);
+      notify.success(`评议「${row.name}」${SESSION_STATUS_META[result.session.status].text}`);
       refresh();
       reload();
     } catch (caught) {
@@ -100,16 +99,16 @@ export function AdminSessions() {
   };
 
   /**
-   * 删除场次：后端仅在无答卷时放行。有答卷（409 SESSION_HAS_SHEETS）或正在投票
+   * 删除评议：后端仅在无答卷时放行。有答卷（409 SESSION_HAS_SHEETS）或正在投票
    * （409 SESSION_VOTING）时返回中文原因，直接按普通错误提示展示。
    */
   const remove = async (row: AdminSessionDto): Promise<void> => {
     setDeletingId(row.id);
     try {
       await adminApi.sessions.remove(row.id);
-      notify.success(`场次「${row.name}」已删除`);
+      notify.success(`评议「${row.name}」已删除`);
       refresh();
-      // 重拉场次列表：若删的是「当前场次」，sessionContext 会自动清掉它
+      // 重拉评议列表：若删的是「当前评议」，sessionContext 会自动清掉它
       reload();
     } catch (caught) {
       notify.error(describeError(caught, '删除失败，请重试'));
@@ -119,7 +118,7 @@ export function AdminSessions() {
   };
 
   const columns: TableColumnsType<AdminSessionDto> = [
-    { title: '场次名称', dataIndex: 'name' },
+    { title: '评议名称', dataIndex: 'name' },
     {
       title: '状态',
       dataIndex: 'status',
@@ -129,7 +128,11 @@ export function AdminSessions() {
       ),
     },
     {
-      title: '开放时间窗',
+      title: (
+        <HelpLabel help="只有在这段时间内职工才能打分：开始时间留空表示不限开始，结束时间留空表示一直开放。">
+          开放时间
+        </HelpLabel>
+      ),
       key: 'window',
       width: 240,
       render: (_: unknown, row: AdminSessionDto) => (
@@ -215,7 +218,7 @@ export function AdminSessions() {
                 </Tooltip>
               ),
             )}
-            <Tooltip title="设为当前场次，后台数据将按该场次展示">
+            <Tooltip title="设为当前评议后，后台各页只显示这条评议的数据">
               <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setSessionId(row.id)}>
                 设为当前
               </Button>
@@ -223,16 +226,16 @@ export function AdminSessions() {
             {/* 行内操作：无权限时保留但禁用（整列消失会让表格看起来缺列） */}
             {canWrite ? (
               <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setWindowRow(row)}>
-                编辑窗口
+                编辑开放时间
               </Button>
             ) : (
               <Tooltip title="无「修改开放时间与系统设置」权限">
                 <Button size="small" type="link" style={{ padding: 0 }} disabled>
-                  编辑窗口
+                  编辑开放时间
                 </Button>
               </Tooltip>
             )}
-            {/* draft 场次：进工作台 = 继续配置（契约 M 的「继续配置」入口） */}
+            {/* draft 评议：进工作台 = 继续配置（契约 M 的「继续配置」入口） */}
             <Button
               size="small"
               type="link"
@@ -242,7 +245,7 @@ export function AdminSessions() {
               {row.status === 'draft' ? '继续配置' : '进入工作台'}
             </Button>
             {/*
-              删除：后端只放行无答卷的场次。投票中的行直接禁用并说明原因，
+              删除：后端只放行无答卷的评议。投票中的行直接禁用并说明原因，
               不必让用户点了才收到 409；「有答卷」只有后端知道，由 409 文案兜底。
             */}
             {!canWrite ? (
@@ -252,15 +255,15 @@ export function AdminSessions() {
                 </Button>
               </Tooltip>
             ) : row.status === 'voting' ? (
-              <Tooltip title="场次正在投票，请先暂停或结束再删除">
+              <Tooltip title="评议正在投票，请先暂停或结束再删除">
                 <Button size="small" type="link" danger style={{ padding: 0 }} disabled>
                   删除
                 </Button>
               </Tooltip>
             ) : (
               <Popconfirm
-                title={`删除场次「${row.name}」？`}
-                description="该场次下的部门、职工、项点、票种与随机码会一并删除，不可恢复。已有答卷的场次不能删除。"
+                title={`删除评议「${row.name}」？`}
+                description="该评议下的部门、职工、评议项目、人员类别与随机码会一并删除，不可恢复。已有答卷的评议不能删除。"
                 okText="确认删除"
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
@@ -286,8 +289,8 @@ export function AdminSessions() {
   return (
     <>
       <PageHeader
-        title="场次管理"
-        description="一场评议一个场次：点「新建场次」走三步向导（基本信息 → 问卷基础表 → 票别分配），完成后在工作台发码与查看结果。场次结束后不可恢复。"
+        title="评议管理"
+        description="一次评议对应这里的一条记录。点「新建评议」按三步走完：填基本信息、编辑打分表、分配人员类别，之后在工作台发随机码、看结果。评议一旦结束就不能恢复。"
         extra={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
@@ -299,7 +302,7 @@ export function AdminSessions() {
                 icon={<PlusOutlined />}
                 onClick={() => setWizardOpen(true)}
               >
-                新建场次
+                新建评议
               </Button>
             ) : null}
           </>
@@ -310,7 +313,7 @@ export function AdminSessions() {
       {!data && error ? <ErrorState error={error} onRetry={refresh} /> : null}
 
       {data ? (
-        <Card title="场次一览" extra={`共 ${sessions.length} 个`}>
+        <Card title="评议一览" extra={`共 ${sessions.length} 个`}>
           <Table<AdminSessionDto>
             rowKey="id"
             size="small"
@@ -324,7 +327,7 @@ export function AdminSessions() {
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                   description={
-                    canWrite ? '还没有场次，请点击右上角「新建场次」开始' : '还没有场次'
+                    canWrite ? '还没有评议，点击右上角「新建评议」开始' : '还没有评议'
                   }
                 />
               ),
@@ -335,7 +338,7 @@ export function AdminSessions() {
         <LoadingState />
       ) : null}
 
-      {/* 新建场次三步向导：基本信息 → 问卷基础表 → 票别分配（契约 J） */}
+      {/* 新建评议三步向导：基本信息 → 打分表基础表 → 人员类别分配（契约 J） */}
       <SessionCreateWizard
         open={wizardOpen}
         onClose={() => setWizardOpen(false)}
@@ -345,7 +348,7 @@ export function AdminSessions() {
         }}
       />
 
-      {/* 开放时间窗编辑弹窗：与场次工作台页头共用同一组件 */}
+      {/* 开放时间编辑弹窗：与评议工作台页头共用同一组件 */}
       <SessionWindowModal
         session={windowRow}
         open={windowRow !== null}

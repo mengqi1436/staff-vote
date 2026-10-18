@@ -54,7 +54,7 @@ let viewerAgent: ReturnType<typeof request.agent>;
 
 let sequence = 0;
 
-/** 用例临时建的场次，beforeEach 恢复隔离、afterAll 兜底清理。 */
+/** 用例临时建的评议，beforeEach 恢复隔离、afterAll 兜底清理。 */
 const extraSessionIds: string[] = [];
 
 function nextSeq(): number {
@@ -65,7 +65,7 @@ function nextSeq(): number {
 interface MadeTickets {
   id: string;
   code: string;
-  /** 用于断言「已核销的码原样不动」的那张码 */
+  /** 用于断言「已使用的码原样不动」的那张码 */
   usedCode: string | null;
 }
 
@@ -86,7 +86,7 @@ async function makeTickets(
     data: {
       sessionId: sessionId ?? (await ensureDefaultSession(prisma)),
       code,
-      name: `${TAG}票种-${label}`,
+      name: `${TAG}人员类别-${label}`,
       weightPercent: 0,
       enabled: false,
     },
@@ -217,7 +217,7 @@ describeDb('一键作废随机码', () => {
     expect(res.body.error.code).toBe('UNAUTHORIZED');
   });
 
-  it('只作废未使用的码：已核销的码原样不动', async () => {
+  it('只作废未使用的码：已使用的码原样不动', async () => {
     const type = await makeTickets('仅未使用', { unused: 2, used: 1 });
 
     const res = await operatorAgent
@@ -244,9 +244,9 @@ describeDb('一键作废随机码', () => {
     expect(await countsOf(type.id)).toEqual({ unused: 0, used: 0, revoked: 2 });
   });
 
-  it('按票种作废：A 票种的作废不影响 B 票种', async () => {
-    const typeA = await makeTickets('票种A', { unused: 2 });
-    const typeB = await makeTickets('票种B', { unused: 2, used: 1 });
+  it('按人员类别作废：A 人员类别的作废不影响 B 人员类别', async () => {
+    const typeA = await makeTickets('人员类别A', { unused: 2 });
+    const typeB = await makeTickets('人员类别B', { unused: 2, used: 1 });
 
     const res = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
@@ -308,12 +308,12 @@ describeDb('一键作废随机码', () => {
     expect(JSON.stringify(details)).not.toContain(`${TAG}审计B`);
   });
 
-  it('不传 ticketTypeId 即该场次全部票种；绝不跨场次作废', async () => {
+  it('不传 ticketTypeId 即该评议全部人员类别；绝不跨评议作废', async () => {
     const typeA = await makeTickets('全部A', { unused: 1 });
     const typeB = await makeTickets('全部B', { unused: 2 });
     // 另一场次的票种与票：作废范围限定在场次，绝不能被连带作废
     const otherSessionId = (
-      await prisma.voteSession.create({ data: { name: `${TAG}场次-他场${nextSeq()}` } })
+      await prisma.voteSession.create({ data: { name: `${TAG}评议-他场${nextSeq()}` } })
     ).id;
     extraSessionIds.push(otherSessionId);
     const typeOther = await makeTickets('他场', { unused: 2 }, otherSessionId);
@@ -361,7 +361,7 @@ describeDb('一键作废随机码', () => {
   });
 
   it('缺少 sessionId → 400 VALIDATION_FAILED，一张码都没被作废', async () => {
-    const type = await makeTickets('缺场次', { unused: 1 });
+    const type = await makeTickets('缺评议', { unused: 1 });
 
     const res = await operatorAgent.post('/api/admin/tickets/revoke-bulk').send({});
     expect(res.status).toBe(400);
@@ -389,8 +389,8 @@ describeDb('一键作废随机码', () => {
     const enabled = await prisma.ticketType.create({
       data: {
         sessionId: await ensureDefaultSession(prisma),
-        code: `${TAG}启用票种${nextSeq()}`,
-        name: `${TAG}票种-可发码`,
+        code: `${TAG}启用人员类别${nextSeq()}`,
+        name: `${TAG}人员类别-可发码`,
         weightPercent: 0,
         enabled: true,
       },
@@ -421,7 +421,7 @@ describeDb('一键作废随机码', () => {
     expect(revoked.body.status).toBe('revoked');
   });
 
-  it('ticketTypeId 类型非法返回 400，不存在的票种按 0 处理', async () => {
+  it('ticketTypeId 类型非法返回 400，不存在的人员类别按 0 处理', async () => {
     const invalid = await operatorAgent
       .post('/api/admin/tickets/revoke-bulk')
       .send({ sessionId: DEFAULT_SESSION_ID, ticketTypeId: 123 });

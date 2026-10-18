@@ -27,14 +27,14 @@ export interface StatsTicketTypeRow {
   revoked: number;
 }
 
-/** 票别发放留痕（一个票种一行）。 */
+/** 人员类别发放留痕（一个人员类别一行）。 */
 export interface StatsTicketRow {
   ticketTypeId: string;
   code: string;
   name: string;
   /** 已指定领码人的票数（assignee_id 非空） */
   assignedCount: number;
-  /** 已核销且领码人非空的票，按领码人分组（仅发放/核销留痕，不含任何评分内容） */
+  /** 已使用且领码人非空的票，按领码人分组（仅发放/核销留痕，不含任何评分内容） */
   usedByAssignee: Array<{ employeeId: string; employeeName: string; count: number }>;
 }
 
@@ -46,14 +46,14 @@ export interface StatsDepartmentRow {
   sheetCount: number;
 }
 
-/** 投票开放窗口（本场次数据）：开放判定结果 + 场次状态本身。 */
+/** 投票开放窗口（本评议数据）：开放判定结果 + 评议状态本身。 */
 export interface StatsVoteWindow {
   open: boolean;
   message: string;
-  /** 场次开放时间窗（未设置则为 null） */
+  /** 评议开放时间（未设置则为 null） */
   opensAt: string | null;
   closesAt: string | null;
-  /** 场次状态（draft / voting / paused / ended） */
+  /** 评议状态（draft / voting / paused / ended） */
   status: string;
 }
 
@@ -66,14 +66,14 @@ export interface StatsOverviewDto {
     revoked: number;
     sheets: number;
   };
-  /** 票别发放留痕（含领码人姓名），按票种一行 */
+  /** 人员类别发放留痕（含领码人姓名），按人员类别一行 */
   tickets: StatsTicketRow[];
   departments: StatsDepartmentRow[];
   voteWindow: StatsVoteWindow;
   generatedAt: string;
 }
 
-/** 汇总票种发放/使用情况 + 部门进度 + 本场次的投票窗口。 */
+/** 汇总人员类别发放/使用情况 + 部门进度 + 本场次的投票窗口。 */
 export async function getStatsOverview(sessionId: string): Promise<StatsOverviewDto> {
   const [ticketTypes, ticketGroups, sheets, departments, employeeGroups, sheetGroups, session, assignedTickets] =
     await Promise.all([

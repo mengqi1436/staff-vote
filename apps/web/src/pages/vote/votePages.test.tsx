@@ -13,7 +13,7 @@ import { VoteSheet } from './Sheet.js';
  *
  * 打分表的键盘与校验在 ScoreTable.test.tsx 里测；这里管的是页面外壳：
  * 关闭态是否真的不渲染输入框、登录错误是否按状态码翻译、无令牌是否退回入口、
- * 页面能不能把部门名/票种/打分表组装起来。只 mock 全局 fetch，走真实的 lib/api.ts。
+ * 页面能不能把部门名/人员类别/打分表组装起来。只 mock 全局 fetch，走真实的 lib/api.ts。
  */
 
 const TICKET_TYPE: TicketTypeDto = {
@@ -33,14 +33,14 @@ const CRITERIA: VoteCriterionDto[] = [
 
 const VOTE_COLUMNS: VoteColumnBrief[] = [{ id: 'v1', name: '主任', employeeName: '张三' }];
 
-/** 打分表响应体：与 GET /api/vote/sheet 的契约一致（表头文案 + 项点行 + 被评列）。 */
+/** 打分表响应体：与 GET /api/vote/sheet 的契约一致（表头文案 + 评议项目行 + 被评议人列）。 */
 function sheetBody(overrides: Record<string, unknown> = {}) {
   return {
     department: DEPARTMENT,
     questionnaireType: 'person',
     headerNote: '附件1-1',
-    title: 'xx车间负责人评价问卷',
-    footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+    title: 'xx车间负责人评价打分表',
+    footerNote: '填写说明：每一条评议项目满分20分，弃权、不填视为0分。',
     criteria: CRITERIA,
     voteColumns: VOTE_COLUMNS,
     ...overrides,
@@ -210,15 +210,15 @@ describe('打分表页（Sheet）', () => {
     fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
     const { container } = renderSheet('/vote/sheet');
 
-    // 行 = 项点，列 = 被评列；抬头与表尾说明来自后台配置
+    // 行 = 评议项目，列 = 被评议人列；抬头与表尾说明来自后台配置
     expect(await screen.findByRole('rowheader', { name: /政治素质/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '主任' })).toBeInTheDocument();
     expect(screen.getByText('附件1-1')).toBeInTheDocument();
-    expect(screen.getByText('xx车间负责人评价问卷')).toBeInTheDocument();
+    expect(screen.getByText('xx车间负责人评价打分表')).toBeInTheDocument();
     expect(screen.getByText(/弃权、不填视为0分/)).toBeInTheDocument();
     expect(screen.getByText('提交后不可修改')).toBeInTheDocument();
-    // 「票种」是后台术语，职工可见文案里不许出现
-    expect(screen.queryByText(/票种/)).not.toBeInTheDocument();
+    // 「人员类别」是后台术语，职工可见文案里不许出现
+    expect(screen.queryByText(/人员类别/)).not.toBeInTheDocument();
     expectCurrentStep(container, '填写打分');
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/vote/sheet?departmentId=d1'),
@@ -228,21 +228,21 @@ describe('打分表页（Sheet）', () => {
 });
 
 describe('多场评议（Gate 容错）', () => {
-  it('场次 paused 时拦截，标题按场次状态给「投票已暂停」并点出场次名', async () => {
+  it('评议 paused 时拦截，标题按评议状态给「投票已暂停」并点出评议名', async () => {
     fetchMock.mockResolvedValueOnce(
       reply(200, { ...statusBody(true), session: { id: 's1', name: '安顺车站', status: 'paused' } }),
     );
     renderGate('/');
 
     // 后端单场部署时 session 恒非 null，因此标题必须读 session.status，
-    // 不能只因为「有场次名」就笼统说「未开放」——那会给错行动指引
+    // 不能只因为「有评议名」就笼统说「未开放」——那会给错行动指引
     expect(await findClosedNotice('投票已暂停')).toBeInTheDocument();
     expect(screen.getByText(/安顺车站/)).toBeInTheDocument();
-    expect(screen.getByText(/场次已暂停，恢复后即可继续/)).toBeInTheDocument();
+    expect(screen.getByText(/评议已暂停，恢复后即可继续/)).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
-  it('场次 ended 时标题给「本轮投票已结束」，且不展示时间窗（避免显示还能投的时间）', async () => {
+  it('评议 ended 时标题给「本轮投票已结束」，且不展示时间窗（避免显示还能投的时间）', async () => {
     fetchMock.mockResolvedValueOnce(
       reply(200, {
         ...statusBody(true),
@@ -256,7 +256,7 @@ describe('多场评议（Gate 容错）', () => {
 
     expect(await findClosedNotice('本轮投票已结束')).toBeInTheDocument();
     expect(screen.getByText(/本轮评议已归档/)).toBeInTheDocument();
-    // 场次非 voting 时不展示窗口
+    // 评议非 voting 时不展示窗口
     expect(screen.queryByText('结束时间')).not.toBeInTheDocument();
   });
 
@@ -273,10 +273,10 @@ describe('多场评议（Gate 容错）', () => {
 
     expect(await screen.findByRole('textbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /进入打分/ })).toBeInTheDocument();
-    expect(screen.queryByText('当前场次未开放投票')).not.toBeInTheDocument();
+    expect(screen.queryByText('当前评议未开放投票')).not.toBeInTheDocument();
   });
 
-  it('登录接口返回场次非 voting 时拦截并提示，不存令牌不进打分页', async () => {
+  it('登录接口返回评议非 voting 时拦截并提示，不存令牌不进打分页', async () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.endsWith('/api/vote/status')) return Promise.resolve(reply(200, statusBody(true)));
       if (url.endsWith('/api/vote/session')) {
@@ -296,12 +296,12 @@ describe('多场评议（Gate 容错）', () => {
     fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
-    expect(await screen.findByText(/当前场次未开放投票/)).toBeInTheDocument();
+    expect(await screen.findByText(/本次评议未开放/)).toBeInTheDocument();
     expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBeNull();
     expect(screen.queryByText('已进入打分表页')).not.toBeInTheDocument();
   });
 
-  it('登录成功且场次开放时，场次信息随会话一起进缓存', async () => {
+  it('登录成功且评议开放时，评议信息随登录状态一起进缓存', async () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.endsWith('/api/vote/status')) return Promise.resolve(reply(200, statusBody(true)));
       if (url.endsWith('/api/vote/session')) {
@@ -323,14 +323,14 @@ describe('多场评议（Gate 容错）', () => {
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
     expect(await screen.findByText('已进入打分表页')).toBeInTheDocument();
-    // 打分页凭这份缓存显示场次名
+    // 打分页凭这份缓存显示评议名
     const cached = JSON.parse(sessionStorage.getItem('staff_vote_session_info') ?? '{}') as {
       session?: { name?: string };
     };
     expect(cached.session?.name).toBe('内设机构');
   });
 
-  it('打分页缓存带 session 字段时显示本轮评议场次名', async () => {
+  it('打分页缓存带 session 字段时显示本轮评议评议名', async () => {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({
       ticketType: TICKET_TYPE,
@@ -343,7 +343,7 @@ describe('多场评议（Gate 容错）', () => {
     expect(await screen.findByText(/本轮评议：安顺车站/)).toBeInTheDocument();
   });
 
-  it('打分页缓存无 session 字段时不显示场次名也不报错', async () => {
+  it('打分页缓存无 session 字段时不显示评议名也不报错', async () => {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
     fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
@@ -516,7 +516,7 @@ describe('高铁入场场景（Gate）', () => {
 });
 
 describe('打分表页的错误汇总与失败保留', () => {
-  /** 进入打分表页：令牌 + 会话缓存 + 一份只有 1 个项点、1 个被评列的打分表。 */
+  /** 进入打分表页：令牌 + 登录状态缓存 + 一份只有 1 个评议项目、1 个被评议人列的打分表。 */
   function enterSheet() {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
@@ -576,7 +576,7 @@ describe('打分表页的错误汇总与失败保留', () => {
     expect(screen.queryByText(/处需要修正/)).not.toBeInTheDocument();
   });
 
-  it('随机码已核销时进入终态并清掉本地令牌，不再渲染打分表', async () => {
+  it('随机码已使用时进入终态并清掉本地令牌，不再渲染打分表', async () => {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({ ticketType: TICKET_TYPE, departments: [DEPARTMENT] });
     fetchMock.mockResolvedValueOnce(reply(200, sheetBody()));
@@ -594,7 +594,7 @@ describe('打分表页的错误汇总与失败保留', () => {
 });
 
 describe('双表流程（scoreScope=both）', () => {
-  /** both 场次的会话缓存：绑定部门（负责人评价）+ 一个车间，随机码两张表都要交。 */
+  /** both 评议的登录状态缓存：绑定部门（负责人评价）+ 一个车间，随机码两张表都要交。 */
   function saveBothSession() {
     sessionStorage.setItem(VOTE_TOKEN_KEY, 'tok-1');
     saveVoteSessionInfo({
@@ -603,16 +603,16 @@ describe('双表流程（scoreScope=both）', () => {
         { id: 'd1', name: '生产部', questionnaireType: 'person' },
         { id: 'd2', name: '检修车间', questionnaireType: 'workshop' },
       ],
-      session: { id: 's1', name: '评议场次', status: 'voting', scoreScope: 'both' },
+      session: { id: 's1', name: '评议评议', status: 'voting', scoreScope: 'both' },
     });
   }
 
-  /** 车间问卷的打分表响应：单列「得分」，无被评人。 */
+  /** 车间打分表的打分表响应：单列「得分」，无被评议人。 */
   const workshopSheet = sheetBody({
     department: { id: 'd2', name: '检修车间' },
     questionnaireType: 'workshop',
     headerNote: '附件1-2',
-    title: 'xx车间评价问卷',
+    title: 'xx车间评价打分表',
     voteColumns: [{ id: 'vs', name: '得分', employeeName: null }],
   });
 
@@ -663,12 +663,12 @@ describe('双表流程（scoreScope=both）', () => {
     // 进度提示出现，且自动切到剩余类型的车间表
     expect(await screen.findByText('还差 1 张评价表')).toBeInTheDocument();
     expect(screen.getByText(/已提交 负责人评价，还需完成「车间评价」/)).toBeInTheDocument();
-    expect(await screen.findByText('xx车间评价问卷')).toBeInTheDocument();
+    expect(await screen.findByText('xx车间评价打分表')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/vote/sheet?departmentId=d2'),
       expect.anything(),
     );
-    // 随机码没核销（还差一张），不能进成功页
+    // 随机码没使用（还差一张），不能进成功页
     expect(screen.queryByText('已进入成功页')).not.toBeInTheDocument();
     expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBe('tok-1');
   });
@@ -688,7 +688,7 @@ describe('双表流程（scoreScope=both）', () => {
 
     // 不当「一码一票」终态处理：切到还差的车间表继续
     expect(await screen.findByText('还差 1 张评价表')).toBeInTheDocument();
-    expect(await screen.findByText('xx车间评价问卷')).toBeInTheDocument();
+    expect(await screen.findByText('xx车间评价打分表')).toBeInTheDocument();
     expect(sessionStorage.getItem(VOTE_TOKEN_KEY)).toBe('tok-1');
     expect(screen.queryByText(/一码一票不能重复提交/)).not.toBeInTheDocument();
   });

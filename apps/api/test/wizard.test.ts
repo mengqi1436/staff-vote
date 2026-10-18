@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * 新建场次向导链路的接口测试（迁移 0007 / 契约 A-F）：
  *
  *   A. 全局部门字典 /org-departments CRUD（写需 departments.write，读=登录即可）
- *   B. POST /sessions：事务建场次 + 自动插入场内同名部门（409/404/422 校验）
+ *   B. POST /sessions：事务建评议 + 自动插入场内同名部门（409/404/422 校验）
  *   C. POST /sessions/:id/start 完整性校验（409 SESSION_INCOMPLETE + detail 中文缺项清单）
- *   D. PUT /sessions/:id/ticket-plan 票别分配聚合（422 WEIGHT_SUM / 409 有答卷禁移除）
+ *   D. PUT /sessions/:id/ticket-plan 人员类别分配聚合（422 WEIGHT_SUM / 409 有答卷禁移除）
  *   E. 投票提交事务写 sheet_ticket_map 受控映射
  *   F. 按随机码导出答卷（附件8 形态）与整场整合导出（答卷汇总）
  *
@@ -20,7 +20,7 @@ const testDatabaseUrl = process.env.TEST_DATABASE_URL ?? '';
 const suiteEnabled = Boolean(testDatabaseUrl);
 
 if (!suiteEnabled) {
-  console.warn('[wizard.test] 未设置 TEST_DATABASE_URL，跳过新建场次向导接口测试。');
+  console.warn('[wizard.test] 未设置 TEST_DATABASE_URL，跳过新建评议向导接口测试。');
 }
 
 // 必须在导入 src 之前改写：src/env.ts 在模块求值时读 process.env。
@@ -45,12 +45,11 @@ const app = createApp();
 let agent: ReturnType<typeof request.agent>;
 let readonlyAgent: ReturnType<typeof request.agent>;
 
-/** 本文件建立的场次与字典部门 id，afterAll 统一清理。 */
+/** 本文件建立的评议与字典部门 id，afterAll 统一清理。 */
 const sessionIds: string[] = [];
 const orgDepartmentIds: string[] = [];
 
-/** 场次名：向导创建走接口，名字带 TAG 便于 afterAll 兜底清理。 */
-let sessionSeq = 0;
+/** 评议名：向导创建走接口，名字带 TAG 便于 afterAll 兜底清理。 */
 async function newOrgDepartment(name: string): Promise<string> {
   const res = await agent.post('/api/admin/org-departments').send({ name });
   expect(res.status).toBe(200);
@@ -58,7 +57,7 @@ async function newOrgDepartment(name: string): Promise<string> {
   return res.body.department.id;
 }
 
-/** 走向导契约创建场次：字典部门 + 场次名 + 过去的 opensAt（不卡投票开放窗口）。 */
+/** 走向导契约创建评议：字典部门 + 评议名 + 过去的 opensAt（不卡投票开放窗口）。 */
 async function newSession(name: string): Promise<string> {
   const orgId = await newOrgDepartment(`${TAG}字典-${name}`);
   const res = await agent.post('/api/admin/sessions').send({
@@ -71,7 +70,7 @@ async function newSession(name: string): Promise<string> {
   return res.body.session.id;
 }
 
-/** 给向导场次补齐项点与被评列（场内部门由创建自动插入），返回场内部门 id。 */
+/** 给向导评议补齐评议项目与被评议人列（场内部门由创建自动插入），返回场内部门 id。 */
 async function setupQuestionnaire(sessionId: string): Promise<string> {
   const department = await prisma.department.findFirstOrThrow({ where: { sessionId } });
   // 0010 起项点在模板层；显式带 sessionId（库里常有多个场次）与 templateType
@@ -103,7 +102,7 @@ async function createTicket(sessionId: string, ticketTypeId: string) {
   });
 }
 
-describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导出）', () => {
+describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导出）', () => {
   beforeAll(async () => {
     await prisma.adminUser.deleteMany({ where: { username: { startsWith: TAG } } });
     await prisma.adminRole.deleteMany({ where: { code: { startsWith: TAG } } });
@@ -164,7 +163,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
   // 契约 A：全局部门字典
   // ---------------------------------------------------------------------------
 
-  describe('契约 A：全局部门字典 /org-departments', () => {
+  describe('契约 A：全局部门列表 /org-departments', () => {
     it('创建 → 列表 → 更新：{ department } 形状与字段齐全', async () => {
       const created = await agent
         .post('/api/admin/org-departments')
@@ -208,7 +207,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(duplicate.body.error.code).toBe('ORG_DEPARTMENT_EXISTS');
     });
 
-    it('未引用的字典项可删除；被场次引用时 409 ORG_DEPARTMENT_IN_USE', async () => {
+    it('未引用的字典项可删除；被评议引用时 409 ORG_DEPARTMENT_IN_USE', async () => {
       const unused = await agent.post('/api/admin/org-departments').send({ name: `${TAG}字典未引用` });
       expect(unused.status).toBe(200);
 
@@ -218,7 +217,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       // 被引用：走向导建一个引用它的场次，再删字典项必须被拦下
       const orgId = await newOrgDepartment(`${TAG}字典被引用`);
       const session = await agent.post('/api/admin/sessions').send({
-        name: `${TAG}场次-字典引用`,
+        name: `${TAG}评议-字典引用`,
         orgDepartmentId: orgId,
         opensAt: PAST_OPENS_AT,
       });
@@ -247,11 +246,11 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
   // 契约 B：POST /sessions（向导第一步）
   // ---------------------------------------------------------------------------
 
-  describe('契约 B：POST /sessions 建场次 + 自动插入场内部门', () => {
-    it('正向：一个事务内建场次与场内同名部门，DTO 带字典部门信息', async () => {
+  describe('契约 B：POST /sessions 建评议 + 自动插入场内部门', () => {
+    it('正向：一个事务内建评议与场内同名部门，DTO 带字典部门信息', async () => {
       const orgId = await newOrgDepartment(`${TAG}字典-B正向`);
       const res = await agent.post('/api/admin/sessions').send({
-        name: `${TAG}场次-B正向`,
+        name: `${TAG}评议-B正向`,
         orgDepartmentId: orgId,
         opensAt: '2026-09-01T08:00:00+08:00',
         closesAt: '2026-09-30T18:00:00+08:00',
@@ -261,7 +260,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
 
       const session = res.body.session;
       expect(session).toMatchObject({
-        name: `${TAG}场次-B正向`,
+        name: `${TAG}评议-B正向`,
         status: 'draft',
         orgDepartmentId: orgId,
         orgDepartmentName: `${TAG}字典-B正向`,
@@ -284,8 +283,88 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(row.orgDepartmentName).toBe(`${TAG}字典-B正向`);
     });
 
+    it('建评议即种入附件8 两套打分表：各 5 评议项目（满分 20）+ 个人打分表 5 个被评议人列', async () => {
+      const orgId = await newOrgDepartment(`${TAG}字典-B模板`);
+      const res = await agent.post('/api/admin/sessions').send({
+        name: `${TAG}评议-B模板`,
+        orgDepartmentId: orgId,
+        opensAt: PAST_OPENS_AT,
+      });
+      expect(res.status).toBe(200);
+      const sessionId = res.body.session.id;
+      sessionIds.push(sessionId);
+
+      const department = await prisma.department.findFirstOrThrow({ where: { sessionId } });
+
+      // 个人问卷：附件8 sheet1 的 5 个项点，顺序一致
+      const personCriteria = await prisma.criterion.findMany({
+        where: { sessionId, templateType: 'person' },
+        orderBy: { sortOrder: 'asc' },
+      });
+      expect(personCriteria.map((row) => row.name)).toEqual([
+        '政治素质',
+        '敬业担当',
+        '专业能力',
+        '工作质效',
+        '廉洁自律',
+      ]);
+      // 表尾写明「每一条评价项点满分20分」：分值上限必须是 20，否则投票端会放开到 100
+      for (const row of personCriteria) {
+        expect(row).toMatchObject({ minScore: 0, maxScore: 20, departmentId: null });
+      }
+
+      // 车间问卷：附件8 sheet2 的 5 个项点；向导里切换类型后不是空表
+      const workshopCriteria = await prisma.criterion.findMany({
+        where: { sessionId, templateType: 'workshop' },
+        orderBy: { sortOrder: 'asc' },
+      });
+      expect(workshopCriteria.map((row) => row.name)).toEqual([
+        '党建引领',
+        '安全管理',
+        '生产组织',
+        '队伍素质',
+        '基础管理',
+      ]);
+      for (const row of workshopCriteria) {
+        expect(row).toMatchObject({ minScore: 0, maxScore: 20, departmentId: null });
+      }
+
+      // 个人问卷版式的被评职务列（副主任出现两次是附件8 原样）
+      const columns = await prisma.voteColumn.findMany({
+        where: { departmentId: department.id },
+        orderBy: { sortOrder: 'asc' },
+      });
+      expect(columns.map((row) => row.name)).toEqual([
+        '主任',
+        '党支部书记',
+        '党支部副书记',
+        '副主任',
+        '副主任',
+      ]);
+
+      // 抬头三件套：附件号默认 附件1-1，标题与附件8 一致
+      const templates = await prisma.$queryRawUnsafe<
+        Array<{ type: string; title: string; header_note: string }>
+      >(
+        'SELECT type, title, header_note FROM session_questionnaire_templates WHERE session_id = $1 ORDER BY type',
+        sessionId,
+      );
+      expect(templates).toEqual([
+        expect.objectContaining({
+          type: 'person',
+          title: 'xx车间负责人评价问卷',
+          header_note: '附件1-1',
+        }),
+        expect.objectContaining({
+          type: 'workshop',
+          title: 'xx车间评价问卷',
+          header_note: '附件1-1',
+        }),
+      ]);
+    });
+
     it('closesAt 留空 = 永久开放（closesAt 为 null）', async () => {
-      const res = await newSession(`${TAG}场次-B永久`);
+      const res = await newSession(`${TAG}评议-B永久`);
       const list = await agent.get('/api/admin/sessions');
       const row = list.body.sessions.find((s: { id: string }) => s.id === res);
       expect(row.opensAt).toBeTruthy();
@@ -293,10 +372,10 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
     });
 
     it('重名 → 409 SESSION_EXISTS', async () => {
-      await newSession(`${TAG}场次-B重名`);
+      await newSession(`${TAG}评议-B重名`);
       const orgId = await newOrgDepartment(`${TAG}字典-B重名`);
       const duplicate = await agent.post('/api/admin/sessions').send({
-        name: `${TAG}场次-B重名`,
+        name: `${TAG}评议-B重名`,
         orgDepartmentId: orgId,
         opensAt: PAST_OPENS_AT,
       });
@@ -306,7 +385,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
 
     it('字典部门不存在 → 404 ORG_DEPARTMENT_NOT_FOUND', async () => {
       const res = await agent.post('/api/admin/sessions').send({
-        name: `${TAG}场次-B幽灵部门`,
+        name: `${TAG}评议-B幽灵部门`,
         orgDepartmentId: '00000000-0000-7000-8000-000000000000',
         opensAt: PAST_OPENS_AT,
       });
@@ -317,7 +396,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
     it('opensAt >= closesAt → 422 VOTE_WINDOW_INVALID', async () => {
       const orgId = await newOrgDepartment(`${TAG}字典-B窗口`);
       const equal = await agent.post('/api/admin/sessions').send({
-        name: `${TAG}场次-B窗口相等`,
+        name: `${TAG}评议-B窗口相等`,
         orgDepartmentId: orgId,
         opensAt: '2026-09-20T00:00:00+08:00',
         closesAt: '2026-09-20T00:00:00+08:00',
@@ -326,7 +405,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(equal.body.error.code).toBe('VOTE_WINDOW_INVALID');
 
       const reversed = await agent.post('/api/admin/sessions').send({
-        name: `${TAG}场次-B窗口反序`,
+        name: `${TAG}评议-B窗口反序`,
         orgDepartmentId: orgId,
         opensAt: '2026-09-21T00:00:00+08:00',
         closesAt: '2026-09-20T00:00:00+08:00',
@@ -337,7 +416,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
 
     it('无 settings.write 的账号 → 403', async () => {
       const denied = await readonlyAgent.post('/api/admin/sessions').send({
-        name: `${TAG}越权场次`,
+        name: `${TAG}越权评议`,
         orgDepartmentId: '00000000-0000-7000-8000-000000000000',
         opensAt: PAST_OPENS_AT,
       });
@@ -350,9 +429,9 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
   // ---------------------------------------------------------------------------
 
   describe('契约 C：start 的完整性校验（409 SESSION_INCOMPLETE）', () => {
-    it('四类缺项逐个触发：空场次逐项补齐，detail 随之收敛，配齐后 start 成功', async () => {
+    it('四类缺项逐个触发：空评议逐项补齐，detail 随之收敛，配齐后 start 成功', async () => {
       // 空场次（直写库，不走向导 —— 向导场次自带场内部门，测不出「缺部门」）
-      const session = await prisma.voteSession.create({ data: { name: `${TAG}场次-C完整性` } });
+      const session = await prisma.voteSession.create({ data: { name: `${TAG}评议-C完整性` } });
       sessionIds.push(session.id);
 
       const initial = await agent.post(`/api/admin/sessions/${session.id}/start`);
@@ -361,12 +440,12 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(initial.body.error.detail).toEqual(
         expect.arrayContaining([
           expect.stringContaining('启用部门'),
-          expect.stringContaining('启用票种'),
+          expect.stringContaining('启用人员类别'),
           expect.stringContaining('随机码'),
         ]),
       );
 
-      // 补 1：启用部门（未配置项点/被评列 → 缺项清单出现部门级提示）
+      // 补 1：启用部门（未配置评议项目/被评列 → 缺项清单出现部门级提示）
       const department = await prisma.department.create({
         data: { sessionId: session.id, name: `${TAG}C部门` },
       });
@@ -374,8 +453,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(afterDepartment.status).toBe(409);
       expect(afterDepartment.body.error.detail.join('\n')).not.toContain('启用部门：');
       expect(afterDepartment.body.error.detail.join('\n')).toContain(`${TAG}C部门`);
-      expect(afterDepartment.body.error.detail.join('\n')).toContain('项点');
-      expect(afterDepartment.body.error.detail.join('\n')).toContain('被评列');
+      expect(afterDepartment.body.error.detail.join('\n')).toContain('评议项目');
+      expect(afterDepartment.body.error.detail.join('\n')).toContain('被评议人列');
 
       // 补 2：项点（0010 起在模板层：departmentId 为空 + templateType）
       await prisma.criterion.create({
@@ -390,7 +469,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       });
       const afterCriterion = await agent.post(`/api/admin/sessions/${session.id}/start`);
       expect(afterCriterion.status).toBe(409);
-      expect(afterCriterion.body.error.detail.join('\n')).not.toContain('项点');
+      expect(afterCriterion.body.error.detail.join('\n')).not.toContain('评议项目');
 
       // 补 3：被评列
       await prisma.voteColumn.create({
@@ -398,7 +477,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       });
       const afterColumn = await agent.post(`/api/admin/sessions/${session.id}/start`);
       expect(afterColumn.status).toBe(409);
-      expect(afterColumn.body.error.detail.join('\n')).not.toContain('被评列');
+      expect(afterColumn.body.error.detail.join('\n')).not.toContain('被评议人列');
 
       // 补 4：票种（权重合计 50 ≠ 100 → 出现权重缺项）
       const ticketType = await prisma.ticketType.create({
@@ -423,8 +502,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(started.body.session.status).toBe('voting');
     });
 
-    it('向导建好的场次配置齐后 start 成功；paused→voting 恢复不做完整性校验', async () => {
-      const sessionId = await newSession(`${TAG}场次-C恢复`);
+    it('向导建好的评议配置齐后 start 成功；paused→voting 恢复不做完整性校验', async () => {
+      const sessionId = await newSession(`${TAG}评议-C恢复`);
       await setupQuestionnaire(sessionId);
       const ticketType = await prisma.ticketType.create({
         data: { sessionId, code: 'A', name: 'A 票', weightPercent: 100 },
@@ -448,9 +527,9 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
   // 契约 D：PUT /sessions/:id/ticket-plan
   // ---------------------------------------------------------------------------
 
-  describe('契约 D：票别分配 PUT /sessions/:id/ticket-plan', () => {
-    it('正向：一次提交全集 → 票种建齐、批次发码、数组顺序即 sortOrder', async () => {
-      const sessionId = await newSession(`${TAG}场次-D正向`);
+  describe('契约 D：人员类别分配 PUT /sessions/:id/ticket-plan', () => {
+    it('正向：一次提交全集 → 人员类别建齐、批次发码、数组顺序即 sortOrder', async () => {
+      const sessionId = await newSession(`${TAG}评议-D正向`);
       const res = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
           { code: 'A', name: 'A 票（领导评议）', weightPercent: 50, count: 3 },
@@ -488,7 +567,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
     });
 
     it('权重合计 ≠ 100 → 422 WEIGHT_SUM，整批不落库', async () => {
-      const sessionId = await newSession(`${TAG}场次-D权重`);
+      const sessionId = await newSession(`${TAG}评议-D权重`);
       const res = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
           { code: 'A', name: 'A 票', weightPercent: 60, count: 1 },
@@ -501,8 +580,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(await prisma.ticketBatch.count({ where: { sessionId } })).toBe(0);
     });
 
-    it('未列入的现有票种被软停用；upsert 更新 name/weight 且重新启用已停用票种', async () => {
-      const sessionId = await newSession(`${TAG}场次-D停用`);
+    it('未列入的现有人员类别被软停用；upsert 更新 name/weight 且重新启用已停用人员类别', async () => {
+      const sessionId = await newSession(`${TAG}评议-D停用`);
       // 第一轮：A/B/C
       await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
@@ -511,7 +590,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
           { code: 'C', name: 'C 票', weightPercent: 20, count: 0 },
         ],
       });
-      // 第二轮：只交 A（改权重）与 D（新票种）→ B/C 软停用
+      // 第二轮：只交 A（改权重）与 D（新人员类别）→ B/C 软停用
       const second = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
           { code: 'A', name: 'A 票改', weightPercent: 80, count: 0 },
@@ -541,8 +620,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(revived!.enabled).toBe(true);
     });
 
-    it('已有答卷的票种被移出集合 → 409 TICKET_TYPE_HAS_SHEETS；改 name/weight 仍允许', async () => {
-      const sessionId = await newSession(`${TAG}场次-D答卷`);
+    it('已有答卷的人员类别被移出集合 → 409 TICKET_TYPE_HAS_SHEETS；改 name/weight 仍允许', async () => {
+      const sessionId = await newSession(`${TAG}评议-D答卷`);
       await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
           { code: 'A', name: 'A 票', weightPercent: 50, count: 1 },
@@ -583,7 +662,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
     });
 
     it('提交集合内编码重复 → 400 VALIDATION_FAILED；无权限账号 → 403', async () => {
-      const sessionId = await newSession(`${TAG}场次-D校验`);
+      const sessionId = await newSession(`${TAG}评议-D校验`);
       const duplicate = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
           { code: 'A', name: 'A 票', weightPercent: 50, count: 0 },
@@ -605,7 +684,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
   // ---------------------------------------------------------------------------
 
   describe('契约 E/F：受控映射与导出', () => {
-    /** 一条完整的可投票链路夹具：voting 场次 + 问卷 + 100% 票种 + 两张码。 */
+    /** 一条完整的可投票链路夹具：voting 评议 + 打分表 + 100% 人员类别 + 两张码。 */
     async function setupVotableSession(name: string): Promise<{
       sessionId: string;
       departmentId: string;
@@ -633,9 +712,9 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       });
       await prisma.$executeRaw`
         INSERT INTO session_questionnaire_templates (id, session_id, type, header_note, title, footer_note, created_at, updated_at)
-        VALUES (gen_random_uuid()::text, ${session.id}, 'person', '附件8-1', 'xx评议问卷', '满分 100 分，弃权按 0 分计', now(), now())
+        VALUES (gen_random_uuid()::text, ${session.id}, 'person', '附件8-1', 'xx评议打分表', '满分 100 分，弃权按 0 分计', now(), now())
         ON CONFLICT (session_id, type) DO UPDATE
-        SET header_note = '附件8-1', title = 'xx评议问卷', footer_note = '满分 100 分，弃权按 0 分计', updated_at = now()
+        SET header_note = '附件8-1', title = 'xx评议打分表', footer_note = '满分 100 分，弃权按 0 分计', updated_at = now()
       `;
       const voteColumn = await prisma.voteColumn.create({
         data: { departmentId: department.id, sessionId: session.id, name: '主任' },
@@ -664,8 +743,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
         });
     }
 
-    it('提交后 sheet_ticket_map 写入映射（票→答卷→场次）；重复提交不产生第二行', async () => {
-      const fixture = await setupVotableSession(`${TAG}场次-E映射`);
+    it('提交后 sheet_ticket_map 写入映射（票→答卷→评议）；重复提交不产生第二行', async () => {
+      const fixture = await setupVotableSession(`${TAG}评议-E映射`);
       const ticket = await createTicket(fixture.sessionId, fixture.ticketTypeId);
 
       const submitted = await submitOnce(
@@ -692,8 +771,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       expect(await prisma.sheetTicketMap.count({ where: { ticketId: ticket.id } })).toBe(1);
     });
 
-    it('按随机码导出答卷：附件8 形态（抬头替换 xx / 行=项点 / 列=被评列 / 表尾 / 提交时间与票别）', async () => {
-      const fixture = await setupVotableSession(`${TAG}场次-F单码`);
+    it('按随机码导出答卷：附件8 形态（抬头替换 xx / 行=评议项目 / 列=被评议人列 / 表尾 / 提交时间与人员类别）', async () => {
+      const fixture = await setupVotableSession(`${TAG}评议-F单码`);
       const ticket = await createTicket(fixture.sessionId, fixture.ticketTypeId);
       const submitted = await submitOnce(
         ticket.code,
@@ -716,8 +795,8 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       const text = values.join('|');
       // 抬头：附件号 + 标题中 xx 替换为部门名
       expect(text).toContain('附件8-1');
-      expect(text).toContain('安装车间评议问卷');
-      expect(text).not.toContain('xx评议问卷');
+      expect(text).toContain('安装车间评议打分表');
+      expect(text).not.toContain('xx评议打分表');
       // 行=项点，格=分数
       expect(text).toContain('德');
       expect(text).toContain('88');
@@ -728,7 +807,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
     });
 
     it('未使用的码 → 409；已作废 → 409；已使用但无映射 → 404 TICKET_NO_SHEET', async () => {
-      const fixture = await setupVotableSession(`${TAG}场次-F异常`);
+      const fixture = await setupVotableSession(`${TAG}评议-F异常`);
       const unused = await createTicket(fixture.sessionId, fixture.ticketTypeId);
       const unusedRes = await agent.get(`/api/admin/tickets/${unused.id}/export.xlsx`);
       expect(unusedRes.status).toBe(409);
@@ -752,7 +831,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
     });
 
     it('整场导出：统分 sheets + 「答卷汇总」（含随机码列与各格分数、无映射历史答卷一并包含）', async () => {
-      const fixture = await setupVotableSession(`${TAG}场次-F整场`);
+      const fixture = await setupVotableSession(`${TAG}评议-F整场`);
       // 一张走正常流程（有映射）+ 一张历史答卷（无映射，票已核销）
       const ticket = await createTicket(fixture.sessionId, fixture.ticketTypeId);
       const submitted = await submitOnce(
@@ -789,7 +868,7 @@ describeDb('新建场次向导（org-departments / sessions / ticket-plan / 导�
       const names = workbook.worksheets.map((sheet) => sheet.name);
       // 单启用部门：统分 sheet 保持原始名（不加部门后缀）
       expect(names).toContain('综合排名');
-      expect(names).toContain('票别单项明细');
+      expect(names).toContain('人员类别单项明细');
       expect(names).toContain('答卷汇总');
 
       const summary = workbook.worksheets.find((sheet) => sheet.name === '答卷汇总')!;

@@ -22,8 +22,8 @@ import { IdParamSchema, operatorOf } from './helpers.js';
 
 const CreateSchema = z.object({
   sessionId: z.string().min(1).optional(),
-  code: z.string().trim().min(1, '票种编码不能为空').max(20),
-  name: z.string().trim().min(1, '票种名称不能为空').max(100),
+  code: z.string().trim().min(1, '人员类别编码不能为空').max(20),
+  name: z.string().trim().min(1, '人员类别名称不能为空').max(100),
   weightPercent: z.number().int().min(0).max(100),
   sortOrder: z.number().int().min(0).optional(),
   enabled: z.boolean().optional(),
@@ -31,7 +31,7 @@ const CreateSchema = z.object({
 
 const PatchSchema = CreateSchema.partial();
 
-/** 列表类接口的场次过滤：?sessionId= 可选，未带时单场自动解析、多场 400。 */
+/** 列表类接口的评议过滤：?sessionId= 可选，未带时单场自动解析、多场 400。 */
 const ListQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
 });

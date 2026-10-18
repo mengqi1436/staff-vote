@@ -27,14 +27,14 @@ import { IdParamSchema, operatorOf } from './helpers.js';
 const ListQuerySchema = z.object({
   departmentId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
-  /** 模板项点类型过滤：查该场次该类型的模板项点（departmentId 为空的行）。 */
+  /** 模板评议项目类型过滤：查该评议该类型的模板评议项目（departmentId 为空的行）。 */
   templateType: z.enum(['person', 'workshop']).optional(),
 });
 
 const CreateSchema = z.object({
   sessionId: z.string().min(1).optional(),
   templateType: z.enum(['person', 'workshop']),
-  name: z.string().trim().min(1, '项点名称不能为空').max(50),
+  name: z.string().trim().min(1, '评议项目名称不能为空').max(50),
   // 项点描述即参考表里项点名称下方那段长文字；留空表示没有描述
   description: z.string().trim().max(1000).nullable().optional(),
   minScore: z.number().int(),

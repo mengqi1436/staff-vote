@@ -9,7 +9,7 @@ import { env } from '../env.js';
  */
 
 const ADMIN_TTL_SECONDS = 2 * 60 * 60;
-/** 投票会话给足填写时间：一张几十行的表需要逐步录入。 */
+/** 投票登录状态给足填写时间：一张几十行的表需要逐步录入。 */
 const VOTE_TTL_SECONDS = 2 * 60 * 60;
 
 export interface AdminTokenPayload {
@@ -21,9 +21,9 @@ export interface AdminTokenPayload {
 
 export interface VoteTokenPayload {
   kind: 'vote';
-  /** 随机码 ID（UUID），用于提交时的原子核销。令牌里不含码明文。 */
+  /** 随机码 ID（UUID），用于提交时的原子使用。令牌里不含码明文。 */
   sub: string;
-  /** 票种 ID，用于计分加权。 */
+  /** 人员类别 ID，用于计分加权。 */
   ticketTypeId: string;
 }
 

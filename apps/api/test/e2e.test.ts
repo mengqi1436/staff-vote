@@ -43,20 +43,19 @@ const ADMIN_PASSWORD = 'e2e-Password-123';
 
 // 跨用例共享的状态
 let admin: ReturnType<typeof request.agent>;
-/** 主场次：用例 1b 通过接口创建并 start，全部既有用例在它之上跑。 */
+/** 主评议：用例 1b 通过接口创建并 start，全部既有用例在它之上跑。 */
 let sessionId = '';
-/** 多场次流程用例的场次 B。 */
+/** 多评议流程用例的评议 B。 */
 let sessionBId = '';
 let departmentId = '';
 let voteColumnAId = '';
 let voteColumnBId = '';
-/** 同名第二行「主任」：完整格子数是 3 列 × 2 项点 = 6 格。 */
+/** 同名第二行「主任」：完整格子数是 3 列 × 2 评议项目 = 6 格。 */
 let voteColumnCId = '';
 let criterionScoreId = '';
 let criterionQualityId = '';
 let ticketTypeAId = '';
 let ticketTypeBId = '';
-let ticketTypeCId = '';
 let generatedCodes: string[] = [];
 
 beforeAll(async () => {
@@ -92,7 +91,7 @@ beforeAll(async () => {
   });
 
   // 主场次由用例 1b 经接口创建并 start；这里只建它前面的场次名占位（draft）。
-  sessionId = await createTestSession(prisma, 'e2e-主场次', 'draft');
+  sessionId = await createTestSession(prisma, 'e2e-主评议', 'draft');
 
   // 票种由本文件自行建立，不依赖 seed：端到端测试跑在独立的测试库上，
   // 而 seed 只写开发库。权重仍为 50/30/20（合计 100），
@@ -132,7 +131,7 @@ afterAll(async () => {
 });
 
 describe('端到端：职工素质评议完整流程', () => {
-  it('1. 管理员登录并拿到会话 Cookie', async () => {
+  it('1. 管理员登录并拿到登录状态 Cookie', async () => {
     const res = await admin
       .post('/api/admin/login')
       .send({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
@@ -143,9 +142,9 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.token).toBeUndefined();
   });
 
-  it('1b. 未配置完整的场次不能 start（完整性校验），配置先行的前置由此确立', async () => {
-    // 主场次此刻只有票种（beforeAll 建的 A/B/C，权重合计 100），
-    // 缺部门（连带项点/被评列）与随机码 → 409，detail 给出缺项清单
+  it('1b. 未配置完整的评议不能 start（完整性校验），配置先行的前置由此确立', async () => {
+    // 主评议此刻只有人员类别（beforeAll 建的 A/B/C，权重合计 100），
+    // 缺部门（连带评议项目/被评列）与随机码 → 409，detail 给出缺项清单
     const incomplete = await admin.post(`/api/admin/sessions/${sessionId}/start`);
     expect(incomplete.status).toBe(409);
     expect(incomplete.body.error.code).toBe('SESSION_INCOMPLETE');
@@ -160,7 +159,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(row?.status).toBe('draft');
   });
 
-  it('2. 配置部门、职工名单与被评列（打分表的列）', async () => {
+  it('2. 配置部门、职工名单与被评议人列（打分表的列）', async () => {
     const dept = await admin.post('/api/admin/departments').send({ name: '技术部', sortOrder: 0 });
     expect(dept.status).toBe(200);
     departmentId = dept.body.id;
@@ -197,7 +196,7 @@ describe('端到端：职工素质评议完整流程', () => {
     voteColumnCId = c3.body.id;
   });
 
-  it('3. 配置素质项点（打分表的行），两项满分不同', async () => {
+  it('3. 配置素质评议项目（打分表的行），两项满分不同', async () => {
     // 故意让两项满分不同（100 与 10）——这正是「原始分不能直接相加」的场景
     const c1 = await admin
       .post('/api/admin/criteria')
@@ -211,7 +210,7 @@ describe('端到端：职工素质评议完整流程', () => {
     criterionQualityId = c2.body.id;
   });
 
-  it('4. 拒绝非法项点区间（max <= min）', async () => {
+  it('4. 拒绝非法评议项目区间（max <= min）', async () => {
     const res = await admin
       .post('/api/admin/criteria')
       .send({ templateType: 'person', name: '非法项', minScore: 10, maxScore: 10 });
@@ -219,14 +218,13 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.status).toBeLessThan(500);
   });
 
-  it('5. 配置票种权重（合计必须 100）', async () => {
+  it('5. 配置人员类别权重（合计必须 100）', async () => {
     const types = await admin.get('/api/admin/ticket-types');
     expect(types.status).toBe(200);
-    // 票种由本文件的 beforeAll 建立（A/B/C = 50/30/20）
+    // 人员类别由本文件的 beforeAll 建立（A/B/C = 50/30/20）
     expect(types.body).toHaveLength(3);
     ticketTypeAId = types.body.find((t: { code: string }) => t.code === 'A').id;
     ticketTypeBId = types.body.find((t: { code: string }) => t.code === 'B').id;
-    ticketTypeCId = types.body.find((t: { code: string }) => t.code === 'C').id;
 
     // 把 A 的权重改成 60，合计会变成 110，必须被拒绝
     const bad = await admin.patch(`/api/admin/ticket-types/${ticketTypeAId}`).send({ weightPercent: 60 });
@@ -234,7 +232,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(bad.status).toBeLessThan(500);
   });
 
-  it('6. 非开放时段（场次未 start）：投票状态为关闭，登录被拒', async () => {
+  it('6. 非开放时段（评议未 start）：投票状态为关闭，登录被拒', async () => {
     // 场次仍是 draft（用例 1b 被完整性校验拦下），本来就不开放
     const status = await request(app).get('/api/vote/status');
     expect(status.status).toBe(200);
@@ -253,7 +251,7 @@ describe('端到端：职工素质评议完整流程', () => {
   });
 
   it('7. 配置齐全后 start 开放投票，再批量发码', async () => {
-    // 用例 2/3 已配齐部门/项点/被评列，用例 6 已发一张 A 码：四类完整性条件满足
+    // 用例 2/3 已配齐部门/评议项目/被评列，用例 6 已发一张 A 码：四类完整性条件满足
     const res = await admin.post(`/api/admin/sessions/${sessionId}/start`);
     expect(res.status).toBe(200);
     expect(res.body.session.status).toBe('voting');
@@ -286,7 +284,7 @@ describe('端到端：职工素质评议完整流程', () => {
     // 响应带票所属场次（场次的 start 让登录成为可能）
     expect(session.body.session).toEqual({
       id: sessionId,
-      name: 'e2e-主场次',
+      name: 'e2e-主评议',
       status: 'voting',
       scoreScope: 'person',
     });
@@ -348,7 +346,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(empty.status).toBeLessThan(500);
   });
 
-  it('10. A 票提交完整打分（3 列 × 2 项点 = 6 格）', async () => {
+  it('10. A 票提交完整打分（3 列 × 2 评议项目 = 6 格）', async () => {
     const session = await request(app).post('/api/vote/session').send({ code: generatedCodes[0] });
     const token = session.body.token as string;
 
@@ -408,7 +406,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.status).toBe(200);
   });
 
-  it('13. 后台实时统计反映发码与核销情况', async () => {
+  it('13. 后台实时统计反映发码与使用情况', async () => {
     const res = await admin.get('/api/admin/stats/overview');
     expect(res.status).toBe(200);
 
@@ -424,7 +422,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.voteWindow.open).toBe(true);
   });
 
-  it('14. 结果按票种加权并对实际有票的票种归一化', async () => {
+  it('14. 结果按人员类别加权并对实际有票的人员类别归一化', async () => {
     const res = await admin.get(`/api/admin/results?departmentId=${departmentId}`);
     expect(res.status).toBe(200);
 
@@ -482,17 +480,17 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(text).toContain('被评对象');
     expect(text).toContain('主任');
 
-    // 统计四口径：票别单项明细 / 票别合计明细 两个新 sheet
+    // 统计四说明：人员类别单项明细 / 票别合计明细 两个新 sheet
     const sheetNames = workbook.worksheets.map((sheet) => sheet.name);
-    expect(sheetNames).toContain('票别单项明细');
-    expect(sheetNames).toContain('票别合计明细');
+    expect(sheetNames).toContain('人员类别单项明细');
+    expect(sheetNames).toContain('人员类别合计明细');
     const detailText = workbook.worksheets
-      .find((sheet) => sheet.name === '票别单项明细')
+      .find((sheet) => sheet.name === '人员类别单项明细')
       ?.getSheetValues()
       .flat()
       .filter((v): v is string => typeof v === 'string')
       .join('|');
-    expect(detailText).toContain('票种');
+    expect(detailText).toContain('人员类别');
     expect(detailText).toContain('工作业绩');
   });
 
@@ -523,10 +521,10 @@ describe('端到端：职工素质评议完整流程', () => {
       ? headerRow.filter((v): v is string => typeof v === 'string').join('|')
       : '';
     expect(header).not.toContain('状态');
-    expect(header).not.toContain('核销时间');
+    expect(header).not.toContain('使用时间');
   });
 
-  it('17. 暂停场次后状态回到未开放', async () => {
+  it('17. 暂停评议后状态回到未开放', async () => {
     await admin.post(`/api/admin/sessions/${sessionId}/pause`);
     const status = await request(app).get('/api/vote/status');
     expect(status.body.open).toBe(false);
@@ -536,12 +534,12 @@ describe('端到端：职工素质评议完整流程', () => {
     await admin.post(`/api/admin/sessions/${sessionId}/start`);
   });
 
-  it('18. 多场次流程：建场 → 配置 → 发码（留痕）→ start → 完整提交 → pause 拒登录 → end 终态', async () => {
+  it('18. 多评议流程：建场 → 配置 → 发码（留痕）→ start → 完整提交 → pause 拒登录 → end 终态', async () => {
     // 全局部门字典 + 向导契约建第二场次（opensAt 取过去时间，不卡投票开放窗口）
     const orgB = await admin.post('/api/admin/org-departments').send({ name: 'e2e-字典车间' });
     expect(orgB.status).toBe(200);
     const created = await admin.post('/api/admin/sessions').send({
-      name: 'e2e-第二场次',
+      name: 'e2e-第二评议',
       orgDepartmentId: orgB.body.department.id,
       opensAt: new Date(Date.now() - 60_000).toISOString(),
     });
@@ -575,7 +573,7 @@ describe('端到端：职工素质评议完整流程', () => {
     // 权重校验按场次内启用票种合计，本场次从 0 起算，100 合法。
     const typeBCreated = await admin
       .post('/api/admin/ticket-types')
-      .send({ sessionId: sessionBId, code: 'D', name: 'D 票（第二场次）', weightPercent: 100 });
+      .send({ sessionId: sessionBId, code: 'D', name: 'D 票（第二评议）', weightPercent: 100 });
     expect(typeBCreated.status).toBe(200);
     const typeBRow = typeBCreated.body;
 
@@ -591,7 +589,7 @@ describe('端到端：职工素质评议完整流程', () => {
     });
     expect(generatedTicket.assigneeId).toBeNull();
 
-    // 配置齐（部门/项点/被评列/票种/码）后 start：draft → voting
+    // 配置齐（部门/项点/被评议人列/票种/码）后 start：draft → voting
     const started = await admin.post(`/api/admin/sessions/${sessionBId}/start`);
     expect(started.status).toBe(200);
     expect(started.body.session.status).toBe('voting');
@@ -619,7 +617,7 @@ describe('端到端：职工素质评议完整流程', () => {
     const overview = await admin.get(`/api/admin/stats/overview?sessionId=${sessionBId}`);
     expect(overview.status).toBe(200);
 
-    // pause 后：新登录被拒（用一张未使用的码，避免"码已核销"抢在场次校验前面）
+    // pause 后：新登录被拒（用一张未使用的码，避免"码已使用"抢在场次校验前面）
     const paused = await admin.post(`/api/admin/sessions/${sessionBId}/pause`);
     expect(paused.status).toBe(200);
     expect(paused.body.session.status).toBe('paused');
@@ -645,8 +643,8 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(exportB.status).toBe(200);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(exportB.body as unknown as Parameters<typeof wb.xlsx.load>[0]);
-    expect(wb.worksheets.map((sheet) => sheet.name)).toContain('票别单项明细');
-    expect(wb.worksheets.map((sheet) => sheet.name)).toContain('票别合计明细');
+    expect(wb.worksheets.map((sheet) => sheet.name)).toContain('人员类别单项明细');
+    expect(wb.worksheets.map((sheet) => sheet.name)).toContain('人员类别合计明细');
 
     // 清理第二场次：先清它的业务数据（外键 RESTRICT）
     const deptIds = [departmentB.id];

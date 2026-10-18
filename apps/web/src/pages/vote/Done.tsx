@@ -6,7 +6,7 @@ import { VoteSurface } from '../../components/VoteSurface.js';
  * 提交成功页（流程第 3 步：完成提交）。
  *
  * 职工在这里只需要确认三件事：提交成功了、不能改、可以走了。
- * 因此刻意不放「返回」或「再改一次」的入口 —— 一码一票提交即核销，
+ * 因此刻意不放「返回」或「再改一次」的入口 —— 一码一票提交即使用，
  * 留一个回退入口只会让人以为还能改，等发现不行时已经来不及补救。
  *
  * 视觉走 Apple 风格契约：Result 标准成功态 + 克制的留白，不做自定义动效；
@@ -33,7 +33,7 @@ export function VoteDone() {
                 您的评分已经提交并生效，<strong>提交后不可修改</strong>。
               </p>
               <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-                一码一票：这枚随机码已经核销，不能再次提交，也不能回来修改分数。
+                一码一票：这枚随机码已经使用过，不能再次提交，也不能回来修改分数。
               </Typography.Paragraph>
               <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
                 本页不显示您提交的内容，系统也不记录您的姓名与身份。

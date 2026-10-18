@@ -2,6 +2,13 @@ import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 
 /**
+ * 读写模板只需要原生查询能力。
+ * 放宽到 `$queryRaw`：事务客户端（Prisma.TransactionClient）也能直接传入，
+ * 建场次时「场次 + 部门 + 模板」才能落在同一个事务里。
+ */
+type RawQueryClient = Pick<PrismaClient, '$queryRaw'>;
+
+/**
  * 场次问卷模板（session_questionnaire_templates）的原生 SQL 读写层。
  *
  * 背景：Prisma 7.10 queryCompiler 对该模型的 API 调用（findUnique/create/upsert/
@@ -12,8 +19,7 @@ import type { PrismaClient } from '../generated/prisma/client.js';
  */
 
 /** 行的 camelCase 形态（与旧 Prisma 模型字段同名，调用方无感迁移）。 */
-export interface QuestionnaireTemplateRow {
-  sessionId: string;
+export interface QuestionnaireTemplateRow {  sessionId: string;
   type: string;
   headerNote: string;
   title: string;
@@ -48,7 +54,7 @@ const COLUMNS = Prisma.sql`"session_id", "type", "header_note", "title", "footer
 
 /** 读一套模板；行不存在返回 null（调用方退回默认文案）。 */
 export async function findTemplate(
-  prisma: PrismaClient,
+  prisma: RawQueryClient,
   sessionId: string,
   type: string,
 ): Promise<QuestionnaireTemplateRow | null> {
@@ -66,7 +72,7 @@ export async function findTemplate(
  * 返回落库后的完整行。
  */
 export async function upsertTemplate(
-  prisma: PrismaClient,
+  prisma: RawQueryClient,
   sessionId: string,
   type: string,
   patch: { headerNote?: string; title?: string; footerNote?: string },
@@ -91,7 +97,7 @@ export async function upsertTemplate(
 
 /** 测试/向导夹具用：直接插入一套模板（值全量给定，缺省用列默认）。 */
 export async function createTemplate(
-  prisma: PrismaClient,
+  prisma: RawQueryClient,
   data: { sessionId: string; type: string; headerNote?: string; title?: string; footerNote?: string },
 ): Promise<QuestionnaireTemplateRow> {
   const rows = await prisma.$queryRaw<RawRow[]>`

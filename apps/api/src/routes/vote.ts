@@ -75,7 +75,7 @@ function voteAuth(req: Request, _res: Response, next: NextFunction): void {
   const payload = token ? verifyVoteToken(token) : null;
 
   if (!payload) {
-    next(ApiError.unauthorized('投票会话无效或已过期，请重新登录'));
+    next(ApiError.unauthorized('投票登录状态无效或已过期，请重新登录'));
     return;
   }
 
@@ -111,14 +111,14 @@ voteRouter.post('/session', voteLoginLimiter, async (req, res) => {
   res.json(await createVoteSession(normalizeCode(code)));
 });
 
-/** 取某部门的打分表骨架（行 = 职工，列 = 项点）；场次由票锁定，跨场次一律 404。 */
+/** 取某部门的打分表骨架（行 = 职工，列 = 评议项目）；评议由票锁定，跨评议一律 404。 */
 voteRouter.get('/sheet', voteAuth, async (req, res) => {
   const departmentId = typeof req.query.departmentId === 'string' ? req.query.departmentId.trim() : '';
   if (!departmentId) throw ApiError.badRequest('缺少 departmentId');
   res.json(await getVoteSheet(req.voteTicket!.sub, departmentId));
 });
 
-/** 提交打分并核销该码，一码一票。 */
+/** 提交打分并使用该码，一码一票。 */
 voteRouter.post('/submit', voteAuth, async (req, res) => {
   const { departmentId, items } = SubmitSchema.parse(req.body);
   // voteAuth 已保证注入；非空断言只是给类型收窄用（Express 的 Request 类型无法表达

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Card, Empty, Select, Table, Tooltip, Typography } from 'antd';
+import { Button, Card, Empty, Select, Table, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, PrinterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import type { TableColumnsType } from 'antd';
@@ -10,6 +10,7 @@ import { useAdminSession } from '../../lib/sessionContext.js';
 import { EMPTY_TEXT, formatDateTime } from './lib.js';
 import {
   ErrorState,
+  HelpLabel,
   LoadingState,
   PageHeader,
   StaleDataAlert,
@@ -20,12 +21,12 @@ import {
  *
  * 导出三件套：本页排名汇总、Excel、可打印的正式打分表。
  *
- * 口径必须写在页面上（产品原则 4「结果可复现、可解释」）：
- *   - 各项得分是「票种加权后的原始分」，仍落在该项的 min/max 区间内；
+ * 说明必须写在页面上（产品原则 4「结果可复现、可解释」）：
+ *   - 各项得分是「人员类别加权后的原始分」，仍落在该项的 min/max 区间内；
  *   - 综合得分是各项归一化到百分制后的等权平均；
- *   - 某票种在本部门零票时会被归一化排除，所以必须标出「实际参与计算的票种」，
+ *   - 某人员类别在本部门零票时会被归一化排除，所以必须标出「实际参与计算的人员类别」，
  *     否则管理员会以为结果算错了。
- * 口径说明用 Alert type="info" 承载，术语与后端 src/lib/scoring.ts 的实现一致。
+ * 计分说明收进「成绩排名」标题旁的说明图标，术语与后端 src/lib/scoring.ts 的实现一致。
  */
 export function AdminResults() {
   const [departmentId, setDepartmentId] = useState('');
@@ -94,7 +95,7 @@ export function AdminResults() {
             const names = cell.participatingTicketTypeIds.map(typeName).join('、');
             return (
               <Tooltip
-                title={`票种加权后的原始分 ${cell.rawScore}，归一化 ${cell.normalizedScore.toFixed(1)}；本项参与计算票种：${
+                title={`这项的原始分 ${cell.rawScore}，换算成百分制是 ${cell.normalizedScore.toFixed(1)}；这项有打分的人员类别：${
                   names || '无'
                 }`}
               >
@@ -125,7 +126,7 @@ export function AdminResults() {
     <>
       <PageHeader
         title="结果与导出"
-        description="按综合得分排名。各项得分是票种加权后的原始分，综合得分是各项归一化到百分制后的等权平均；口径写在页面里，不做黑箱。"
+        description="按综合得分从高到低排名。各项得分是把不同人员类别打的分按权重合并后的原始分；综合得分是把各项换算成百分制后的平均分。计算方法都写明在页面上，数字可以自己复算。"
         extra={
           <>
             <Select
@@ -159,7 +160,7 @@ export function AdminResults() {
                 icon={<DownloadOutlined />}
                 href={sessionId ? adminApi.sessions.exportFullUrl(sessionId) : undefined}
                 disabled={!sessionId}
-                title={sessionId ? undefined : '请先选择场次'}
+                title={sessionId ? undefined : '请先选择评议'}
               >
                 整场整合导出
               </Button>
@@ -187,14 +188,18 @@ export function AdminResults() {
         <Card>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="请先选择部门：成绩按部门汇总，每个部门的项点与职工名单都是单独配置的，选定部门后才会出表。"
+            description="请先选择部门：成绩按部门汇总，每个部门的评议项目与职工名单都是单独配置的，选定部门后才会出表。"
           />
         </Card>
       ) : null}
 
       {data ? (
         <Card
-          title="成绩排名"
+          title={
+            <HelpLabel help="每项得分是把各类人员打的分按权重合并，仍落在这项自己的分数区间里；综合得分是把每项换算成百分制再取平均。某项没有人打分就不参与平均，不会按 0 分算；弃权或没填的格子按 0 分算。某一类人员一张表都没交时，这类不参与计算（那是没发这类码，不算弃权）。同分并列，同一分数按被评对象名称排序。被评对象是职务或车间，不是具体职工。本页数字和导出的 Excel 一致。">
+              成绩排名
+            </HelpLabel>
+          }
           extra={
             <Typography.Text type="secondary">
               部门：{data.department.name}｜单位：分
@@ -217,7 +222,7 @@ export function AdminResults() {
               共收到 {data.sheetCount} 张提交表 · 生成时间 {formatDateTime(data.generatedAt)}
             </Typography.Text>
             <Typography.Text type="secondary">
-              项点 <span className="tabular">{data.criteria.length}</span> 项
+              评议项目 <span className="tabular">{data.criteria.length}</span> 项
             </Typography.Text>
           </div>
 
@@ -230,7 +235,7 @@ export function AdminResults() {
               marginBottom: 16,
             }}
           >
-            <Typography.Text type="secondary">实际参与计算的票种</Typography.Text>
+            <Typography.Text type="secondary">实际参与计算的人员类别</Typography.Text>
             {data.ticketTypesInvolved.length ? (
               data.ticketTypesInvolved.map((type) => (
                 <span key={type.id}>
@@ -242,40 +247,6 @@ export function AdminResults() {
               <Typography.Text type="secondary">暂无：本部门还没有收到任何一张票</Typography.Text>
             )}
           </div>
-
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            title="计分口径"
-            description={
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                <li>
-                  表中各项得分为「票种加权后的原始分」，仍落在该项点的起评分与满分之间：某项得分 =
-                  Σ(该票种在该项的均分 × 票种权重) ÷ Σ(票种权重)，只取在该项点真正有票的票种。综合得分为百分制。
-                </li>
-                <li>
-                  综合得分口径：各项先按自身区间归一化到百分制（(得分 − 起评分) ÷ (满分 − 起评分) ×
-                  100），再取等权平均。某项点在本部门一张票都没有时，该项不参与平均，也不会按 0 分计入。
-                </li>
-                <li>
-                  弃权、不填按 0 分计入：某票种在本部门只要有已提交的表，该票种在本部门的每一格都参与平均，
-                  某张表缺某一格即按 0 分计入该格。
-                </li>
-                <li>
-                  参与计算的票种：某票种在本部门一张表都没有时整票种不参与（那是没发这种票，不是弃权）；
-                  权重只决定票种之间的配比，不改变项点之间的等权关系。
-                </li>
-                <li>
-                  排名按综合得分降序，同分并列（1、2、2、4 式），同分内按被评对象名称排序；本页数字与「导出
-                  Excel」同源。
-                </li>
-                <li>
-                  数据来源：本部门已提交的评分记录；被评对象是职务/车间（被评列），不是具体职工。
-                </li>
-              </ul>
-            }
-          />
 
           {noSubmissions ? (
             <Empty

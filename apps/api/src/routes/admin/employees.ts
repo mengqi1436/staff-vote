@@ -139,7 +139,7 @@ employeesRouter.get('/', async (req, res) => {
   res.json(await listEmployees(departmentId, await resolveSessionId(sessionId)));
 });
 
-/** 导入模板：表头与列约定同口径，示例行演示各列；xlsx 与 CSV 模板内容由前端按需取。 */
+/** 导入模板：表头与列约定同说明，示例行演示各列；xlsx 与 CSV 模板内容由前端按需取。 */
 employeesRouter.get('/import-template.xlsx', async (_req, res) => {
   const workbook = buildRosterWorkbook([
     { departmentName: '办公室', name: '张三', gender: '男', age: 35, title: '高级工程师' },

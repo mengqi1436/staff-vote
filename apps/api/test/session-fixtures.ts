@@ -4,12 +4,12 @@ import type { PrismaClient } from '../src/generated/prisma/client.js';
  * 场次测试夹具。
  *
  * 业务表新增 session_id 后，直接写库造夹具的测试文件都需要一个场次。
- * 各文件的清理策略（保持"跑完自己后库里只剩默认场次"，与同库其他文件并存）：
+ * 各文件的清理策略（保持"跑完自己后库里只剩默认评议"，与同库其他文件并存）：
  *   - 只用默认场次的文件：beforeAll 调 ensureDefaultSession 兜底即可，无需清理；
  *   - 自建场次的文件：afterAll 按自己的 id 删除。
  */
 
-/** 迁移 0005 写入的默认场次 ID（与 services/admin.ts 的常量一致）。 */
+/** 迁移 0005 写入的默认评议 ID（与 services/admin.ts 的常量一致）。 */
 export const DEFAULT_SESSION_ID = '00000000-0000-7000-8000-000000000001';
 
 /**
@@ -19,7 +19,7 @@ export async function ensureDefaultSession(prisma: PrismaClient): Promise<string
   const existing = await prisma.voteSession.findUnique({ where: { id: DEFAULT_SESSION_ID } });
   if (existing) return existing.id;
   // uuid 由应用生成的约定下，这里显式给固定字面量，保持与迁移写入的一致。
-  await prisma.voteSession.create({ data: { id: DEFAULT_SESSION_ID, name: '默认场次' } });
+  await prisma.voteSession.create({ data: { id: DEFAULT_SESSION_ID, name: '默认评议' } });
   return DEFAULT_SESSION_ID;
 }
 

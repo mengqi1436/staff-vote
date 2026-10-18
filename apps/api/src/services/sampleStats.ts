@@ -24,21 +24,21 @@
 import { computeResults } from '../lib/scoring.js';
 import { prisma } from '../db.js';
 
-/** 参考样表统计的行：被评对象 × 票别。 */
+/** 参考样表统计的行：被评对象 × 人员类别。 */
 export interface SampleStatRow {
   departmentId: string;
   departmentName: string;
-  /** 被评列 ID：同名被评列（如两个「副主任」）也各自唯一，前端 rowKey 依赖；车间虚拟得分列为 null */
+  /** 被评议人列 ID：同名被评议人列（如两个「副主任」）也各自唯一，前端 rowKey 依赖；车间虚拟得分列为 null */
   voteColumnId: string | null;
-  /** 被评对象：个人表为被评列名（主任…），车间表为车间名（部门自身） */
+  /** 被评对象：个人表为被评议人列名（主任…），车间表为车间名（部门自身） */
   targetName: string;
-  /** 票种 ID；ABC汇总行为 null */
+  /** 人员类别 ID；ABC汇总行为 null */
   ticketTypeId: string | null;
-  /** 票别显示：A / B / C / 「ABC汇总」 */
+  /** 人员类别显示：A / B / C / 「ABC汇总」 */
   ticketCode: string;
-  /** 各项点得分，顺序与 criteriaNames 对齐 */
+  /** 各评议项目得分，顺序与 criteriaNames 对齐 */
   scores: number[];
-  /** 1-5合计：各项点得分之和 */
+  /** 1-5合计：各评议项目得分之和 */
   total: number;
   /** 综合评价得分 */
   comprehensiveScore: number;
@@ -47,22 +47,22 @@ export interface SampleStatRow {
 }
 
 export interface SampleStatTable {
-  /** 项点列名（取该类型下第一个产出行的部门的项点顺序） */
+  /** 评议项目列名（取该类型下第一个产出行的部门的评议项目顺序） */
   criteriaNames: string[];
   rows: SampleStatRow[];
 }
 
 export interface SessionSampleStatsDto {
-  /** 个人问卷表（person 部门：车间负责人评价） */
+  /** 个人打分表表（person 部门：车间负责人评价） */
   personal: SampleStatTable;
-  /** 车间问卷表（workshop 部门：车间评价） */
+  /** 车间打分表表（workshop 部门：车间评价） */
   workshop: SampleStatTable;
   /** 已提交打分表总数 */
   sheetCount: number;
   generatedAt: string;
 }
 
-/** ABC汇总行的票种占位键。 */
+/** ABC汇总行的人员类别占位键。 */
 const SUMMARY_KEY = 'SUMMARY';
 const SUMMARY_CODE = 'ABC汇总';
 
@@ -88,13 +88,13 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** 票别显示码：有票种 ID 用其代码，汇总行用「ABC汇总」。 */
+/** 人员类别显示码：有人员类别 ID 用其代码，汇总行用「ABC汇总」。 */
 function codeOf(ticketTypeId: string | null, codeById: Map<string, string>): string {
   if (ticketTypeId === null) return SUMMARY_CODE;
   return codeById.get(ticketTypeId) ?? ticketTypeId;
 }
 
-/** 汇总一场次的参考样表统计。 */
+/** 汇总一评议的参考样表统计。 */
 export async function computeSessionSampleStats(sessionId: string): Promise<SessionSampleStatsDto> {
   const [departments, ticketTypes, sheets] = await Promise.all([
     prisma.department.findMany({

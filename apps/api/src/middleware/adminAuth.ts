@@ -23,7 +23,7 @@ declare global {
   }
 }
 
-/** 管理端会话 Cookie 名。 */
+/** 管理端登录状态 Cookie 名。 */
 export const ADMIN_COOKIE = 'staff_vote_admin';
 
 /**

@@ -8,7 +8,6 @@ import { useAdminSession } from '../../lib/sessionContext.js';
 import { describeError } from './lib.js';
 import { PageHeader, useNotify } from './shared.js';
 import { formatWindow, SESSION_STATUS_META, SessionWindowModal, sessionActions } from './sessionShared.js';
-import { AdminEmployees } from './Employees.js';
 import { AdminQuestionnaire } from './Questionnaire.js';
 import { AdminTicketTypes } from './TicketTypes.js';
 import { AdminTickets } from './Tickets.js';
@@ -16,16 +15,16 @@ import { AdminResults } from './Results.js';
 import { SessionStats } from './StatsDashboard.js';
 
 /**
- * 单页场次工作台（/admin/sessions/:id）。
+ * 单页评议工作台（/admin/sessions/:id）。
  *
  * 把原多个管理页整合到一个页面：页头常驻本场的开放控制（状态 Tag + 状态机按钮 +
- * 开放窗口展示与编辑），页签按评议工作流排列职工 → 问卷 → 票种权重 → 随机码 →
- * 结果导出。「部门」「项点」页签已移除：场内部门在建场时按全局部门字典
- * 自动落一条，项点的增删与上下移由问卷网格承接。
+ * 开放窗口展示与编辑），页签按评议工作流排列打分表 → 人员类别权重 → 随机码 →
+ * 结果导出。「部门」「评议项目」「职工」页签已移除：场内部门在建场时按全局部门列表
+ * 自动落一条，评议项目的增删与上下移由打分表网格承接，职工名单迁到全局人员管理。
  *
- * 复用方式：路由参数 id 同步进「当前场次」上下文（setSessionId），现有页面组件
- * 依旧按上下文里的 sessionId 取数，组件本身零改动。同步只在场次确实存在时进行，
- * 否则上下文的「清理失效场次」逻辑会与这里的同步互相触发、来回抖动。
+ * 复用方式：路由参数 id 同步进「当前评议」上下文（setSessionId），现有页面组件
+ * 依旧按上下文里的 sessionId 取数，组件本身零改动。同步只在评议确实存在时进行，
+ * 否则上下文的「清理失效评议」逻辑会与这里的同步互相触发、来回抖动。
  */
 export function SessionWorkspace() {
   const { id } = useParams<{ id: string }>();
@@ -38,21 +37,21 @@ export function SessionWorkspace() {
   /** 状态机流转请求进行中：所有状态机按钮共用一个 busy */
   const [acting, setActing] = useState(false);
   const [windowOpen, setWindowOpen] = useState(false);
-  /** 当前页签 */
-  const [activeTab, setActiveTab] = useState('employees');
+  /** 当前页签。职工名单已迁到全局人员管理，默认停在打分表配置。 */
+  const [activeTab, setActiveTab] = useState('questionnaire');
 
   const session = useMemo(() => sessions.find((item) => item.id === id), [sessions, id]);
 
   /** 统计只在投票结束后开放：进行中/暂停/草稿时页签禁用（需求：统计在投票未结束时无法使用） */
   const statsEnabled = session?.status === 'ended';
 
-  // 场次从未结束变为已结束（或反向重开）时，若用户正好停在统计页签则切回「职工」，
+  // 评议从未结束变为已结束（或反向重开）时，若用户正好停在统计页签则切回「打分表」，
   // 避免禁用页签仍作为 activeKey 残留导致内容区空白
   useEffect(() => {
-    if (!statsEnabled && activeTab === 'stats') setActiveTab('employees');
+    if (!statsEnabled && activeTab === 'stats') setActiveTab('questionnaire');
   }, [statsEnabled, activeTab]);
 
-  // 路由场次 id → 场次上下文。列表尚未加载完或场次不存在时不同步：
+  // 路由评议 id → 评议上下文。列表尚未加载完或评议不存在时不同步：
   // 不存在的 id 一旦写进上下文，会被 Provider 的失效清理逻辑清掉，形成循环。
   useEffect(() => {
     if (!id || loading || !session) return;
@@ -65,7 +64,7 @@ export function SessionWorkspace() {
       setActing(true);
       try {
         const result = await adminApi.sessions[action](row.id);
-        notify.success(`场次「${row.name}」${SESSION_STATUS_META[result.session.status].text}`);
+        notify.success(`评议「${row.name}」${SESSION_STATUS_META[result.session.status].text}`);
         reload();
       } catch (caught) {
         // 409 INVALID_SESSION_TRANSITION 等错误统一走既有错误提示路径
@@ -89,11 +88,11 @@ export function SessionWorkspace() {
     return (
       <Result
         status="warning"
-        title="场次不存在或已被删除"
-        subTitle="请返回场次列表确认场次，或在列表中新建场次。"
+        title="评议不存在或已被删除"
+        subTitle="请返回评议列表确认这条评议，或在列表里新建一条。"
         extra={
           <Button type="primary" onClick={() => void navigate('/admin/sessions')}>
-            返回场次列表
+            返回评议列表
           </Button>
         }
       />
@@ -114,17 +113,7 @@ export function SessionWorkspace() {
     <>
       <PageHeader
         title={session.name}
-        description={
-          <Space wrap size={12}>
-            {/* 状态不靠颜色单独表意：文字才是表意手段，Tag 颜色只是辅助 */}
-            <Tag color={statusMeta.color}>{statusMeta.text}</Tag>
-            <Typography.Text type="secondary">
-              开放窗口：
-              <span className="tabular">{formatWindow(session.opensAt, session.closesAt)}</span>
-              （结束时间为空视为长期开放）
-            </Typography.Text>
-          </Space>
-        }
+        description="点右上角「编辑开放时间」可以调整这次评议什么时候能打分：开始时间留空表示不限开始，结束时间留空表示一直开放。"
         extra={
           <>
             {/* 主操作按钮：无权限时不渲染，而不是给一个点不动的按钮 */}
@@ -169,23 +158,32 @@ export function SessionWorkspace() {
               : null}
             {canWrite ? (
               <Button icon={<FieldTimeOutlined />} onClick={() => setWindowOpen(true)}>
-                编辑窗口
+                编辑开放时间
               </Button>
             ) : null}
           </>
         }
       />
 
+      {/* 状态与开放时间必须直接可见：状态 Tag 的文字才是表意手段，颜色只是辅助 */}
+      <Space wrap size={12} style={{ marginBottom: 16 }}>
+        <Tag color={statusMeta.color}>{statusMeta.text}</Tag>
+        <Typography.Text type="secondary">
+          开放时间：
+          <span className="tabular">{formatWindow(session.opensAt, session.closesAt)}</span>
+        </Typography.Text>
+      </Space>
+
       <Card>
         <Tabs
           activeKey={activeTab}
           onChange={setActiveTab}
           items={[
-            // 「部门」「项点」页签已移除：场内部门在建场时按全局部门字典自动落一条，
-            // 项点的增删与上下移由问卷网格承接（components/admin/QuestionnaireGrid）
-            { key: 'employees', label: '职工', children: <AdminEmployees /> },
-            { key: 'questionnaire', label: '问卷', children: <AdminQuestionnaire /> },
-            { key: 'ticket-types', label: '票种权重', children: <AdminTicketTypes /> },
+            // 「部门」「评议项目」「职工」页签已移除：场内部门在建场时按全局部门列表自动落一条，
+            // 评议项目的增删与上下移由打分表网格承接（components/admin/QuestionnaireGrid），
+            // 职工名单已迁到全局人员管理（/admin/employees）
+            { key: 'questionnaire', label: '打分表', children: <AdminQuestionnaire /> },
+            { key: 'ticket-types', label: '人员类别权重', children: <AdminTicketTypes /> },
             { key: 'tickets', label: '随机码', children: <AdminTickets /> },
             {
               key: 'stats',
@@ -196,7 +194,7 @@ export function SessionWorkspace() {
               ),
               // 投票未结束时禁用（含 Tooltip 提示开放条件）；结束后才可进入
               disabled: !statsEnabled,
-              // 统计页签切走即卸载：样表统计的加载与票种的 5 秒轮询不在后台空跑；
+              // 统计页签切走即卸载：样表统计的加载与人员类别的 5 秒轮询不在后台空跑；
               // 其余页签用条件渲染会丢编辑态，保持 antd 的常驻挂载
               children: activeTab === 'stats' && statsEnabled ? <SessionStats /> : null,
             },

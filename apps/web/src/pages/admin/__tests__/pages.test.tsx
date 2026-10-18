@@ -39,8 +39,8 @@ vi.mock('../../../lib/api.js', async () => {
       enabled: true,
       questionnaireType: 'person',
       headerNote: '附件1-1',
-      title: 'xx车间负责人评价问卷',
-      footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+      title: 'xx车间负责人评价打分表',
+      footerNote: '填写说明：每一条评议项目满分20分，弃权、不填视为0分。',
     },
     {
       id: 'd2',
@@ -49,7 +49,7 @@ vi.mock('../../../lib/api.js', async () => {
       enabled: false,
       questionnaireType: 'workshop',
       headerNote: '附件1-2',
-      title: 'xx车间评价问卷',
+      title: 'xx车间评价打分表',
       footerNote: '',
     },
   ];
@@ -251,6 +251,30 @@ vi.mock('../../../lib/api.js', async () => {
           { id: 'e1', name: '张三', gender: '男', age: 35, title: '高级工程师', sortOrder: 1, enabled: true },
         ]),
       },
+      /** 人员管理：全局人员目录（职工页的数据源） */
+      staffDirectory: {
+        list: vi.fn(async () => [
+          {
+            id: 's1',
+            employeeNo: '1001',
+            name: '张三',
+            gender: '男',
+            age: 35,
+            title: '高级工程师',
+            orgDepartmentId: 'od1',
+            orgDepartmentName: '贵阳西车间',
+            enabled: true,
+          },
+        ]),
+        create: vi.fn(),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+      orgDepartments: {
+        list: vi.fn(async () => ({
+          departments: [{ id: 'od1', name: '贵阳西车间', sortOrder: 1, enabled: true }],
+        })),
+      },
       criteria: {
         list: vi.fn(async () => [
           {
@@ -280,7 +304,6 @@ const { AdminTicketTypes } = await import('../TicketTypes.js');
 const { AdminTickets } = await import('../Tickets.js');
 const { AdminDepartments } = await import('../Departments.js');
 const { AdminEmployees } = await import('../Employees.js');
-const { AdminQuestionnaire } = await import('../Questionnaire.js');
 const { AdminSettings } = await import('../Settings.js');
 const { AdminResults } = await import('../Results.js');
 const { AdminPrintSheet } = await import('../PrintSheet.js');
@@ -305,14 +328,14 @@ describe('后台页面渲染', () => {
     expect(screen.getByRole('button', { name: /登\s*录/ })).toBeInTheDocument();
   });
 
-  it('后台外壳渲染三项目导航与当前管理员，工作台路由隐藏场次选择器', async () => {
+  it('后台外壳渲染三项目导航与当前管理员，工作台路由隐藏评议选择器', async () => {
     renderWithAuth(
       <ConfigProvider>
         <AntApp>
           <MemoryRouter initialEntries={['/admin/sessions']}>
             <Routes>
               <Route path="/admin" element={<AdminLayout />}>
-                <Route path="sessions" element={<div>场次列表占位</div>} />
+                <Route path="sessions" element={<div>评议列表占位</div>} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -321,7 +344,7 @@ describe('后台页面渲染', () => {
     );
 
     // 菜单重组后只剩三项；顶栏标题与菜单文案相同，用计数断言避免重复匹配
-    expect((await screen.findAllByText('场次管理')).length).toBeGreaterThanOrEqual(2);
+    expect((await screen.findAllByText('评议管理')).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('系统设置')).toBeInTheDocument();
     expect(screen.getByText('账号与权限')).toBeInTheDocument();
     // 旧的工作流分组导航不再存在
@@ -329,11 +352,11 @@ describe('后台页面渲染', () => {
     // 顶栏当前页标题与管理员
     expect(await screen.findByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /退出登录/ })).toBeInTheDocument();
-    // 非工作台路由显示场次选择器
-    expect(screen.getByRole('combobox', { name: '当前场次' })).toBeInTheDocument();
+    // 非工作台路由显示评议选择器
+    expect(screen.getByRole('combobox', { name: '当前评议' })).toBeInTheDocument();
   });
 
-  it('场次工作台路由：顶栏标题为工作台且隐藏场次选择器', async () => {
+  it('评议工作台路由：顶栏标题为工作台且隐藏评议选择器', async () => {
     renderWithAuth(
       <ConfigProvider>
         <AntApp>
@@ -348,57 +371,64 @@ describe('后台页面渲染', () => {
       </ConfigProvider>,
     );
 
-    expect(await screen.findByText('场次工作台')).toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: '当前场次' })).not.toBeInTheDocument();
+    expect(await screen.findByText('评议工作台')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: '当前评议' })).not.toBeInTheDocument();
   });
 
-  it('票种页实时显示启用票种权重合计与差额（停用票种不计入）', async () => {
+  it('人员类别页实时显示启用人员类别权重合计与差额（停用人员类别不计入）', async () => {
     renderPage(<AdminTicketTypes />);
 
-    // 60 + 30 为启用票种，停用的 20 不计入 → 还差 10%
-    const summary = await screen.findByText('启用票种权重合计 90%，还差 10%');
+    // 60 + 30 为启用人员类别，停用的 20 不计入 → 还差 10%
+    const summary = await screen.findByText('启用人员类别权重合计 90%，还差 10%');
     expect(summary).toBeInTheDocument();
     // 企业风：合计不足 100 时用 error 型 Alert 警示
     expect(summary.closest('.ant-alert-error')).not.toBeNull();
     expect(await screen.findByText('职工代表')).toBeInTheDocument();
   });
 
-  it('发码页渲染批量发码表单、码明细与批次页签', async () => {
+  it('发码页渲染批量发码表单、码明细与发放批次', async () => {
     renderPage(<AdminTickets />);
 
     expect(await screen.findByText('批量发码')).toBeInTheDocument();
     expect(await screen.findByText('ABCD2345')).toBeInTheDocument();
-    expect(await screen.findByText('发放批次')).toBeInTheDocument();
+    // 发放批次不再是二级页签：直接跟在统计之后，滚动即可看到
+    expect(await screen.findByText('批次一览')).toBeInTheDocument();
     // 状态列文字表意（Tag 颜色仅辅助）
     expect(await screen.findByText('未使用')).toBeInTheDocument();
   });
 
-  it('部门页渲染部门列表与软删除口径', async () => {
+  it('部门页渲染部门列表与软删除说明', async () => {
+    const user = userEvent.setup();
     renderPage(<AdminDepartments />);
 
     expect(await screen.findByText('办公室')).toBeInTheDocument();
     expect(await screen.findByText('财务科')).toBeInTheDocument();
-    // 软删除语义说明（产品原则 4）：形式可换，内容不许丢
+    // 软删除说明收进标题旁说明图标：悬停可见，内容不许丢（产品原则 4）
+    await user.hover(screen.getByRole('button', { name: '查看说明' }));
     expect(
       await screen.findByText(/停用后不再出现在投票入口，历史评分仍可导出/),
     ).toBeInTheDocument();
   });
 
-  it('职工页渲染名单、导入入口与列约定', async () => {
+  it('人员管理页渲染人员名单、搜索入口与同步说明', async () => {
+    const user = userEvent.setup();
     renderPage(<AdminEmployees />);
 
     expect(await screen.findByText('张三')).toBeInTheDocument();
-    expect(await screen.findByText('模板下载')).toBeInTheDocument();
-    expect(await screen.findByText('导入 Excel/CSV')).toBeInTheDocument();
-    // 导入列约定说明（部门,姓名,性别,年龄,职称）
-    expect(await screen.findByText(/列顺序固定：部门,姓名,性别,年龄,职称/)).toBeInTheDocument();
+    // 工号是同步唯一标识，列表必须显示
+    expect(await screen.findByText('1001')).toBeInTheDocument();
+    // 全局搜索入口：姓名 / 工号 / 车间
+    expect(screen.getByPlaceholderText('搜索姓名 / 工号 / 车间')).toBeInTheDocument();
+    // 同步说明收进页头说明图标（名单外的人只停用、不删除）
+    await user.hover(screen.getByRole('button', { name: '查看本页说明' }));
+    expect((await screen.findAllByText(/人员数据由外部系统定期同步/)).length).toBeGreaterThan(0);
   });
 
   it('设置页渲染系统标题表单', async () => {
     renderPage(<AdminSettings />);
 
-    const titleInput = await screen.findByLabelText('系统标题');
-    // 开放时间窗已下沉到场次：设置页不再有总开关与时间窗
+    const titleInput = await screen.findByRole('textbox');
+    // 开放时间已下沉到评议：设置页不再有总开关与时间窗
     expect(screen.queryByRole('switch', { name: /投票总开关/ })).not.toBeInTheDocument();
     expect(screen.queryByText('三层条件全部满足才算开放')).not.toBeInTheDocument();
     // 首次取数后表单灌入服务端值（轮询不覆盖编辑中内容，用 waitFor 等灌值完成）
@@ -407,21 +437,23 @@ describe('后台页面渲染', () => {
     );
   });
 
-  it('结果页渲染排名、参与票种与导出入口', async () => {
+  it('结果页渲染排名、参与人员类别与导出入口', async () => {
+    const user = userEvent.setup();
     renderPage(<AdminResults />);
 
-    // 结果是按被评列出的：被评对象是职务/车间，不是职工
+    // 结果是按被评议人列出的：被评对象是职务/车间，不是职工
     expect(await screen.findByText('主任')).toBeInTheDocument();
     expect(await screen.findByRole('columnheader', { name: '被评对象' })).toBeInTheDocument();
     expect(await screen.findByText(/共收到 1 张提交表/)).toBeInTheDocument();
     // Button 带 href 时渲染成 a 标签，角色是 link 而不是 button
     expect(screen.getByRole('link', { name: /导\s*出\s*Excel/ })).toBeInTheDocument();
-    // 整场整合导出需要场次上下文：未选场次时按钮存在但禁用
+    // 整场整合导出需要评议上下文：未选评议时按钮存在但禁用
     expect(screen.getByRole('button', { name: /整场整合导出/ })).toBeDisabled();
-    // 口径说明（产品原则 4）：info Alert 写清票种加权与归一化口径
-    // （页头描述也含「票种加权后的原始分」短语，断言用口径条目全句避免多重匹配）
-    expect(await screen.findByText(/表中各项得分为「票种加权后的原始分」/)).toBeInTheDocument();
-    expect(screen.getByText(/实际参与计算的票种/)).toBeInTheDocument();
+    // 计分说明（产品原则 4）：收进「成绩排名」旁的说明图标，悬停可见
+    await user.hover(screen.getByRole('button', { name: '查看说明' }));
+    expect(
+      await screen.findByText(/某一类人员一张表都没交时，这类不参与计算/),
+    ).toBeInTheDocument();
   });
 
   it('打印页渲染正式打分表与签字栏', async () => {
@@ -429,7 +461,7 @@ describe('后台页面渲染', () => {
 
     expect(await screen.findByText('职工素质评议打分表')).toBeInTheDocument();
     expect(await screen.findByText('某某单位职工素质评议')).toBeInTheDocument();
-    // 表体按被评列出结果（不再有姓名与工号列）
+    // 表体按被评议人列出结果（不再有姓名与工号列）
     expect(await screen.findByText('主任')).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: '工号' })).not.toBeInTheDocument();
     expect(await screen.findByText(/考评人签字/)).toBeInTheDocument();
@@ -442,7 +474,7 @@ describe('后台页面渲染', () => {
     expect(styles).toContain('break-inside');
   });
 
-  it('打印页把场次查询串透传给 results.list（防串场次）', async () => {
+  it('打印页把评议查询串透传给 results.list（防串评议）', async () => {
     renderPage(<AdminPrintSheet />, '/admin/results/print?departmentId=d1&sessionId=s9');
 
     await screen.findByText('职工素质评议打分表');
@@ -451,23 +483,23 @@ describe('后台页面渲染', () => {
     );
   });
 
-  it('票种页可打开新增弹窗（弹窗内的表单只有打开时才渲染）', async () => {
+  it('人员类别页可打开新增弹窗（弹窗内的表单只有打开时才渲染）', async () => {
     const user = userEvent.setup();
     renderPage(<AdminTicketTypes />);
 
-    await user.click(await screen.findByRole('button', { name: /新增票种/ }));
+    await user.click(await screen.findByRole('button', { name: /新增人员类别/ }));
 
-    expect(await screen.findByLabelText(/代码/)).toBeInTheDocument();
-    expect(await screen.findByLabelText(/权重/)).toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: /代码/ })).toBeInTheDocument();
+    // 权重是 InputNumber，可访问角色为 spinbutton
+    expect(await screen.findByRole('spinbutton', { name: /权重/ })).toBeInTheDocument();
   });
 
-  it('发码页可切换到发放批次页签', async () => {
-    const user = userEvent.setup();
+  it('发放批次直接展示在页面下方，无需切换页签', async () => {
     renderPage(<AdminTickets />);
 
-    await user.click(await screen.findByRole('tab', { name: '发放批次' }));
-
-    // 批次号显示 id 前 8 位
-    expect(await screen.findByText('batch123')).toBeInTheDocument();
+    // 批次表不再显示内部 UUID 片段，按可核对的信息断言：操作人与数量
+    expect(await screen.findByText('批次一览')).toBeInTheDocument();
+    expect(await screen.findByText('10 张')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '操作人' })).toBeInTheDocument();
   });
 });

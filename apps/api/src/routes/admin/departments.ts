@@ -20,7 +20,7 @@ import {
 import { requirePermission } from '../../middleware/permission.js';
 import { IdParamSchema, operatorOf } from './helpers.js';
 
-/** 列表类接口的场次过滤：?sessionId= 可选，未带时单场自动解析、多场 400。 */
+/** 列表类接口的评议过滤：?sessionId= 可选，未带时单场自动解析、多场 400。 */
 const ListQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
 });

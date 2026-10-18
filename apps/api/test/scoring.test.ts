@@ -19,8 +19,8 @@ function input(partial: Partial<ScoringInput>): ScoringInput {
   };
 }
 
-describe('computeResults —— 票种加权', () => {
-  it('单一票种时，结果等于该票种均分', () => {
+describe('computeResults —— 人员类别加权', () => {
+  it('单一人员类别时，结果等于该人员类别均分', () => {
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
@@ -35,7 +35,7 @@ describe('computeResults —— 票种加权', () => {
     expect(column?.comprehensiveScore).toBe(80);
   });
 
-  it('多票种按权重百分比加权', () => {
+  it('多人员类别按权重百分比加权', () => {
     // A 票 50% 打 90 分；B 票 50% 打 70 分 → 0.5*90 + 0.5*70 = 80
     const result = computeResults(
       input({
@@ -55,7 +55,7 @@ describe('computeResults —— 票种加权', () => {
     expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(80);
   });
 
-  it('某票种零票时，按实际有票的票种重新归一化，不把缺失票种当 0 分', () => {
+  it('某人员类别零票时，按实际有票的人员类别重新归一化，不把缺失人员类别当 0 分', () => {
     // A 票占 50% 但没有任何 A 票提交；只剩 B(30) 与 C(20)。
     // 归一化后： (75*30 + 85*20) / 50 = 79，而不是 (0*50 + 75*30 + 85*20)/100 = 39.5
     const result = computeResults(
@@ -79,7 +79,7 @@ describe('computeResults —— 票种加权', () => {
     expect(result.ticketTypesInvolved).toEqual(['tB', 'tC']);
   });
 
-  it('同一票种多张表都填了该格时取均分', () => {
+  it('同一人员类别多张表都填了该格时取均分', () => {
     // 三张 B 票分别打 60 / 90 / 90 → 均分 80
     const result = computeResults(
       input({
@@ -97,7 +97,7 @@ describe('computeResults —— 票种加权', () => {
     expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(80);
   });
 
-  it('权重为 0 的票种不参与计算', () => {
+  it('权重为 0 的人员类别不参与计算', () => {
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
@@ -117,8 +117,8 @@ describe('computeResults —— 票种加权', () => {
   });
 });
 
-describe('computeResults —— 弃权、不填视为 0 分（参考表口径）', () => {
-  it('该票种的表缺某一格时，该格按 0 分进入平均', () => {
+describe('computeResults —— 弃权、不填视为 0 分（参考表说明）', () => {
+  it('该人员类别的表缺某一格时，该格按 0 分进入平均', () => {
     // 参考表填写说明：弃权、不填视为 0 分。
     // 两张 B 票，一张给 v1·c1 打了 60，另一张跳过了这格 → (60 + 0) / 2 = 30，
     // 而不是把缺格摘掉只算 60。
@@ -164,7 +164,7 @@ describe('computeResults —— 弃权、不填视为 0 分（参考表口径）
     expect(result.voteColumns[0]?.criteria.find((c) => c.criterionId === 'c2')?.rawScore).toBe(20);
   });
 
-  it('本部门一张表都没有时，项点结果为空且综合得分为 0（不是 0 分参与）', () => {
+  it('本部门一张表都没有时，评议项目结果为空且综合得分为 0（不是 0 分参与）', () => {
     // 没发过票与「投了但弃权」是两件事：一张表都没有时整票种跳过，不制造 0 分。
     const result = computeResults(
       input({
@@ -180,7 +180,7 @@ describe('computeResults —— 弃权、不填视为 0 分（参考表口径）
   });
 });
 
-describe('computeResults —— 项点间汇总', () => {
+describe('computeResults —— 评议项目间汇总', () => {
   it('min 非 0 时按区间归一化', () => {
     // 区间 60-100，得 80 → (80-60)/40*100 = 50
     const result = computeResults(
@@ -240,8 +240,8 @@ describe('computeResults —— 项点间汇总', () => {
   });
 });
 
-describe('computeResults —— perTicketType 票别口径（票别×被评列×项点 / 票别×被评列）', () => {
-  it('每票别对每格输出平均分，票别对列输出均分', () => {
+describe('computeResults —— perTicketType 人员类别说明（人员类别×被评议人列×评议项目 / 人员类别×被评议人列）', () => {
+  it('每人员类别对每格输出平均分，人员类别对列输出均分', () => {
     // tA 对 v1·c1 打 90；tB 两张表打 60 / 90 → 75。
     const result = computeResults(
       input({
@@ -314,7 +314,7 @@ describe('computeResults —— perTicketType 票别口径（票别×被评列×
     expect(column?.average).toBe(77.5);
   });
 
-  it('零票种排除：一张表都没有的票种不出现在 perTicketType', () => {
+  it('零人员类别排除：一张表都没有的人员类别不出现在 perTicketType', () => {
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
@@ -331,8 +331,8 @@ describe('computeResults —— perTicketType 票别口径（票别×被评列×
   });
 });
 
-describe('computeResults —— 多被评列隔离', () => {
-  it('不同被评列的分数互不串扰', () => {
+describe('computeResults —— 多被评议人列隔离', () => {
+  it('不同被评议人列的分数互不串扰', () => {
     const result = computeResults(
       input({
         voteColumnIds: ['v1', 'v2'],

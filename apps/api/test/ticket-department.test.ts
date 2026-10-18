@@ -55,12 +55,12 @@ function nextSeq(): number {
   return seq;
 }
 
-/** 本文件建的场次 id，afterAll 兜底清理。 */
+/** 本文件建的评议 id，afterAll 兜底清理。 */
 const sessionIds: string[] = [];
 
 async function makeSession(label: string, status: 'voting' | 'draft' = 'voting'): Promise<string> {
   const created = await prisma.voteSession.create({
-    data: { name: `${TAG}场次-${label}${nextSeq()}`, status },
+    data: { name: `${TAG}评议-${label}${nextSeq()}`, status },
   });
   sessionIds.push(created.id);
   return created.id;
@@ -72,7 +72,7 @@ interface MadeDepartment {
   cell: { voteColumnId: string; criterionId: string };
 }
 
-/** 0010 起项点在模板层共用：同场次共享一个模板项点（0-100），表完成条件不随部门数膨胀。 */
+/** 0010 起评议项目在模板层共用：同评议共享一个模板评议项目（0-100），表完成条件不随部门数膨胀。 */
 const sharedCriteria = new Map<string, string>();
 
 async function sharedCriterionId(sessionId: string): Promise<string> {
@@ -83,7 +83,7 @@ async function sharedCriterionId(sessionId: string): Promise<string> {
       departmentId: null,
       sessionId,
       templateType: 'person',
-      name: `${TAG}项点-${nextSeq()}`,
+      name: `${TAG}评议项目-${nextSeq()}`,
       minScore: 0,
       maxScore: 100,
     },
@@ -92,7 +92,7 @@ async function sharedCriterionId(sessionId: string): Promise<string> {
   return created.id;
 }
 
-/** 部门 + 1 被评列，指向场次共享的模板项点，凑齐一格可提交的最小问卷。 */
+/** 部门 + 1 被评议人列，指向评议共享的模板评议项目，凑齐一格可提交的最小打分表。 */
 async function makeDepartment(
   sessionId: string,
   label: string,
@@ -102,7 +102,7 @@ async function makeDepartment(
     data: { sessionId, name: `${TAG}部门-${label}${nextSeq()}`, enabled: opts.enabled ?? true },
   });
   const column = await prisma.voteColumn.create({
-    data: { departmentId: department.id, sessionId, name: `${TAG}被评列-${label}` },
+    data: { departmentId: department.id, sessionId, name: `${TAG}被评议人列-${label}` },
   });
   const criterionId = await sharedCriterionId(sessionId);
   return { id: department.id, cell: { voteColumnId: column.id, criterionId } };
@@ -113,7 +113,7 @@ async function makeEnabledTicketType(sessionId: string, label: string): Promise<
     data: {
       sessionId,
       code: `${TAG}TT${nextSeq()}${label}`,
-      name: `${TAG}票种-${label}`,
+      name: `${TAG}人员类别-${label}`,
       weightPercent: 100,
       enabled: true,
     },
@@ -333,7 +333,7 @@ describeDb('随机码绑定评议部门', () => {
     expect(res.body.error.message).toBe('该随机码仅限评议指定部门');
   });
 
-  it('绑定码越权提交其他部门 → 403 TICKET_DEPARTMENT_MISMATCH，票不核销', async () => {
+  it('绑定码越权提交其他部门 → 403 TICKET_DEPARTMENT_MISMATCH，票不使用', async () => {
     const sessionId = await makeSession('越权submit');
     const type = await makeEnabledTicketType(sessionId, '越权提交');
     const bound = await makeDepartment(sessionId, '绑定');
@@ -386,9 +386,9 @@ describeDb('随机码绑定评议部门', () => {
     expect(submit.body).toEqual({ ok: true });
   });
 
-  it('跨场次 departmentId 发码 → 400 DEPARTMENT_NOT_IN_SESSION', async () => {
-    const sessionId = await makeSession('本场次');
-    const otherSessionId = await makeSession('他场次', 'draft');
+  it('跨评议 departmentId 发码 → 400 DEPARTMENT_NOT_IN_SESSION', async () => {
+    const sessionId = await makeSession('本评议');
+    const otherSessionId = await makeSession('他评议', 'draft');
     const type = await makeEnabledTicketType(sessionId, '跨场');
     const foreignDepartment = await makeDepartment(otherSessionId, '他场');
 
@@ -415,7 +415,7 @@ describeDb('随机码绑定评议部门', () => {
     expect(res.body.error.code).toBe('DEPARTMENT_DISABLED');
   });
 
-  it('绑定码正常提交核销成功：评分表落在绑定部门', async () => {
+  it('绑定码正常提交使用成功：评分表落在绑定部门', async () => {
     const sessionId = await makeSession('正常提交');
     const type = await makeEnabledTicketType(sessionId, '提交');
     const bound = await makeDepartment(sessionId, '绑定');

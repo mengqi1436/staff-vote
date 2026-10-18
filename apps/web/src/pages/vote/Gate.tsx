@@ -90,13 +90,13 @@ function GateLayout({
  * 未开放时的说明内容。
  *
  * 按 UX 空状态规则：不能只给一句「未开放」就让人走，要给出**为什么**和
- * **下一步该做什么**。这里按「图标 → 标题 → 场次名 → 说明 → 时间窗 →
+ * **下一步该做什么**。这里按「图标 → 标题 → 评议名 → 说明 → 时间窗 →
  * 指引」六级排布，层级靠字号与留白建立。
  *
- * 状态判定以**场次状态为主、时间窗为辅**：后端 `resolveStatusSession` 在库中
- * 只有一场时会自动回传该场次，因此单场部署下 `status.session` 恒非 null。
- * 若先判 `sessionName`，管理员结束场次后职工会看到「暂未开放，请在开放时间内
- * 再来」——而场次其实永久结束了，这是错误指引。
+ * 状态判定以**评议状态为主、时间窗为辅**：后端 `resolveStatusSession` 在库中
+ * 只有一场时会自动回传该评议，因此单场部署下 `status.session` 恒非 null。
+ * 若先判 `sessionName`，管理员结束评议后职工会看到「暂未开放，请在开放时间内
+ * 再来」——而评议其实永久结束了，这是错误指引。
  */
 function ClosedNotice({ status }: { status: VoteStatus | null }) {
   const now = dayjs();
@@ -107,7 +107,7 @@ function ClosedNotice({ status }: { status: VoteStatus | null }) {
   const ended = closesAt !== null && now.isAfter(closesAt);
   const sessionName = (status?.session?.name ?? '').trim();
 
-  // 标题：场次状态优先，其次时间窗。四种状态给出四种不同行动指引
+  // 标题：评议状态优先，其次时间窗。四种状态给出四种不同行动指引
   const heading =
     sessionStatus === 'ended' || ended
       ? '本轮投票已结束'
@@ -117,8 +117,8 @@ function ClosedNotice({ status }: { status: VoteStatus | null }) {
           ? '投票尚未开始'
           : '当前未开放投票';
 
-  // 时间窗只在「场次本身在投票中、只是时间没到/已过」时展示；
-  // 场次被暂停或结束时窗口里的日期会与标题自相矛盾（显示一个还能投的时间）。
+  // 时间窗只在「评议本身在投票中、只是时间没到/已过」时展示；
+  // 评议被暂停或结束时窗口里的日期会与标题自相矛盾（显示一个还能投的时间）。
   const showWindow = sessionStatus === null || sessionStatus === 'voting';
 
   // 下一步指引必须与标题一致：「已结束」让人别再等开放时间
@@ -126,7 +126,7 @@ function ClosedNotice({ status }: { status: VoteStatus | null }) {
     heading === '本轮投票已结束'
       ? '本轮评议已归档；如需补录或复核，请联系评议组织者。'
       : heading === '投票已暂停'
-        ? '场次已暂停，恢复后即可继续；具体时间请留意组织者通知。'
+        ? '本次评议已暂停，恢复后即可继续；具体时间请留意组织者通知。'
         : '请在开放时间内重新打开本页面；若时间已过但仍需参与，请联系评议组织者。';
 
   return (
@@ -143,12 +143,12 @@ function ClosedNotice({ status }: { status: VoteStatus | null }) {
         {heading}
       </Typography.Title>
 
-      {/* 层级 3：场次名（仅多场评议时出现），字号介于标题与说明之间 */}
+      {/* 层级 3：评议名（仅多场评议时出现），字号介于标题与说明之间 */}
       {sessionName !== '' ? <div className="gate-notice-session">{`「${sessionName}」`}</div> : null}
 
       {/* 层级 4：一句解释，说清原因 */}
       <Typography.Paragraph type="secondary" className="gate-notice-desc">
-        {sessionName !== '' && showWindow ? '该场次暂未开放投票，请在通知的投票时间内再来。' : closedHint(status)}
+        {sessionName !== '' && showWindow ? '该评议暂未开放投票，请在通知的投票时间内再来。' : closedHint(status)}
       </Typography.Paragraph>
 
       {/* 层级 5：时间窗。用上下细线分隔，而不是灰底块——灰底块本身就是
@@ -218,9 +218,9 @@ export function VoteGate() {
       setFormError(null);
       try {
         const result = await voteApi.session(code);
-        // 多场评议：场次已暂停/结束时后端可能仍然发码成功，前端在这里拦下并说明原因
+        // 多场评议：评议已暂停/结束时后端可能仍然发码成功，前端在这里拦下并说明原因
         if (result.session !== undefined && result.session.status !== 'voting') {
-          setFormError('当前场次未开放投票，请稍后再试或联系发码人。');
+          setFormError('本次评议未开放，请稍后再试或联系发码人。');
           return;
         }
         // 服务端还没有启用任何部门时，打分页无表可填、只能把人弹回入口。
@@ -233,10 +233,10 @@ export function VoteGate() {
         saveVoteSessionInfo({
           ticketType: result.ticketType,
           departments: result.departments,
-          // 场次信息旧后端没有：undefined 原样交给缓存，读取端容错
+          // 评议信息旧后端没有：undefined 原样交给缓存，读取端容错
           session: result.session,
         });
-        // replace：不回退到一个已经核销过的入口页
+        // replace：不回退到一个已经使用过的入口页
         void navigate('/vote/sheet', { replace: true });
       } catch (error: unknown) {
         setFormError(loginErrorText(error));
@@ -281,7 +281,7 @@ export function VoteGate() {
     );
   }
 
-  // 未开放或场次已暂停/结束（旧后端没有 session 字段、聚合判定回传 null 时都不拦截）：
+  // 未开放或评议已暂停/结束（旧后端没有 session 字段、聚合判定回传 null 时都不拦截）：
   // 整页拦掉，不渲染输入框，只把「为什么」和「什么时候能来」说清楚
   const sessionClosed = status?.session != null && status.session.status !== 'voting';
   if (status === null || !status.open || sessionClosed) {

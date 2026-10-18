@@ -1,16 +1,16 @@
 /**
- * 场次统计页签。
+ * 评议统计页签。
  *
  * 三块内容：
- *   1. 「各票种发放与使用」——发放/核销留痕口径，5 秒轮询（匿名原则下唯一可见的进度）；
- *   2. 「个人问卷评价汇总」——参考样表形态（docs/附件文件包/参考样表.xlsx）：
- *      行 = 被评对象 × 票别（A/B/C/ABC汇总），列 = 各项点得分 + 1-5合计 +
+ *   1. 「各人员类别发放与使用」——发放/使用留痕说明，5 秒轮询（匿名原则下唯一可见的进度）；
+ *   2. 「个人打分表评价汇总」——参考样表形态（docs/附件文件包/参考样表.xlsx）：
+ *      行 = 被评对象 × 人员类别（A/B/C/ABC汇总），列 = 各评议项目得分 + 1-5合计 +
  *      综合评价得分 + 排序。数据来自 GET /admin/stats/samples，与「结果导出」
- *      同一计分口径（lib/scoring.ts）；重计算不轮询，进入页签加载 + 手动刷新；
- *   3. 「车间问卷评价汇总」——同上，行 = 车间 × 票别。
+ *      同一计分说明（lib/scoring.ts）；重计算不轮询，进入页签加载 + 手动刷新；
+ *   3. 「车间打分表评价汇总」——同上，行 = 车间 × 人员类别。
  *
  * 「各部门提交进度」表已按需求移除：匿名投票下它揭示各部门回收节奏，
- * 且样表口径的统计只关心已提交表单的计算结果。
+ * 且样表说明的统计只关心已提交表单的计算结果。
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Empty, Table, Tag, Typography } from 'antd';
@@ -26,7 +26,7 @@ import {
 import { usePolling } from '../../lib/usePolling.js';
 import { useAdminSession } from '../../lib/sessionContext.js';
 import { describeError } from './lib.js';
-import { StaleDataAlert } from './shared.js';
+import { HelpLabel, StaleDataAlert } from './shared.js';
 
 type TicketTypeStat = StatsOverview['ticketTypes'][number];
 
@@ -35,7 +35,7 @@ function emptyRows(text: string) {
   return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={text} />;
 }
 
-/** 取本场次统计的共用钩子：场次变化时 fetcher 换新，usePolling 自动重新拉取。 */
+/** 取本评议统计的共用钩子：评议变化时 fetcher 换新，usePolling 自动重新拉取。 */
 function useOverview() {
   const { sessionId } = useAdminSession();
   const fetchOverview = useCallback(() => adminApi.stats.overview({ sessionId }), [sessionId]);
@@ -49,13 +49,13 @@ function usagePercent(issued: number, used: number): number {
   return issued > 0 ? Math.round((used / issued) * 100) : 0;
 }
 
-/** 「各票种发放与使用」表（原概览页同名列定义）。 */
+/** 「各人员类别发放与使用」表（原概览页同名列定义）。 */
 export function TicketTypeStatsTable({ overview }: { overview: OverviewState }) {
   const { data, error, loading, refresh } = overview;
 
   const ticketColumns: TableColumnsType<TicketTypeStat> = [
     { title: '编码', dataIndex: 'code', width: 84 },
-    { title: '票种名称', dataIndex: 'name' },
+    { title: '人员类别名称', dataIndex: 'name' },
     {
       title: '权重',
       dataIndex: 'weightPercent',
@@ -80,7 +80,11 @@ export function TicketTypeStatsTable({ overview }: { overview: OverviewState }) 
 
   return (
     <Card
-      title="各票种发放与使用"
+      title={
+        <HelpLabel help="已发放＝生成出来的随机码数量；已使用＝职工提交打分表用掉的码；已作废＝被作废、不能再用；剩余可用＝已发放 − 已使用 − 已作废；使用率＝已使用 ÷ 已发放（这一类还没发放时记 0%）。某一类人员一张表都没交时，这类不参与计分，其余类别按权重折算，所以「权重合计 100%」只在这类都交了表时完全成立。">
+          各人员类别发放与使用
+        </HelpLabel>
+      }
       extra={<Typography.Text type="secondary">单位：张 · 每 5 秒自动刷新</Typography.Text>}
       style={{ marginBottom: 16 }}
     >
@@ -93,20 +97,13 @@ export function TicketTypeStatsTable({ overview }: { overview: OverviewState }) 
         dataSource={data?.ticketTypes ?? []}
         pagination={false}
         scroll={{ x: 'max-content' }}
-        locale={{ emptyText: emptyRows('尚未配置票种，请先到本工作台「票种权重」页签配置') }}
+        locale={{ emptyText: emptyRows('尚未配置人员类别，请先到本工作台「人员类别权重」页签配置') }}
       />
-      {/* 口径说明（产品原则 4）：静默文字，不用 Alert 承载常驻提示 */}
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 12 }}>
-        已发放＝已生成的随机码总数；已使用＝已提交投票并核销的码；已作废＝人工作废的码，不计入已使用；
-        剩余可用＝已发放 − 已使用 − 已作废；使用率＝已使用 ÷ 已发放（已发放为 0 的票种记 0%）。
-        计分口径：某票种一张票都没有（零票）时不参与计分，其余实际有票的票种按各自权重归一化后计算，
-        因此「权重合计 100%」只在全部启用票种都有票时才完全成立。
-      </Typography.Paragraph>
     </Card>
   );
 }
 
-/** 参考样表的两张表共用的列构造：部门 / 被评对象 / 票别 / 动态项点 / 合计 / 综合 / 排序。 */
+/** 参考样表的两张表共用的列构造：部门 / 被评对象 / 人员类别 / 动态评议项目 / 合计 / 综合 / 排序。 */
 function sampleColumns(
   criteriaNames: string[],
 ): TableColumnsType<SampleStatRowDto> {
@@ -122,7 +119,7 @@ function sampleColumns(
     { title: '部门', dataIndex: 'departmentName', width: 150 },
     { title: '被评对象', dataIndex: 'targetName', width: 120 },
     {
-      title: '票别',
+      title: '人员类别',
       dataIndex: 'ticketCode',
       width: 96,
       render: (value: string, row: SampleStatRowDto) =>
@@ -142,19 +139,24 @@ function sampleColumns(
   return columns;
 }
 
-/** 参考样表形态的一张汇总表：personal（被评对象=被评列）或 workshop（被评对象=车间）。 */
+/** 参考样表两张汇总表共用的说明：收进标题旁的「?」。 */
+const SAMPLE_HELP =
+  '只看已提交的打分表，弃权或没填的格子按 0 分算；某一类人员在一个对象上没有交表，这一行就不会出现。单人别行的每项得分＝这类人员对该对象的平均分，综合评价得分＝这类人员各项得分的平均；「ABC汇总」行的每项得分＝按权重合并后的原始分，综合评价得分＝合并后再换算成百分制的最终得分。排序按最终得分从高到低、同分并列。「1-5合计」是各项得分相加，各项满分不一致时只作参考。';
+
+/** 参考样表形态的一张汇总表：personal（被评对象=被评议人列）或 workshop（被评对象=车间）。 */
 function SampleStatsTable(props: {
   title: string;
+  help: string;
   emptyText: string;
   table: SampleStatTableDto | undefined;
   loading: boolean;
 }) {
-  const { title, emptyText, table, loading } = props;
+  const { title, help, emptyText, table, loading } = props;
   const hasRows = (table?.rows.length ?? 0) > 0;
   return (
     <Card
-      title={title}
-      extra={<Typography.Text type="secondary">行 = 被评对象 × 票别 · 按已提交表单计算</Typography.Text>}
+      title={<HelpLabel help={help}>{title}</HelpLabel>}
+      extra={<Typography.Text type="secondary">每行：被评对象 × 人员类别 · 按已提交的打分表计算</Typography.Text>}
       style={{ marginBottom: 16 }}
     >
       <Table<SampleStatRowDto>
@@ -168,14 +170,6 @@ function SampleStatsTable(props: {
         rowClassName={(row) => (row.ticketTypeId === null ? 'sample-summary-row' : '')}
         locale={{ emptyText: emptyRows(emptyText) }}
       />
-      {hasRows ? (
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 12 }}>
-          口径与「结果导出」一致（弃权、不填视为 0 分；某票别在该对象上没有表时该行不出现）：
-          单票别行的项点得分＝该票别对被评对象的均分，综合评价得分＝票别内各项点均分的等权平均；
-          「ABC汇总」行的项点得分＝票种加权后的原始分，综合评价得分＝加权归一化后的最终得分；
-          排序为综合得分降序、同分并列。「1-5合计」＝各项点得分之和，项点满分不一致时仅作参考。
-        </Typography.Paragraph>
-      ) : null}
     </Card>
   );
 }
@@ -204,9 +198,6 @@ export function SampleStatsTables() {
     void load();
   }, [load]);
 
-  const hasAnyRows =
-    (data?.personal.rows.length ?? 0) + (data?.workshop.rows.length ?? 0) > 0;
-
   return (
     <>
       {error ? (
@@ -227,29 +218,23 @@ export function SampleStatsTables() {
           刷新统计
         </Button>
         <Typography.Text type="secondary" style={{ marginInlineStart: 12 }}>
-          按参考样表口径对已提交表单计算{data ? ` · 已提交 ${data.sheetCount} 张` : ''}
+          {data ? `已提交 ${data.sheetCount} 张打分表` : ''}
         </Typography.Text>
       </div>
       <SampleStatsTable
-        title="个人问卷评价汇总"
-        emptyText="该类型部门暂无已提交的评分表；投票结束后可在此查看汇总"
+        title="个人打分表评价汇总"
+        help={SAMPLE_HELP}
+        emptyText="这类部门还没有已提交的打分表；投票结束后可在这里查看汇总"
         table={data?.personal}
         loading={loading && !data}
       />
       <SampleStatsTable
-        title="车间问卷评价汇总"
-        emptyText="该类型部门暂无已提交的评分表；投票结束后可在此查看汇总"
+        title="车间打分表评价汇总"
+        help={SAMPLE_HELP}
+        emptyText="这类部门还没有已提交的打分表；投票结束后可在这里查看汇总"
         table={data?.workshop}
         loading={loading && !data}
       />
-      {!loading && data && !hasAnyRows ? (
-        <Alert
-          type="info"
-          showIcon
-          message="本场次还没有已提交的评分表，暂无可计算的统计结果。"
-          style={{ marginBottom: 16 }}
-        />
-      ) : null}
     </>
   );
 }

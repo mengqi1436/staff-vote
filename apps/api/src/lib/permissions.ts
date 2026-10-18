@@ -28,13 +28,13 @@ export const PERMISSION_CATALOG: PermissionSeed[] = [
     sortOrder: 10,
   },
   { code: 'employees.write', name: '管理职工名单与导入', groupName: '评议准备', sortOrder: 11 },
-  { code: 'criteria.write', name: '管理评分项点', groupName: '评议准备', sortOrder: 12 },
-  { code: 'ticketTypes.write', name: '管理票种与权重', groupName: '发票与票种', sortOrder: 20 },
-  { code: 'tickets.generate', name: '发放随机码', groupName: '发票与票种', sortOrder: 21 },
+  { code: 'criteria.write', name: '管理评议项目', groupName: '评议准备', sortOrder: 12 },
+  { code: 'ticketTypes.write', name: '管理人员类别与权重', groupName: '发票与人员类别', sortOrder: 20 },
+  { code: 'tickets.generate', name: '发放随机码', groupName: '发票与人员类别', sortOrder: 21 },
   {
     code: 'tickets.revoke',
     name: '作废随机码（单张与一键）',
-    groupName: '发票与票种',
+    groupName: '发票与人员类别',
     sortOrder: 22,
   },
   {

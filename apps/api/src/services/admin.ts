@@ -10,10 +10,13 @@
  */
 import { prisma } from '../db.js';
 import { generateUniqueCodes } from '../lib/code.js';
+import { requiredSheetTypes } from '../lib/scope.js';
 import { DEFAULT_SETTINGS, SETTING_KEYS } from '../lib/settings.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { findTemplate, upsertTemplate } from './questionnaireTemplateStore.js';
+import { employeeIdFromStaff } from './staffDirectory.js';
 import type { SessionStatus, TicketStatus } from '../generated/prisma/enums.js';
+import type { Prisma } from '../generated/prisma/client.js';
 
 // -----------------------------------------------------------------------------
 // 传输对象（与 apps/web/src/lib/api.ts 的类型一一对应）
@@ -23,10 +26,10 @@ import type { SessionStatus, TicketStatus } from '../generated/prisma/enums.js';
 export type TicketStatusValue = TicketStatus;
 export type SessionStatusValue = SessionStatus;
 
-/** 迁移写入的默认场次（存量数据的归属），src 侧需要引用同一字面量。 */
+/** 迁移写入的默认评议（存量数据的归属），src 侧需要引用同一字面量。 */
 export const DEFAULT_SESSION_ID = '00000000-0000-7000-8000-000000000001';
 
-/** 场次状态的合法流转表。ended 是终态；voting ⇄ paused 互通。 */
+/** 评议状态的合法流转表。ended 是终态；voting ⇄ paused 互通。 */
 const SESSION_TRANSITIONS: Record<SessionStatusValue, SessionStatusValue[]> = {
   draft: ['voting'],
   voting: ['paused', 'ended'],
@@ -40,20 +43,20 @@ export interface VoteSessionDto {
   status: SessionStatusValue;
   startAt: string | null;
   endedAt: string | null;
-  /** 开放时间窗：空 = 不限制开始 / 长期开放 */
+  /** 开放时间：空 = 不限制开始 / 长期开放 */
   opensAt: string | null;
   closesAt: string | null;
-  /** 所属全局部门（字典）。null = 历史场次，无字典来源。 */
+  /** 所属全局部门（字典）。null = 历史评议，无字典来源。 */
   orgDepartmentId: string | null;
   orgDepartmentName: string | null;
-  /** 打分范围：person = 仅个人问卷；both = 个人 + 车间两张问卷都打。 */
+  /** 打分范围：person = 仅个人打分表；both = 个人 + 车间两张打分表都打。 */
   scoreScope: string;
   createdAt: string;
-  /** draft 场次开始投票前的阻塞缺项（中文清单）；非空 = 不能开始。非 draft 恒为空。 */
+  /** draft 评议开始投票前的阻塞缺项（中文清单）；非空 = 不能开始。非 draft 恒为空。 */
   startBlockers: string[];
 }
 
-/** 场次行 → DTO 的统一出口，list/create/update/transition 四处共用。 */
+/** 评议行 → DTO 的统一出口，list/create/update/transition 四处共用。 */
 async function toSessionDto(row: {
   id: string;
   name: string;
@@ -86,7 +89,7 @@ async function toSessionDto(row: {
   return dto;
 }
 
-/** 场次查询的公共 include：带出字典部门名。 */
+/** 评议查询的公共 include：带出字典部门名。 */
 const SESSION_INCLUDE = { orgDepartment: { select: { name: true } } } as const;
 
 export async function listSessions(): Promise<{ sessions: VoteSessionDto[] }> {
@@ -112,7 +115,7 @@ export async function resolveSessionId(explicit?: string): Promise<string> {
       where: { id: explicit },
       select: { id: true },
     });
-    if (!found) throw ApiError.badRequest('场次不存在', 'SESSION_NOT_FOUND');
+    if (!found) throw ApiError.badRequest('评议不存在', 'SESSION_NOT_FOUND');
     return found.id;
   }
   const count = await prisma.voteSession.count();
@@ -120,7 +123,7 @@ export async function resolveSessionId(explicit?: string): Promise<string> {
     const only = await prisma.voteSession.findFirstOrThrow({ select: { id: true } });
     return only.id;
   }
-  throw ApiError.badRequest('当前存在多个场次，请指定 sessionId', 'SESSION_REQUIRED');
+  throw ApiError.badRequest('当前存在多个评议，请指定 sessionId', 'SESSION_REQUIRED');
 }
 
 /**
@@ -144,7 +147,7 @@ export async function createSession(
 ): Promise<VoteSessionDto> {
   const name = input.name.trim();
   const existing = await prisma.voteSession.findUnique({ where: { name } });
-  if (existing) throw ApiError.conflict(`场次「${name}」已存在`, 'SESSION_EXISTS');
+  if (existing) throw ApiError.conflict(`评议「${name}」已存在`, 'SESSION_EXISTS');
 
   const department = await prisma.orgDepartment.findUnique({
     where: { id: input.orgDepartmentId },
@@ -158,14 +161,33 @@ export async function createSession(
     throw ApiError.unprocessable('开放开始时间必须早于结束时间', 'VOTE_WINDOW_INVALID');
   }
 
+  // 场次、场内部门、附件8 的整套问卷（抬头 + 5 项点 + 被评列）在同一事务里落地：
+  // 向导第 2 步打开就是可编辑的完整问卷；任何一步失败整笔回滚，不留半套配置。
+  const template = templateForDepartment(department.name);
   const created = await prisma.$transaction(async (tx) => {
     const session = await tx.voteSession.create({
       data: { name, orgDepartmentId: department.id, opensAt, closesAt },
       include: SESSION_INCLUDE,
     });
-    await tx.department.create({
-      data: { sessionId: session.id, name: department.name },
+    const departmentRow = await tx.department.create({
+      data: {
+        sessionId: session.id,
+        name: department.name,
+        questionnaireType: template.questionnaireType,
+      },
     });
+    await seedQuestionnaireTemplate(tx, session.id, departmentRow.id, template);
+    // 向导里可在「个人打分表 / 车间问卷」之间切换，附件8 也是两张表：
+    // 另一套的抬头与项点一并备好（不建列——被评列只属于个人问卷版式）。
+    await seedQuestionnaireTemplate(
+      tx,
+      session.id,
+      departmentRow.id,
+      template.questionnaireType === 'person'
+        ? WORKSHOP_QUESTIONNAIRE_TEMPLATE
+        : PERSON_QUESTIONNAIRE_TEMPLATE,
+      { withVoteColumns: false },
+    );
     return session;
   });
 
@@ -197,7 +219,7 @@ export async function updateSession(
   operator: string,
 ): Promise<VoteSessionDto> {
   const current = await prisma.voteSession.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('场次不存在');
+  if (!current) throw ApiError.notFound('评议不存在');
 
   const data: {
     name?: string;
@@ -209,7 +231,7 @@ export async function updateSession(
     const name = input.name.trim();
     const existing = await prisma.voteSession.findUnique({ where: { name } });
     if (existing && existing.id !== id) {
-      throw ApiError.conflict(`场次「${name}」已存在`, 'SESSION_EXISTS');
+      throw ApiError.conflict(`评议「${name}」已存在`, 'SESSION_EXISTS');
     }
     data.name = name;
   }
@@ -220,8 +242,11 @@ export async function updateSession(
     data.closesAt = input.closesAt === null ? null : new Date(input.closesAt);
   }
   if (input.scoreScope !== undefined) {
-    if (!['person', 'both'].includes(input.scoreScope)) {
-      throw ApiError.badRequest('打分范围只能是「仅个人问卷」或「个人和车间问卷」', 'SCORE_SCOPE_INVALID');
+    if (!['person', 'workshop', 'both'].includes(input.scoreScope)) {
+      throw ApiError.badRequest(
+        '打分范围只能是「负责人评价」「车间评价」或「车间+负责人评价」',
+        'SCORE_SCOPE_INVALID',
+      );
     }
     data.scoreScope = input.scoreScope;
   }
@@ -261,13 +286,13 @@ export async function transitionSession(
   operator: string,
 ): Promise<VoteSessionDto> {
   const current = await prisma.voteSession.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('场次不存在');
+  if (!current) throw ApiError.notFound('评议不存在');
 
   const nextStatus: SessionStatusValue =
     action === 'start' ? 'voting' : action === 'pause' ? 'paused' : 'ended';
   if (!SESSION_TRANSITIONS[current.status].includes(nextStatus)) {
     throw ApiError.conflict(
-      `场次当前状态为 ${current.status}，不能执行 ${action}`,
+      `评议当前状态为 ${current.status}，不能执行 ${action}`,
       'INVALID_SESSION_TRANSITION',
     );
   }
@@ -275,7 +300,7 @@ export async function transitionSession(
   if (action === 'start' && current.status === 'draft') {
     const issues = await checkSessionCompleteness(id);
     if (issues.length > 0) {
-      throw new ApiError(409, 'SESSION_INCOMPLETE', '场次配置不完整，无法开始投票', issues);
+      throw new ApiError(409, 'SESSION_INCOMPLETE', '评议配置不完整，无法开始投票', issues);
     }
   }
 
@@ -308,16 +333,16 @@ export async function deleteSession(id: string, operator: string): Promise<void>
     where: { id },
     select: { name: true, status: true },
   });
-  if (!current) throw ApiError.notFound('场次不存在', 'SESSION_NOT_FOUND');
+  if (!current) throw ApiError.notFound('评议不存在', 'SESSION_NOT_FOUND');
 
   if (current.status === 'voting') {
-    throw ApiError.conflict('场次正在投票，请先暂停或结束再删除', 'SESSION_VOTING');
+    throw ApiError.conflict('评议正在投票，请先暂停或结束再删除', 'SESSION_VOTING');
   }
 
   const sheetCount = await prisma.scoreSheet.count({ where: { sessionId: id } });
   if (sheetCount > 0) {
     throw ApiError.conflict(
-      `场次「${current.name}」已收到 ${sheetCount} 份答卷，不能删除（历史评分必须保留）`,
+      `评议「${current.name}」已收到 ${sheetCount} 份答卷，不能删除（历史评分必须保留）`,
       'SESSION_HAS_SHEETS',
     );
   }
@@ -364,6 +389,25 @@ async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
   if (departments.length === 0) {
     issues.push('尚未配置启用部门：至少需要一个启用部门');
   }
+
+  // 打分范围要求的问卷类型必须有对应类型的启用部门：缺类型 = 持码人无表可填，
+  // 投票入口会拿到空部门列表（只能干等到管理员补配置）。
+  const session = await prisma.voteSession.findUnique({
+    where: { id: sessionId },
+    select: { scoreScope: true },
+  });
+  if (departments.length > 0) {
+    for (const type of requiredSheetTypes(session?.scoreScope ?? 'person')) {
+      if (!departments.some((department) => department.questionnaireType === type)) {
+        issues.push(
+          type === 'workshop'
+            ? '打分范围含「车间评价」，但没有启用车间部门'
+            : '打分范围含「负责人评价」，但没有启用负责人部门',
+        );
+      }
+    }
+  }
+
   for (const department of departments) {
     // 0010 起项点按「场次 + 问卷类型」在模板层共用：部门有没有项点，
     // 取决于它所属类型的模板项点是否已配置且启用。
@@ -376,7 +420,7 @@ async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
       },
     });
     if (criteriaCount === 0) {
-      issues.push(`部门「${department.name}」尚未配置启用项点：至少需要一个启用项点`);
+      issues.push(`部门「${department.name}」尚未配置启用评议项目：至少需要一个启用评议项目`);
     }
     // 被评列只属于个人问卷（车间问卷是单一「得分」列，不需要配置）
     if (department.questionnaireType === 'person') {
@@ -384,7 +428,7 @@ async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
         where: { departmentId: department.id, enabled: true },
       });
       if (columnCount === 0) {
-        issues.push(`部门「${department.name}」尚未配置启用被评列：至少需要一个启用被评列`);
+        issues.push(`部门「${department.name}」尚未配置启用被评议人列：至少需要一个启用被评议人列`);
       }
     }
   }
@@ -394,11 +438,11 @@ async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
     select: { code: true, weightPercent: true },
   });
   if (ticketTypes.length === 0) {
-    issues.push('尚未配置启用票种：至少需要一个启用票种');
+    issues.push('尚未配置启用人员类别：至少需要一个启用人员类别');
   } else {
     const weightSum = ticketTypes.reduce((sum, type) => sum + type.weightPercent, 0);
     if (weightSum !== 100) {
-      issues.push(`启用票种权重合计为 ${weightSum}%，必须等于 100%`);
+      issues.push(`启用人员类别权重合计为 ${weightSum}%，必须等于 100%`);
     }
   }
 
@@ -436,18 +480,22 @@ export interface DepartmentDto {
   name: string;
   sortOrder: number;
   enabled: boolean;
-  /** 问卷类型：person = 个人问卷（多列被评职务），workshop = 车间问卷（单列得分） */
+  /** 打分表类型：person = 个人打分表（多列被评职务），workshop = 车间打分表（单列得分） */
   questionnaireType: string;
 }
 
-/** 被评列：打分表的「列」，与职工名单分离（参考表的主任/副书记/得分等）。 */
+/** 被评议人列：打分表的「列」，与职工名单分离（参考表的主任/副书记/得分等）。 */
 export interface VoteColumnDto {
   id: string;
   departmentId: string;
   name: string;
-  /** 该职务列对应的具体被评人（表头第二行的姓名），未选人为 null。 */
+  /** 该职务列对应的具体被评议人（表头第二行的姓名），未选人为 null。 */
   employeeId: string | null;
   employeeName: string | null;
+  /** 评议副本的工号（由人员管理带入时有值，历史 Excel 导入为 null）。 */
+  employeeNo: string | null;
+  /** 副本对应的全局人员目录项；非人员管理带入时为 null（前端用它回显下拉选项）。 */
+  staffDirectoryId: string | null;
   sortOrder: number;
   enabled: boolean;
 }
@@ -465,12 +513,12 @@ export interface EmployeeDto {
 
 export interface CriterionDto {
   id: string;
-  /** 模板项点为 null；0010 前的存量部门项点指向原部门。 */
+  /** 模板评议项目为 null；0010 前的存量部门评议项目指向原部门。 */
   departmentId: string | null;
-  /** 模板项点的问卷类型（person/workshop）；部门项点为 null。 */
+  /** 模板评议项目的打分表类型（person/workshop）；部门项点为 null。 */
   templateType: string | null;
   name: string;
-  /** 项点描述，显示在打分表项点名称下方 */
+  /** 评议项目描述，显示在打分表评议项目名称下方 */
   description: string | null;
   minScore: number;
   maxScore: number;
@@ -478,7 +526,7 @@ export interface CriterionDto {
   enabled: boolean;
 }
 
-/** 场次级问卷模板（个人 / 车间各一套：附件号 + 标题 + 填写说明）。 */
+/** 评议级打分表模板（个人 / 车间各一套：附件号 + 标题 + 填写说明）。 */
 export interface QuestionnaireTemplateDto {
   sessionId: string;
   type: string;
@@ -515,7 +563,7 @@ export interface SettingsDto {
 /** 随机码状态的中文名，导出与界面统一用这一份。 */
 export const TICKET_STATUS_LABELS: Record<TicketStatusValue, string> = {
   unused: '未使用',
-  used: '已核销',
+  used: '已使用',
   revoked: '已作废',
 };
 
@@ -557,7 +605,7 @@ function weightSumViolation(after: number, before: number): string | null {
   if (after <= before || after <= 100) return null;
 
   const diff = 100 - after;
-  return `启用票种权重合计为 ${after}%，不得超过 100%（差额 ${diff}）`;
+  return `启用人员类别权重合计为 ${after}%，不得超过 100%（差额 ${diff}）`;
 }
 
 async function enabledWeightTotal(sessionId: string): Promise<number> {
@@ -583,7 +631,7 @@ function toTicketTypeDto(row: {
   };
 }
 
-/** 票种列表，附带各票种的发放/使用/作废计数（后台首屏与票种页都用它）。 */
+/** 人员类别列表，附带各人员类别的发放/使用/作废计数（后台首屏与人员类别页都用它）。 */
 export async function listTicketTypes(sessionId?: string): Promise<TicketTypeDto[]> {
   const [types, grouped] = await Promise.all([
     prisma.ticketType.findMany({
@@ -640,7 +688,7 @@ export async function createTicketType(
   const existing = await prisma.ticketType.findUnique({
     where: { sessionId_code: { sessionId, code } },
   });
-  if (existing) throw ApiError.conflict(`票种编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
+  if (existing) throw ApiError.conflict(`人员类别编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
 
   const enabled = input.enabled ?? true;
   const before = await enabledWeightTotal(sessionId);
@@ -673,7 +721,7 @@ export async function updateTicketType(
   operator: string,
 ): Promise<TicketTypeDto> {
   const current = await prisma.ticketType.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('票种不存在');
+  if (!current) throw ApiError.notFound('人员类别不存在');
 
   if (patch.code !== undefined && patch.code.trim() !== current.code) {
     const code = patch.code.trim();
@@ -681,7 +729,7 @@ export async function updateTicketType(
     const conflict = await prisma.ticketType.findUnique({
       where: { sessionId_code: { sessionId: current.sessionId, code } },
     });
-    if (conflict) throw ApiError.conflict(`票种编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
+    if (conflict) throw ApiError.conflict(`人员类别编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
   }
 
   if (patch.weightPercent !== undefined || patch.enabled !== undefined) {
@@ -715,10 +763,10 @@ export async function updateTicketType(
   return toTicketTypeDto(updated);
 }
 
-/** 停用票种。软删除：已有随机码与评分表保持可读。 */
+/** 停用人员类别。软删除：已有随机码与评分表保持可读。 */
 export async function disableTicketType(id: string, operator: string): Promise<void> {
   const current = await prisma.ticketType.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('票种不存在');
+  if (!current) throw ApiError.notFound('人员类别不存在');
 
   await prisma.ticketType.update({ where: { id }, data: { enabled: false } });
   await writeAudit('ticket_type.disable', { code: current.code, operator });
@@ -754,18 +802,18 @@ export async function generateTickets(
 ): Promise<GenerateTicketsResult> {
   const sessionId = await resolveSessionId(options.sessionId);
   const ticketType = await prisma.ticketType.findUnique({ where: { id: ticketTypeId } });
-  if (!ticketType) throw ApiError.notFound('票种不存在');
+  if (!ticketType) throw ApiError.notFound('人员类别不存在');
   if (ticketType.sessionId !== sessionId) {
-    throw ApiError.badRequest('票种不属于该场次', 'SESSION_MISMATCH');
+    throw ApiError.badRequest('人员类别不属于该评议', 'SESSION_MISMATCH');
   }
-  if (!ticketType.enabled) throw ApiError.conflict('票种已停用，不能继续发码', 'TICKET_TYPE_DISABLED');
+  if (!ticketType.enabled) throw ApiError.conflict('人员类别已停用，不能继续发码', 'TICKET_TYPE_DISABLED');
 
   // 部门绑定校验：必须属于本场次且启用中。
   const departmentId = options.departmentId ?? null;
   if (departmentId) {
     const department = await prisma.department.findUnique({ where: { id: departmentId } });
     if (!department || department.sessionId !== sessionId) {
-      throw ApiError.badRequest('部门不属于该场次，不能绑定发码', 'DEPARTMENT_NOT_IN_SESSION');
+      throw ApiError.badRequest('部门不属于该评议，不能绑定发码', 'DEPARTMENT_NOT_IN_SESSION');
     }
     if (!department.enabled) {
       throw ApiError.conflict('部门已停用，不能绑定发码', 'DEPARTMENT_DISABLED');
@@ -817,7 +865,7 @@ export interface TicketPlanRow {
   code: string;
   name: string;
   weightPercent: number;
-  /** ≥0；>0 自动建批次发码，=0 只建票种不发码 */
+  /** ≥0；>0 自动建批次发码，=0 只建人员类别不发码 */
   count: number;
 }
 
@@ -849,13 +897,13 @@ export async function applyTicketPlan(
   operator: string,
 ): Promise<TicketPlanResult> {
   const session = await prisma.voteSession.findUnique({ where: { id: sessionId } });
-  if (!session) throw ApiError.notFound('场次不存在');
+  if (!session) throw ApiError.notFound('评议不存在');
 
   // 权重合计是对「提交后启用票种全集」的要求，提交前就能算完，不占事务。
   const weightSum = input.types.reduce((sum, row) => sum + row.weightPercent, 0);
   if (weightSum !== 100) {
     throw ApiError.unprocessable(
-      `启用票种权重合计必须等于 100%，当前为 ${weightSum}%`,
+      `启用人员类别权重合计必须等于 100%，当前为 ${weightSum}%`,
       'WEIGHT_SUM',
     );
   }
@@ -865,7 +913,7 @@ export async function applyTicketPlan(
   const existing = await prisma.ticketType.findMany({ where: { sessionId } });
   const existingByCode = new Map(existing.map((row) => [row.code, row]));
 
-  // 已产生答卷的启用票种必须列入本次集合：移出集合等效于改码/删除该票别。
+  // 已产生答卷的启用人员类别必须列入本次集合：移出集合等效于改码/删除该票别。
   const hasSheets = await prisma.scoreSheet.groupBy({
     by: ['ticketTypeId'],
     where: { sessionId, ticketTypeId: { in: existing.map((row) => row.id) } },
@@ -875,7 +923,7 @@ export async function applyTicketPlan(
   for (const row of existing) {
     if (row.enabled && (sheetCountByTypeId.get(row.id) ?? 0) > 0 && !codes.includes(row.code)) {
       throw ApiError.conflict(
-        `票种 ${row.code}（${row.name}）已有答卷，不能从票别集合中移除或改码`,
+        `人员类别 ${row.code}（${row.name}）已有答卷，不能从人员类别集合中移除或改码`,
         'TICKET_TYPE_HAS_SHEETS',
       );
     }
@@ -1046,6 +1094,41 @@ export async function listTicketsForExport(filter: TicketExportFilter) {
 }
 
 /**
+ * 按批次取码：发码结果导出（一列一票别）用。
+ *
+ * 不接受前端回传的码本身 —— 码是敏感材料，按批次在服务端查，请求日志里不留码。
+ * 刚生成的批次全是未使用码，因此这里不按状态过滤（导出的是「这批发了什么」）。
+ */
+export async function listTicketsByBatches(batchIds: string[]) {
+  if (batchIds.length === 0) return [];
+  return prisma.ticket.findMany({
+    where: { batchId: { in: batchIds } },
+    orderBy: [{ ticketType: { sortOrder: 'asc' } }, { createdAt: 'asc' }, { code: 'asc' }],
+    take: 50_000,
+    include: { ticketType: { select: { code: true, name: true } } },
+  });
+}
+
+/** 评议名：导出文件名用，管理员一眼看出是哪个评议的材料。 */
+export async function findSessionName(sessionId: string): Promise<string | null> {
+  const row = await prisma.voteSession.findUnique({
+    where: { id: sessionId },
+    select: { name: true },
+  });
+  return row?.name ?? null;
+}
+
+/** 批次所属评议名：导出文件名用它，管理员一眼看出是哪个评议的码。 */
+export async function findSessionNameByBatches(batchIds: string[]): Promise<string | null> {
+  if (batchIds.length === 0) return null;
+  const row = await prisma.ticketBatch.findFirst({
+    where: { id: { in: batchIds } },
+    select: { sessionId: true },
+  });
+  return row ? findSessionName(row.sessionId) : null;
+}
+
+/**
  * 作废随机码。只有未使用的码可以作废。
  *
  * 用 `updateMany` 带状态条件做原子更新，避免两次并发作废都通过前置检查。
@@ -1060,7 +1143,7 @@ export async function revokeTicket(id: string, operator: string): Promise<Ticket
     const current = await prisma.ticket.findUnique({ where: { id } });
     if (!current) throw ApiError.notFound('随机码不存在');
     if (current.status === 'used') {
-      throw ApiError.conflict('该票据已核销，不能作废', 'TICKET_ALREADY_USED');
+      throw ApiError.conflict('该票据已使用，不能作废', 'TICKET_ALREADY_USED');
     }
     throw ApiError.conflict('该票据已作废', 'TICKET_ALREADY_REVOKED');
   }
@@ -1074,9 +1157,9 @@ export async function revokeTicket(id: string, operator: string): Promise<Ticket
 }
 
 export interface RevokeTicketsBulkInput {
-  /** 作废限定在该场次；多场次下不带场次的一键作废一律拒绝（400） */
+  /** 作废限定在该评议；多评议下不带评议的一键作废一律拒绝（400） */
   sessionId: string;
-  /** 只作废该票种的码；不传表示该场次全部票种 */
+  /** 只作废该人员类别的码；不传表示该评议全部人员类别 */
   ticketTypeId?: string;
 }
 
@@ -1210,7 +1293,7 @@ export async function updateDepartment(
     if (conflict) throw ApiError.conflict(`部门「${name}」已存在`, 'DEPARTMENT_EXISTS');
   }
   if (patch.questionnaireType !== undefined && !QUESTIONNAIRE_TYPES.includes(patch.questionnaireType)) {
-    throw ApiError.badRequest('问卷类型只能是「个人问卷」或「车间问卷」', 'QUESTIONNAIRE_TYPE_INVALID');
+    throw ApiError.badRequest('打分表类型只能是「个人打分表」或「车间打分表」', 'QUESTIONNAIRE_TYPE_INVALID');
   }
 
   const updated = await prisma.department.update({
@@ -1273,7 +1356,7 @@ function toOrgDepartmentDto(row: {
   };
 }
 
-/** 全局部门字典列表（登录即可读，无需写权限）。 */
+/** 全局部门列表列表（登录即可读，无需写权限）。 */
 export async function listOrgDepartments(): Promise<{ departments: OrgDepartmentDto[] }> {
   const rows = await prisma.orgDepartment.findMany({
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -1289,8 +1372,25 @@ export async function listOrgDepartments(): Promise<{ departments: OrgDepartment
 const QUESTIONNAIRE_FOOTER_NOTE =
   '填写说明：问卷调查采用无记名投票的方式开展，每一条评价项点满分20分，弃权、不填视为0分。';
 
-/** 个人问卷模板（附件8 sheet1）：5 项点 + 5 个被评职务列。 */
-const PERSON_QUESTIONNAIRE_TEMPLATE = {
+/**
+ * 附件8 的评分区间：每项满分 20 分，弃权/不填视为 0 分。
+ * 表尾说明写死了「满分20分」，模板项点的 maxScore 必须同口径——
+ * 否则投票端输入框会放开到 0–100，计分归一化也跟着错。
+ */
+const CRITERION_MIN_SCORE = 0;
+const CRITERION_MAX_SCORE = 20;
+
+/** 一套打分表模板（与附件8 的 sheet 结构一一对应）。 */
+interface QuestionnaireTemplate {
+  questionnaireType: 'person' | 'workshop';
+  title: string;
+  footerNote: string;
+  criteria: Array<{ name: string; description: string }>;
+  voteColumns: string[];
+}
+
+/** 个人打分表模板（附件8 sheet1）：5 评议项目 + 5 个被评职务列。 */
+const PERSON_QUESTIONNAIRE_TEMPLATE: QuestionnaireTemplate = {
   questionnaireType: 'person',
   title: 'xx车间负责人评价问卷',
   footerNote: QUESTIONNAIRE_FOOTER_NOTE,
@@ -1304,8 +1404,8 @@ const PERSON_QUESTIONNAIRE_TEMPLATE = {
   voteColumns: ['主任', '党支部书记', '党支部副书记', '副主任', '副主任'],
 };
 
-/** 车间问卷模板（附件8 sheet2）：5 项点，无被评职务列（单列「得分」版式）。 */
-const WORKSHOP_QUESTIONNAIRE_TEMPLATE = {
+/** 车间打分表模板（附件8 sheet2）：5 评议项目，无被评职务列（单列「得分」版式）。 */
+const WORKSHOP_QUESTIONNAIRE_TEMPLATE: QuestionnaireTemplate = {
   questionnaireType: 'workshop',
   title: 'xx车间评价问卷',
   footerNote: QUESTIONNAIRE_FOOTER_NOTE,
@@ -1316,12 +1416,78 @@ const WORKSHOP_QUESTIONNAIRE_TEMPLATE = {
     { name: '队伍素质', description: '干部职工理论知识扎实、实操经验丰富、应急处理得当，团队意识强、精神风貌好、学习氛围浓。' },
     { name: '基础管理', description: '标准作业，各类台账齐全，技术资料，库房管理规范、职场环境干净整洁。' },
   ],
-  voteColumns: [] as string[],
+  voteColumns: [],
 };
 
-/** 问卷类型启发式：以「车间」结尾按车间问卷，其余按个人问卷（管理员之后仍可在问卷配置页改）。 */
+/** 打分表类型启发式：以「车间」结尾按车间打分表，其余按个人打分表（管理员之后仍可在打分表配置页改）。 */
 function questionnaireTypeOf(name: string): 'person' | 'workshop' {
   return name.endsWith('车间') ? 'workshop' : 'person';
+}
+
+/** 按部门名取附件8 对应的那套模板。 */
+function templateForDepartment(name: string): QuestionnaireTemplate {
+  return questionnaireTypeOf(name) === 'workshop'
+    ? WORKSHOP_QUESTIONNAIRE_TEMPLATE
+    : PERSON_QUESTIONNAIRE_TEMPLATE;
+}
+
+/**
+ * 给场次种入附件8 的一整套问卷：抬头三件套 + 5 个项点 + 被评列。
+ *
+ * 幂等：项点按名称补齐（同场次同类型已有同名项点则跳过），
+ * 因此字典新增部门时对同一场次重复调用不会产生重复项点。
+ * 被评列只在新建部门时创建（调用方保证 departmentId 是新部门）。
+ */
+async function seedQuestionnaireTemplate(
+  db: Prisma.TransactionClient,
+  sessionId: string,
+  departmentId: string,
+  template: QuestionnaireTemplate,
+  options: { withVoteColumns?: boolean } = {},
+): Promise<void> {
+  const withVoteColumns = options.withVoteColumns ?? true;
+  // headerNote 不传：保持列默认「附件1-1」，与附件8 左上角一致。
+  await upsertTemplate(db, sessionId, template.questionnaireType, {
+    title: template.title,
+    footerNote: template.footerNote,
+  });
+
+  const existing = await db.criterion.findMany({
+    where: { sessionId, templateType: template.questionnaireType },
+    select: { name: true },
+  });
+  const existingNames = new Set(existing.map((row) => row.name));
+  const missing = template.criteria.filter((item) => !existingNames.has(item.name));
+  if (missing.length > 0) {
+    await db.criterion.createMany({
+      data: missing.map((item, index) => ({
+        departmentId: null,
+        sessionId,
+        templateType: template.questionnaireType,
+        name: item.name,
+        description: item.description,
+        minScore: CRITERION_MIN_SCORE,
+        maxScore: CRITERION_MAX_SCORE,
+        sortOrder: existingNames.size + index + 1,
+      })),
+    });
+  }
+
+  // workshop 是单列「得分」版式，没有被评职务列。
+  // 部门已有任何被评议人列时不再补：补种只服务于「新部门 / 空配置」，不覆盖管理员改过的列。
+  if (withVoteColumns && template.voteColumns.length > 0) {
+    const existingColumns = await db.voteColumn.count({ where: { departmentId } });
+    if (existingColumns === 0) {
+      await db.voteColumn.createMany({
+        data: template.voteColumns.map((name, index) => ({
+          departmentId,
+          sessionId,
+          name,
+          sortOrder: index + 1,
+        })),
+      });
+    }
+  }
 }
 
 /**
@@ -1347,10 +1513,7 @@ async function syncOrgDepartmentToDraftSessions(
       select: { id: true },
     });
     if (exists) continue;
-    const template =
-      questionnaireTypeOf(name) === 'workshop'
-        ? WORKSHOP_QUESTIONNAIRE_TEMPLATE
-        : PERSON_QUESTIONNAIRE_TEMPLATE;
+    const template = templateForDepartment(name);
     const created = await prisma.department.create({
       data: {
         sessionId: session.id,
@@ -1359,49 +1522,53 @@ async function syncOrgDepartmentToDraftSessions(
         questionnaireType: template.questionnaireType,
       },
     });
-    // 表头三件套真源在场次模板表（0010 起按类型一份，同类型部门共用）。headerNote
-    // 不传：新建行走列默认「附件1-1」，已有行保持管理员改过的值（PATCH 语义）。
-    await upsertTemplate(prisma, session.id, template.questionnaireType, {
-      title: template.title,
-      footerNote: template.footerNote,
-    });
-    // 项点同样是场次级（按类型一份）：同一场次同步多个同类型部门时只补缺失项点，避免重复。
-    const existingNames = new Set(
-      (
-        await prisma.criterion.findMany({
-          where: { sessionId: session.id, templateType: template.questionnaireType },
-          select: { name: true },
-        })
-      ).map((row) => row.name),
-    );
-    const missing = template.criteria.filter((item) => !existingNames.has(item.name));
-    if (missing.length > 0) {
-      await prisma.criterion.createMany({
-        data: missing.map((item, index) => ({
-          departmentId: null,
-          sessionId: session.id,
-          templateType: template.questionnaireType,
-          name: item.name,
-          description: item.description,
-          sortOrder: existingNames.size + index + 1,
-        })),
-      });
-    }
-    // person 版式按被评职务列打分，照旧建列；workshop 是单列「得分」版式，无被评列。
-    if (template.voteColumns.length > 0) {
-      await prisma.voteColumn.createMany({
-        data: template.voteColumns.map((columnName, index) => ({
-          departmentId: created.id,
-          sessionId: session.id,
-          name: columnName,
-          sortOrder: index + 1,
-        })),
-      });
-    }
+    // 抬头三件套 + 5 项点 + 被评列与「新建场次」走同一个种子函数，两处口径不会漂移。
+    await seedQuestionnaireTemplate(prisma, session.id, created.id, template);
     await writeAudit('department.create', { name, operator });
     synced += 1;
   }
   return synced;
+}
+
+/**
+ * 给缺问卷配置的草稿场次补种附件8 模板（幂等，可重复执行）。
+ *
+ * 用途：本功能上线前创建的场次只有空问卷；补种让它们与新建场次口径一致。
+ * 只动 draft 场次：voting/paused/ended 的问卷已在用，补种会改变投票口径。
+ *
+ * @param sessionId 指定场次；缺省 = 全部草稿场次
+ * @returns 实际处理过的部门数
+ */
+export async function backfillQuestionnaireTemplates(sessionId?: string): Promise<number> {
+  const sessions = await prisma.voteSession.findMany({
+    where: sessionId ? { id: sessionId } : { status: 'draft' },
+    select: {
+      id: true,
+      departments: { select: { id: true, questionnaireType: true } },
+    },
+  });
+  let seeded = 0;
+  for (const session of sessions) {
+    for (const department of session.departments) {
+      const template =
+        department.questionnaireType === 'workshop'
+          ? WORKSHOP_QUESTIONNAIRE_TEMPLATE
+          : PERSON_QUESTIONNAIRE_TEMPLATE;
+      await seedQuestionnaireTemplate(prisma, session.id, department.id, template);
+      // 另一套问卷的抬头与项点也补齐，保证向导切换类型后不是空表。
+      await seedQuestionnaireTemplate(
+        prisma,
+        session.id,
+        department.id,
+        template.questionnaireType === 'person'
+          ? WORKSHOP_QUESTIONNAIRE_TEMPLATE
+          : PERSON_QUESTIONNAIRE_TEMPLATE,
+        { withVoteColumns: false },
+      );
+      seeded += 1;
+    }
+  }
+  return seeded;
 }
 
 export async function createOrgDepartment(
@@ -1460,7 +1627,7 @@ export async function deleteOrgDepartment(id: string, operator: string): Promise
   const referenced = await prisma.voteSession.count({ where: { orgDepartmentId: id } });
   if (referenced > 0) {
     throw ApiError.conflict(
-      `部门「${current.name}」已被 ${referenced} 个场次引用，不能删除；可改为停用`,
+      `部门「${current.name}」已被 ${referenced} 个评议引用，不能删除；可改为停用`,
       'ORG_DEPARTMENT_IN_USE',
     );
   }
@@ -1495,7 +1662,7 @@ export async function listEmployees(
 
 export interface EmployeeCreateInput {
   departmentId: string;
-  /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
+  /** 可选：显式指定评议时必须与部门所属评议一致，否则 400。 */
   sessionId?: string;
   name: string;
   gender?: string | null;
@@ -1512,7 +1679,7 @@ export async function createEmployee(
   if (!department) throw ApiError.badRequest('部门不存在');
   // 职工归属场次 = 部门所属场次；显式传 sessionId 时校验一致，防止配错。
   if (input.sessionId !== undefined && input.sessionId !== department.sessionId) {
-    throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
+    throw ApiError.badRequest('部门不属于该评议', 'SESSION_MISMATCH');
   }
 
   const created = await prisma.employee.create({
@@ -1745,7 +1912,7 @@ function normalizeDescription(value: string | null | undefined): string | null {
 export async function listCriteria(opts: {
   sessionId?: string;
   departmentId?: string;
-  /** 模板项点类型过滤（person/workshop）；此时只查 departmentId 为空的模板行。 */
+  /** 模板评议项目类型过滤（person/workshop）；此时只查 departmentId 为空的模板行。 */
   templateType?: string;
 }): Promise<CriterionDto[]> {
   const where: {
@@ -1777,7 +1944,7 @@ export async function listCriteria(opts: {
 }
 
 export interface CriterionCreateInput {
-  /** 模板项点：场次 + 类型（person/workshop）。 */
+  /** 模板评议项目：评议 + 类型（person/workshop）。 */
   sessionId?: string;
   templateType?: string;
   name: string;
@@ -1787,7 +1954,7 @@ export interface CriterionCreateInput {
   sortOrder?: number;
 }
 
-/** 新增模板项点。0010 起项点只在模板层维护（部门级项点仅为历史评分保留）。 */
+/** 新增模板评议项目。0010 起评议项目只在模板层维护（部门级评议项目仅为历史评分保留）。 */
 export async function createCriterion(
   input: CriterionCreateInput,
   operator: string,
@@ -1796,7 +1963,7 @@ export async function createCriterion(
     throw ApiError.badRequest('最高分必须大于最低分', 'CRITERION_RANGE_INVALID');
   }
   if (input.templateType === undefined || !QUESTIONNAIRE_TYPES.includes(input.templateType)) {
-    throw ApiError.badRequest('必须指定问卷模板类型（个人问卷/车间问卷）', 'TEMPLATE_TYPE_INVALID');
+    throw ApiError.badRequest('必须指定打分表模板类型（个人打分表/车间打分表）', 'TEMPLATE_TYPE_INVALID');
   }
 
   const sessionId = await resolveSessionId(input.sessionId);
@@ -1850,7 +2017,7 @@ export async function updateCriterion(
   operator: string,
 ): Promise<CriterionDto> {
   const current = await prisma.criterion.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('项点不存在');
+  if (!current) throw ApiError.notFound('评议项目不存在');
 
   // 只改 min 或只改 max 都可能把区间改反，因此按「合并后的结果」校验。
   const minScore = patch.minScore ?? current.minScore;
@@ -1885,25 +2052,25 @@ export async function updateCriterion(
   };
 }
 
-/** 删除项点 —— 软删除，历史评分里的该项仍可读。 */
+/** 删除评议项目 —— 软删除，历史评分里的该项仍可读。 */
 export async function disableCriterion(id: string, operator: string): Promise<void> {
   const current = await prisma.criterion.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('项点不存在');
+  if (!current) throw ApiError.notFound('评议项目不存在');
   await prisma.criterion.update({ where: { id }, data: { enabled: false } });
   await writeAudit('criterion.disable', { name: current.name, operator });
 }
 
 // -----------------------------------------------------------------------------
-// 场次问卷模板（个人 / 车间各一套抬头配置）
+// 评议打分表模板（个人 / 车间各一套抬头配置）
 // -----------------------------------------------------------------------------
 
-/** 读一套模板。行不存在时返回默认值（新场次首访自动以默认文案展示，保存时才落行）。 */
+/** 读一套模板。行不存在时返回默认值（新评议首访自动以默认文案展示，保存时才落行）。 */
 export async function listQuestionnaireTemplate(
   sessionId: string,
   type: string,
 ): Promise<QuestionnaireTemplateDto> {
   if (!QUESTIONNAIRE_TYPES.includes(type)) {
-    throw ApiError.badRequest('问卷模板类型只能是「个人问卷」或「车间问卷」', 'TEMPLATE_TYPE_INVALID');
+    throw ApiError.badRequest('打分表模板类型只能是「个人打分表」或「车间打分表」', 'TEMPLATE_TYPE_INVALID');
   }
   // 该表的 Prisma 编译有 bug（P2022），读写一律走原生 SQL 封装 questionnaireTemplateStore。
   const row = await findTemplate(prisma, sessionId, type);
@@ -1924,7 +2091,7 @@ export async function updateQuestionnaireTemplate(
   operator: string,
 ): Promise<QuestionnaireTemplateDto> {
   if (!QUESTIONNAIRE_TYPES.includes(type)) {
-    throw ApiError.badRequest('问卷模板类型只能是「个人问卷」或「车间问卷」', 'TEMPLATE_TYPE_INVALID');
+    throw ApiError.badRequest('打分表模板类型只能是「个人打分表」或「车间打分表」', 'TEMPLATE_TYPE_INVALID');
   }
   await resolveSessionId(sessionId);
   const data: { headerNote?: string; title?: string; footerNote?: string } = {};
@@ -1949,6 +2116,48 @@ export async function updateQuestionnaireTemplate(
 // 被评列（打分表的列）
 // -----------------------------------------------------------------------------
 
+/**
+ * 副本工号 → 人员目录条目 id。
+ *
+ * 只用于把「已选人」回显成人员目录下拉的选中项：列里存的是场次副本 id，
+ * 下拉的 value 是人员目录 id，两者必须靠工号接起来。
+ */
+async function staffIdsByEmployeeNo(employeeNos: Array<string | null>): Promise<Map<string, string>> {
+  const nos = [...new Set(employeeNos.filter((no): no is string => Boolean(no)))];
+  if (nos.length === 0) return new Map();
+  const entries = await prisma.staffDirectoryEntry.findMany({
+    where: { employeeNo: { in: nos } },
+    select: { id: true, employeeNo: true },
+  });
+  return new Map(entries.map((entry) => [entry.employeeNo, entry.id]));
+}
+
+function toVoteColumnDto(
+  row: {
+    id: string;
+    departmentId: string;
+    name: string;
+    employeeId: string | null;
+    sortOrder: number;
+    enabled: boolean;
+    employee: { name: string; employeeNo: string | null } | null;
+  },
+  staffIdByNo: Map<string, string>,
+): VoteColumnDto {
+  const employeeNo = row.employee?.employeeNo ?? null;
+  return {
+    id: row.id,
+    departmentId: row.departmentId,
+    name: row.name,
+    employeeId: row.employeeId,
+    employeeName: row.employee?.name ?? null,
+    employeeNo,
+    staffDirectoryId: employeeNo ? (staffIdByNo.get(employeeNo) ?? null) : null,
+    sortOrder: row.sortOrder,
+    enabled: row.enabled,
+  };
+}
+
 export async function listVoteColumns(
   departmentId?: string,
   sessionId?: string,
@@ -1956,34 +2165,33 @@ export async function listVoteColumns(
   const rows = await prisma.voteColumn.findMany({
     where: { departmentId, sessionId },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-    include: { employee: { select: { name: true } } },
+    include: { employee: { select: { name: true, employeeNo: true } } },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    departmentId: row.departmentId,
-    name: row.name,
-    employeeId: row.employeeId,
-    employeeName: row.employee?.name ?? null,
-    sortOrder: row.sortOrder,
-    enabled: row.enabled,
-  }));
+  const staffIdByNo = await staffIdsByEmployeeNo(rows.map((row) => row.employee?.employeeNo ?? null));
+  return rows.map((row) => toVoteColumnDto(row, staffIdByNo));
 }
 
 export interface VoteColumnCreateInput {
   departmentId: string;
-  /** 可选：显式指定场次时必须与部门所属场次一致，否则 400。 */
+  /** 可选：显式指定评议时必须与部门所属评议一致，否则 400。 */
   sessionId?: string;
   name: string;
-  /** 该职务列的具体被评人（可选）。 */
+  /** 该职务列的具体被评议人（可选）。仅接受本部门已有的评议副本。 */
   employeeId?: string | null;
+  /**
+   * 从全局人员目录选人（可选）。后端按 (sessionId, 工号) 幂等落一条场次副本，
+   * 副本归属**列所属部门**——允许跨部门选人，但打印仍按本部门归集。
+   * 与 `employeeId` 同时传时以本字段为准。
+   */
+  staffDirectoryId?: string | null;
   sortOrder?: number;
 }
 
 /**
  * 校验被评人：必须存在且属于该列所在部门。
  *
- * 表头第二行选的是「本车间的某职工」，跨部门选人属于配错数据，
- * 在这里拦下而不是让问卷打印出别车间的名字。
+ * 直传 `employeeId` 的旧路径仍守这条边界（防前端传错 id 把别部门的人塞进本表）；
+ * 跨部门选人是人员管理选人的**有**意能力，走 `staffDirectoryId` 那条路径。
  */
 async function resolveEmployeeId(
   employeeId: string | null | undefined,
@@ -1991,8 +2199,8 @@ async function resolveEmployeeId(
 ): Promise<string | null> {
   if (employeeId === null || employeeId === undefined) return employeeId ?? null;
   const employee = await prisma.employee.findUnique({ where: { id: employeeId } });
-  if (!employee) throw ApiError.badRequest('被评人不存在');
-  if (employee.departmentId !== departmentId) throw ApiError.badRequest('被评人必须属于该部门');
+  if (!employee) throw ApiError.badRequest('被评议人不存在');
+  if (employee.departmentId !== departmentId) throw ApiError.badRequest('被评议人必须属于该部门');
   return employee.id;
 }
 
@@ -2010,9 +2218,14 @@ export async function createVoteColumn(
   const department = await prisma.department.findUnique({ where: { id: input.departmentId } });
   if (!department) throw ApiError.badRequest('部门不存在');
   if (input.sessionId !== undefined && input.sessionId !== department.sessionId) {
-    throw ApiError.badRequest('部门不属于该场次', 'SESSION_MISMATCH');
+    throw ApiError.badRequest('部门不属于该评议', 'SESSION_MISMATCH');
   }
-  const employeeId = await resolveEmployeeId(input.employeeId, input.departmentId);
+  const employeeId = input.staffDirectoryId
+    ? await employeeIdFromStaff(input.staffDirectoryId, {
+        departmentId: department.id,
+        sessionId: department.sessionId,
+      })
+    : await resolveEmployeeId(input.employeeId, input.departmentId);
 
   const created = await prisma.voteColumn.create({
     data: {
@@ -2022,29 +2235,33 @@ export async function createVoteColumn(
       employeeId,
       sortOrder: input.sortOrder ?? 0,
     },
-    include: { employee: { select: { name: true } } },
+    include: { employee: { select: { name: true, employeeNo: true } } },
   });
   await writeAudit('vote_column.create', { name, department: department.name, operator });
-  return {
-    id: created.id,
-    departmentId: created.departmentId,
-    name: created.name,
-    employeeId: created.employeeId,
-    employeeName: created.employee?.name ?? null,
-    sortOrder: created.sortOrder,
-    enabled: created.enabled,
-  };
+  const staffIdByNo = await staffIdsByEmployeeNo([created.employee?.employeeNo ?? null]);
+  return toVoteColumnDto(created, staffIdByNo);
 }
 
 export async function updateVoteColumn(
   id: string,
-  patch: { name?: string; employeeId?: string | null; sortOrder?: number; enabled?: boolean },
+  patch: {
+    name?: string;
+    employeeId?: string | null;
+    staffDirectoryId?: string | null;
+    sortOrder?: number;
+    enabled?: boolean;
+  },
   operator: string,
 ): Promise<VoteColumnDto> {
   const current = await prisma.voteColumn.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('被评列不存在');
-  const employeeId =
-    patch.employeeId === undefined
+  if (!current) throw ApiError.notFound('被评议人列不存在');
+  // 人员管理选人优先；清除已选人仍走 `employeeId: null`。
+  const employeeId = patch.staffDirectoryId
+    ? await employeeIdFromStaff(patch.staffDirectoryId, {
+        departmentId: current.departmentId,
+        sessionId: current.sessionId,
+      })
+    : patch.employeeId === undefined
       ? undefined
       : await resolveEmployeeId(patch.employeeId, current.departmentId);
 
@@ -2056,24 +2273,17 @@ export async function updateVoteColumn(
       sortOrder: patch.sortOrder,
       enabled: patch.enabled,
     },
-    include: { employee: { select: { name: true } } },
+    include: { employee: { select: { name: true, employeeNo: true } } },
   });
   await writeAudit('vote_column.update', { name: updated.name, operator });
-  return {
-    id: updated.id,
-    departmentId: updated.departmentId,
-    name: updated.name,
-    employeeId: updated.employeeId,
-    employeeName: updated.employee?.name ?? null,
-    sortOrder: updated.sortOrder,
-    enabled: updated.enabled,
-  };
+  const staffIdByNo = await staffIdsByEmployeeNo([updated.employee?.employeeNo ?? null]);
+  return toVoteColumnDto(updated, staffIdByNo);
 }
 
-/** 删除被评列 —— 软删除，历史评分里的该列仍可读。 */
+/** 删除被评议人列 —— 软删除，历史评分里的该列仍可读。 */
 export async function disableVoteColumn(id: string, operator: string): Promise<void> {
   const current = await prisma.voteColumn.findUnique({ where: { id } });
-  if (!current) throw ApiError.notFound('被评列不存在');
+  if (!current) throw ApiError.notFound('被评议人列不存在');
   await prisma.voteColumn.update({ where: { id }, data: { enabled: false } });
   await writeAudit('vote_column.disable', { name: current.name, operator });
 }

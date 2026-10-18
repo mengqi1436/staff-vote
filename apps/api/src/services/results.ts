@@ -26,10 +26,10 @@ export interface ResultCriterionScore {
 
 export interface ResultRow {
   rank: number;
-  /** 车间问卷唯一一格虚拟「得分」列为 null */
+  /** 车间打分表唯一一格虚拟「得分」列为 null */
   voteColumnId: string | null;
   voteColumnName: string;
-  /** 被评列是否启用；停用的列仍出现在结果里，便于解释历史成绩 */
+  /** 被评议人列是否启用；停用的列仍出现在结果里，便于解释历史成绩 */
   enabled: boolean;
   comprehensiveScore: number;
   criteria: ResultCriterionScore[];
@@ -58,7 +58,7 @@ export interface ResultsDto {
 /** 结果页与导出共用的一次性计算结果。 */
 export interface DepartmentResults {
   dto: ResultsDto;
-  /** 各项明细（被评列 × 有成数据的项点），导出用 */
+  /** 各项明细（被评议人列 × 有成数据的评议项目），导出用 */
   details: Array<{
     voteColumnName: string;
     criterionName: string;
@@ -66,9 +66,9 @@ export interface DepartmentResults {
     normalizedScore: number;
     ticketTypes: string[];
   }>;
-  /** 全部票种 + 是否真正参与计分，导出「参与票种口径」sheet 用 */
+  /** 全部人员类别 + 是否真正参与计分，导出「参与人员类别说明」sheet 用 */
   ticketTypes: Array<{ code: string; name: string; weightPercent: number; involved: boolean }>;
-  /** 票别口径明细（名称已填好），导出「票别单项明细 / 票别合计明细」sheet 用 */
+  /** 人员类别说明明细（名称已填好），导出「人员类别单项明细 / 票别合计明细」sheet 用 */
   perTicketType: {
     criteriaRows: Array<{
       ticketTypeCode: string;
@@ -259,19 +259,19 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
 // 按随机码导出答卷（受控映射的唯二读取方之一，两处导出都在 results.export 门内）
 // -----------------------------------------------------------------------------
 
-/** 单码答卷导出的数据（附件8 形态：行 = 项点，列 = 被评列，格 = 分数）。 */
+/** 单码答卷导出的数据（附件8 形态：行 = 评议项目，列 = 被评议人列，格 = 分数）。 */
 export interface TicketAnswerExport {
   headerNote: string;
   /** 表标题（其中「xx」已替换为部门名） */
   title: string;
   footerNote: string;
   departmentName: string;
-  /** 被评列名，按 sortOrder 排列（含停用列：历史答卷里可能有分） */
+  /** 被评议人列名，按 sortOrder 排列（含停用列：历史答卷里可能有分） */
   columnNames: string[];
-  /** 每行 = [项点名(含描述), ...各被评列分数（缺格空串）] */
+  /** 每行 = [评议项目名(含描述), ...各被评议人列分数（缺格空串）] */
   rows: Array<Array<string | number>>;
   submittedAt: Date;
-  /** 票别标签：如「A（领导评议）」 */
+  /** 人员类别标签：如「A（领导评议）」 */
   ticketTypeLabel: string;
 }
 
@@ -341,7 +341,7 @@ export async function loadTicketAnswerExport(ticketId: string): Promise<TicketAn
   const scoreAt = new Map(sheet.items.map((item) => [`${item.voteColumnId}|${item.criterionId}`, item.score]));
   const rows = allCriteria.map((criterion) => [
     criterion.description ? `${criterion.name}\n${criterion.description}` : criterion.name,
-    // 车间问卷：唯一一格虚拟列（voteColumnId=null），键即 'null|<项点>'。
+    // 车间问卷：唯一一格虚拟列（voteColumnId=null），键即 'null|<评议项目>'。
     ...(isWorkshop
       ? [scoreAt.get(`null|${criterion.id}`) ?? '']
       : voteColumns.map((column) => scoreAt.get(`${column.id}|${criterion.id}`) ?? '')),
@@ -367,11 +367,11 @@ export interface SessionAnswerSummaryRow {
   code: string;
   submittedAt: Date;
   ticketTypeCode: string;
-  /** 各「被评列 × 项点」格子的分数，与 summaryColumns 一一对应（缺格空串） */
+  /** 各「被评议人列 × 评议项目」格子的分数，与 summaryColumns 一一对应（缺格空串） */
   scores: Array<number | string>;
 }
 
-/** 整场导出的汇总列：一列一个「被评列 × 项点」组合。 */
+/** 整场导出的汇总列：一列一个「被评议人列 × 评议项目」组合。 */
 export interface SessionAnswerSummaryColumn {
   header: string;
 }
@@ -454,7 +454,7 @@ export async function loadSessionAnswerSummary(sessionId: string): Promise<Sessi
     }
   }
   // 车间部门的虚拟「得分」列：分数格没有 vote_column_id（null），
-  // 键加部门前缀避免多个车间部门的 'null|项点' 互相串格。
+  // 键加部门前缀避免多个车间部门的 'null|评议项目' 互相串格。
   for (const department of departments) {
     for (const criterion of templateCriteriaByType.get('workshop') ?? []) {
       orderedColumns.push({ header: `${department.name}-得分-${criterion.name}` });

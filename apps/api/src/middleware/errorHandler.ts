@@ -12,7 +12,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
-    /** 可选的结构化明细（如场次完整性校验的缺项清单），随错误体一并回传 */
+    /** 可选的结构化明细（如评议完整性校验的缺项清单），随错误体一并回传 */
     readonly detail?: string[],
   ) {
     super(message);
@@ -23,7 +23,7 @@ export class ApiError extends Error {
     return new ApiError(400, code, message);
   }
 
-  static unauthorized(message = '未登录或会话已过期', code = 'UNAUTHORIZED'): ApiError {
+  static unauthorized(message = '未登录或登录状态已过期', code = 'UNAUTHORIZED'): ApiError {
     return new ApiError(401, code, message);
   }
 

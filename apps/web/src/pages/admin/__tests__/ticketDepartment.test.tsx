@@ -231,12 +231,9 @@ describe('发码卡的评议部门必选闸', () => {
 
 describe('批次一览的评议部门列', () => {
   it('绑定部门显部门名，未绑定显「全部部门」', async () => {
-    const user = userEvent.setup({ delay: null });
     renderPage();
-    // 等 usePolling 首轮加载完成（页面 skeleton 消失、Tabs 渲染）再切页签
+    // 等 usePolling 首轮加载完成（页面 skeleton 消失、卡片渲染）
     await screen.findByText('批量发码');
-
-    await user.click(screen.getByRole('tab', { name: '发放批次' }));
 
     expect(await screen.findByText('生产部')).toBeInTheDocument();
     expect(screen.getByText('全部部门')).toBeInTheDocument();

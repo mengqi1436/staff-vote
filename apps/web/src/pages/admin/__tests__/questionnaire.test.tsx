@@ -1,7 +1,7 @@
 /**
- * 「问卷配置」页的行为测试（附件8 Excel 所见即所得版式）。
+ * 「打分表配置」页的行为测试（附件8 Excel 所见即所得版式）。
  *
- * 页面主体是一张与 docs/附件文件包/附件8.问卷调查表.xlsx 同构的表：
+ * 页面主体是一张与 docs/附件文件包/附件8.打分表调查表.xlsx 同构的表：
  * 标题中的「xx」是内嵌的部门下拉框，抬头/列头/说明在表上内联编辑、失焦自动保存。
  * 断言重点不是「渲染出来了」，而是「改完之后调了哪个接口、带了什么参数」。
  */
@@ -18,7 +18,7 @@ import { ALL_PERMISSIONS, renderWithAuth } from '../../../test-utils.js';
  */
 configure({ asyncUtilTimeout: 15000 });
 
-/** 参考表口径的部门配置：个人问卷 + 车间问卷各一（抬头三件套在场次模板里，不在部门上）。 */
+/** 参考表说明的部门配置：个人打分表 + 车间打分表各一（抬头三件套在评议模板里，不在部门上）。 */
 function departments() {
   return [
     {
@@ -38,21 +38,21 @@ function departments() {
   ];
 }
 
-/** 场次问卷模板（0010）：按问卷类型各一份，承载附件号/标题/填写说明三件套。 */
+/** 评议打分表模板（0010）：按打分表类型各一份，承载附件号/标题/填写说明三件套。 */
 function templateHeaders(): Record<string, Record<string, unknown>> {
   return {
     person: {
       sessionId: null,
       type: 'person',
       headerNote: '附件1-1',
-      title: 'xx车间负责人评价问卷',
-      footerNote: '填写说明：每一条评价项点满分20分，弃权、不填视为0分。',
+      title: 'xx车间负责人评价打分表',
+      footerNote: '填写说明：每一条评议项目满分20分，弃权、不填视为0分。',
     },
     workshop: {
       sessionId: null,
       type: 'workshop',
       headerNote: '附件1-2',
-      title: 'xx车间评价问卷',
+      title: 'xx车间评价打分表',
       footerNote: '',
     },
   };
@@ -66,6 +66,8 @@ function voteColumns() {
       name: '主任',
       employeeId: null,
       employeeName: null,
+      employeeNo: null,
+      staffDirectoryId: null,
       sortOrder: 1,
       enabled: true,
     },
@@ -75,17 +77,50 @@ function voteColumns() {
       name: '党支部书记',
       employeeId: null,
       employeeName: null,
+      employeeNo: null,
+      staffDirectoryId: null,
       sortOrder: 2,
       enabled: true,
     },
   ];
 }
 
-function employees() {
+/** 人员管理（全局人员目录）：选人下拉的数据源，label 为「车间 / 姓名」。 */
+function staffDirectory() {
   return [
-    { id: 'e1', departmentId: 'd1', name: '张三', gender: '男', age: 35, title: '高级工程师', sortOrder: 1, enabled: true },
-    { id: 'e2', departmentId: 'd1', name: '李四', gender: '女', age: 28, title: '工程师', sortOrder: 2, enabled: true },
-    { id: 'e3', departmentId: 'd1', name: '王五', gender: '男', age: 45, title: '技师', sortOrder: 3, enabled: true },
+    {
+      id: 's1',
+      employeeNo: '1001',
+      name: '张三',
+      gender: '男',
+      age: 35,
+      title: '高级工程师',
+      orgDepartmentId: 'od1',
+      orgDepartmentName: '贵阳西车间',
+      enabled: true,
+    },
+    {
+      id: 's2',
+      employeeNo: '1002',
+      name: '李四',
+      gender: '女',
+      age: 28,
+      title: '工程师',
+      orgDepartmentId: 'od1',
+      orgDepartmentName: '贵阳西车间',
+      enabled: true,
+    },
+    {
+      id: 's3',
+      employeeNo: '1003',
+      name: '王五',
+      gender: '男',
+      age: 45,
+      title: '技师',
+      orgDepartmentId: 'od1',
+      orgDepartmentName: '贵阳西车间',
+      enabled: true,
+    },
   ];
 }
 
@@ -115,6 +150,7 @@ const mocks = vi.hoisted(() => ({
   criteriaUpdate: vi.fn(),
   criteriaRemove: vi.fn(),
   employeesList: vi.fn(),
+  staffList: vi.fn(),
   templateGet: vi.fn(),
   templateUpdate: vi.fn(),
   sessionsList: vi.fn(),
@@ -139,6 +175,7 @@ vi.mock('../../../lib/api.js', async () => {
         remove: mocks.criteriaRemove,
       },
       employees: { list: mocks.employeesList },
+      staffDirectory: { list: mocks.staffList },
       questionnaireTemplates: { get: mocks.templateGet, update: mocks.templateUpdate },
       sessions: { list: mocks.sessionsList },
     },
@@ -173,18 +210,23 @@ beforeEach(() => {
     deptStore[index] = { ...deptStore[index], ...body } as (typeof deptStore)[number];
     return deptStore[index];
   });
-  // 被评列同样带可变状态（选人 / 改名后 refresh 回显）
+  // 被评议人列同样带可变状态（选人 / 改名后 refresh 回显）
   const columnStore = voteColumns();
   mocks.columnList.mockImplementation(async () => columnStore);
   mocks.columnUpdate.mockImplementation(async (id: string, body: Record<string, unknown>) => {
     const index = columnStore.findIndex((row) => row.id === id);
+    const current = columnStore[index]!;
+    const staffId = body.staffDirectoryId as string | null | undefined;
     columnStore[index] = {
-      ...columnStore[index],
+      ...current,
       ...body,
-      employeeName:
-        body.employeeId === null
+      // 选人走人员管理：回显姓名要按目录项查，清除仍走 employeeId: null
+      staffDirectoryId: staffId ?? (body.employeeId === null ? null : current.staffDirectoryId),
+      employeeName: staffId
+        ? (staffDirectory().find((item) => item.id === staffId)?.name ?? null)
+        : body.employeeId === null
           ? null
-          : (employees().find((item) => item.id === body.employeeId)?.name ?? null),
+          : current.employeeName,
     } as (typeof columnStore)[number];
     return columnStore[index];
   });
@@ -195,6 +237,8 @@ beforeEach(() => {
       name: body.name,
       employeeId: null,
       employeeName: null,
+      employeeNo: null,
+      staffDirectoryId: null,
       sortOrder: body.sortOrder ?? 0,
       enabled: true,
     }),
@@ -226,8 +270,18 @@ beforeEach(() => {
     const index = criterionStore.findIndex((row) => row.id === id);
     if (index >= 0) criterionStore.splice(index, 1);
   });
-  mocks.employeesList.mockImplementation(async () => employees());
-  // 场次模板三件套：GET 按类型取，PATCH 合并回 store（refresh 回显新值）
+  mocks.employeesList.mockImplementation(async () => staffDirectory());
+  // 选人下拉改查人员管理：过滤在服务端完成（前端 filterOption=false），这里按 q 模拟匹配
+  mocks.staffList.mockImplementation(async (query?: { q?: string }) => {
+    const all = staffDirectory();
+    const keyword = query?.q;
+    return keyword
+      ? all.filter(
+          (entry) => entry.name.includes(keyword) || entry.orgDepartmentName.includes(keyword),
+        )
+      : all;
+  });
+  // 评议模板三件套：GET 按类型取，PATCH 合并回 store（refresh 回显新值）
   const templateStore = templateHeaders();
   mocks.templateGet.mockImplementation(async (type: string) => templateStore[type] ?? null);
   mocks.templateUpdate.mockImplementation(async (body: Record<string, unknown>) => {
@@ -235,15 +289,15 @@ beforeEach(() => {
     templateStore[type] = { ...templateStore[type], ...body };
     return templateStore[type];
   });
-  // 问卷页未选场次：scoreScope 数据源不请求（组件对 null sessionId 直接短路）
+  // 打分表页未选评议：scoreScope 数据源不请求（组件对 null sessionId 直接短路）
   mocks.sessionsList.mockImplementation(async () => ({ sessions: [] }));
 });
 
-describe('问卷配置页（附件8 Excel 版式）', () => {
-  it('按附件8版式渲染：附件号、标题（xx 为部门下拉）、斜线表头、被评列、项点行、填写说明', async () => {
+describe('打分表配置页（附件8 Excel 版式）', () => {
+  it('按附件8版式渲染：附件号、标题（xx 为部门下拉）、斜线表头、被评议人列、评议项目行、填写说明', async () => {
     renderQuestionnaire();
 
-    // 抬头与被评列都从模板/问卷配置回填；多场后列表请求带场次过滤（未选场次为 null）。
+    // 抬头与被评议人列都从模板/打分表配置回填；多场后列表请求带评议过滤（未选评议为 null）。
     // 数据是异步到货的：先等元素出现，再等值灌入——全量并行跑机器慢时，
     // 「元素在」不代表「值已在」，逐项 waitFor 才稳定。
     const headerInput = await screen.findByLabelText('附件号');
@@ -255,24 +309,24 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     // 标题中的「xx」渲染为部门下拉，默认选中第一个部门；其余文字原样展示
     expect(screen.getByRole('combobox', { name: '选择部门' })).toBeInTheDocument();
     await screen.findByText('办公室');
-    await screen.findByText('车间负责人评价问卷');
+    await screen.findByText('车间负责人评价打分表');
 
-    // 斜线表头与被评列
+    // 斜线表头与被评议人列
     expect(screen.getByText('职务与姓名')).toBeInTheDocument();
-    expect(screen.getByText('评价项点')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText('被评列：主任')).toHaveValue('主任'));
-    expect(screen.getByLabelText('被评列：党支部书记')).toHaveValue('党支部书记');
+    expect(screen.getByText('评议项目')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('被评议人列：主任')).toHaveValue('主任'));
+    expect(screen.getByLabelText('被评议人列：党支部书记')).toHaveValue('党支部书记');
 
-    // 项点行：名称与描述是表上的内联输入（可直接编辑）
-    await waitFor(() => expect(screen.getByLabelText('项点名称：政治素质')).toHaveValue('政治素质'));
-    expect(screen.getByLabelText('项点描述：政治素质')).toHaveValue('信念坚定、对党忠诚。');
+    // 评议项目行：名称与描述是表上的内联输入（可直接编辑）
+    await waitFor(() => expect(screen.getByLabelText('评议项目名称：政治素质')).toHaveValue('政治素质'));
+    expect(screen.getByLabelText('评议项目描述：政治素质')).toHaveValue('信念坚定、对党忠诚。');
 
     // 填写说明：关键词富文本
     expect(screen.getByText('满分20分')).toHaveClass('note-red');
     expect(screen.getByText('0分')).toHaveClass('note-red');
   }, TIMEOUT_MS);
 
-  it('标题下拉切换部门后，重新加载该部门的被评列与项点', async () => {
+  it('标题下拉切换部门后，重新加载该部门的被评议人列与评议项目', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
     await screen.findByText('办公室');
@@ -286,7 +340,7 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     expect(mocks.criteriaList).toHaveBeenCalledWith('workshop', null);
   }, TIMEOUT_MS);
 
-  it('附件号内联编辑，失焦自动 PATCH 到场次模板', async () => {
+  it('附件号内联编辑，失焦自动 PATCH 到评议模板', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
     const input = await screen.findByLabelText('附件号');
@@ -309,16 +363,16 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
 
     await user.click(screen.getByRole('button', { name: '编辑标题' }));
     const input = screen.getByLabelText('表标题');
-    expect(input).toHaveValue('xx车间负责人评价问卷');
+    expect(input).toHaveValue('xx车间负责人评价打分表');
 
     await user.clear(input);
-    await user.type(input, 'xx车间评价问卷');
+    await user.type(input, 'xx车间评价打分表');
     await user.tab();
 
     await waitFor(() => expect(mocks.templateUpdate).toHaveBeenCalledTimes(1));
     expect(mocks.templateUpdate.mock.calls[0]?.[0]).toEqual({
       type: 'person',
-      title: 'xx车间评价问卷',
+      title: 'xx车间评价打分表',
     });
   }, TIMEOUT_MS);
 
@@ -341,10 +395,10 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     });
   }, TIMEOUT_MS);
 
-  it('表尾空列头输入列名失焦即新增被评列（不再弹窗/跳页）', async () => {
+  it('表尾空列头输入列名失焦即新增被评议人列（不再弹窗/跳页）', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    const input = await screen.findByLabelText('新增被评列');
+    const input = await screen.findByLabelText('新增被评议人列');
 
     await user.type(input, '副主任');
     await user.tab();
@@ -356,16 +410,16 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
       sortOrder: 3,
     });
     // 输入留空失焦不创建
-    expect(await screen.findByLabelText('新增被评列')).toHaveValue('');
+    expect(await screen.findByLabelText('新增被评议人列')).toHaveValue('');
   }, TIMEOUT_MS);
 
-  it('项点行「新增」插入表尾草稿行，输入名称失焦即创建（默认分值 0～100）', async () => {
+  it('评议项目行「新增」插入表尾草稿行，输入名称失焦即创建（默认分值 0～100）', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    await screen.findByLabelText('项点名称：政治素质');
+    await screen.findByLabelText('评议项目名称：政治素质');
 
-    await user.click(screen.getByRole('button', { name: '在「政治素质」下方新增项点' }));
-    const draft = await screen.findByLabelText('新增项点名称');
+    await user.click(screen.getByRole('button', { name: '在「政治素质」下方新增评议项目' }));
+    const draft = await screen.findByLabelText('新增评议项目名称');
     await user.type(draft, '安全素质');
     await user.tab();
 
@@ -379,7 +433,7 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     });
   }, TIMEOUT_MS);
 
-  it('项点行下移与相邻行互换 sortOrder（两个 PATCH 按序提交）', async () => {
+  it('评议项目行下移与相邻行互换 sortOrder（两个 PATCH 按序提交）', async () => {
     const user = userEvent.setup({ delay: null });
     mocks.criteriaList.mockImplementation(async () => [
       {
@@ -402,7 +456,7 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
       },
     ]);
     renderQuestionnaire();
-    await screen.findByLabelText('项点名称：政治素质');
+    await screen.findByLabelText('评议项目名称：政治素质');
 
     await user.click(screen.getByRole('button', { name: '下移「政治素质」' }));
 
@@ -411,10 +465,10 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     expect(mocks.criteriaUpdate.mock.calls[1]).toEqual(['c2', { sortOrder: 1 }]);
   }, TIMEOUT_MS);
 
-  it('项点行删除需确认，确认后调用 criteria.remove（软删除）', async () => {
+  it('评议项目行删除需确认，确认后调用 criteria.remove（软删除）', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    await screen.findByLabelText('项点名称：政治素质');
+    await screen.findByLabelText('评议项目名称：政治素质');
 
     await user.click(screen.getByRole('button', { name: '删除「政治素质」' }));
     await user.click(await screen.findByRole('button', { name: /^删\s*除$/ }));
@@ -425,7 +479,7 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
   it('列头悬停 × 并确认后删除该列', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    await screen.findByLabelText('被评列：主任');
+    await screen.findByLabelText('被评议人列：主任');
 
     await user.click(screen.getByRole('button', { name: '删除「主任」' }));
     await user.click(await screen.findByRole('button', { name: /^删\s*除$/ }));
@@ -436,7 +490,7 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
   it('列名内联编辑，失焦 PATCH 只带 name', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    const input = await screen.findByLabelText('被评列：主任');
+    const input = await screen.findByLabelText('被评议人列：主任');
 
     await user.clear(input);
     await user.type(input, '副主任');
@@ -447,43 +501,44 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     expect(mocks.columnUpdate.mock.calls[0]?.[1]).toEqual({ name: '副主任' });
   }, TIMEOUT_MS);
 
-  it('切换问卷类型即保存（车间问卷表头为单行「序号 | 项点 | …」）', async () => {
+  it('切换打分表类型即保存（车间打分表表头为单行「序号 | 评议项目 | …」）', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
     await screen.findByText('办公室');
 
-    await user.click(screen.getByText('车间问卷'));
+    await user.click(screen.getByText('车间打分表'));
 
     await waitFor(() => expect(mocks.departmentUpdate).toHaveBeenCalledTimes(1));
     expect(mocks.departmentUpdate.mock.calls[0]?.[1]).toEqual({ questionnaireType: 'workshop' });
 
-    // 车间问卷没有斜线表头
+    // 车间打分表没有斜线表头
     await waitFor(() => expect(screen.queryByText('职务与姓名')).not.toBeInTheDocument());
-    expect(screen.getByText('项点')).toBeInTheDocument();
+    expect(screen.getByText('评议项目')).toBeInTheDocument();
   }, TIMEOUT_MS);
 
-  it('表头第二行「职务与姓名」：为职务列选择具体人员并保存到被评列', async () => {
+  it('表头第二行「职务与姓名」：为职务列选择具体人员并保存到被评议人列', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    const combo = await screen.findByRole('combobox', { name: '主任被评人' });
+    const combo = await screen.findByRole('combobox', { name: '主任被评议人' });
     expect(combo).toHaveValue('');
 
     await user.click(combo);
-    await user.click(await screen.findByTitle('张三'));
+    // 人员管理选项的 label 是「车间 / 姓名」，同名的人靠车间区分
+    await user.click(await screen.findByTitle('贵阳西车间 / 张三'));
 
     await waitFor(() => expect(mocks.columnUpdate).toHaveBeenCalledTimes(1));
     expect(mocks.columnUpdate.mock.calls[0]?.[0]).toBe('v1');
-    expect(mocks.columnUpdate.mock.calls[0]?.[1]).toEqual({ employeeId: 'e1' });
+    expect(mocks.columnUpdate.mock.calls[0]?.[1]).toEqual({ staffDirectoryId: 's1' });
 
-    // 选人后下拉回显所选姓名（下拉浮层与选中框里都会出现该姓名）
-    const shown = await screen.findAllByText('张三');
+    // 选人后下拉回显所选人员（下拉浮层与选中框里都带姓名）
+    const shown = await screen.findAllByText(/张三/);
     expect(shown.length).toBeGreaterThan(0);
   }, TIMEOUT_MS);
 
-  it('项点名称在表上直接编辑，失焦 PATCH 只带 name', async () => {
+  it('评议项目名称在表上直接编辑，失焦 PATCH 只带 name', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    const input = await screen.findByLabelText('项点名称：政治素质');
+    const input = await screen.findByLabelText('评议项目名称：政治素质');
 
     await user.clear(input);
     await user.type(input, '安全素质');
@@ -494,10 +549,10 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
     expect(mocks.criteriaUpdate.mock.calls[0]?.[1]).toEqual({ name: '安全素质' });
   }, TIMEOUT_MS);
 
-  it('项点描述在表上直接编辑，清空后保存为 null', async () => {
+  it('评议项目描述在表上直接编辑，清空后保存为 null', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    const input = await screen.findByLabelText('项点描述：政治素质');
+    const input = await screen.findByLabelText('评议项目描述：政治素质');
     expect(input).toHaveValue('信念坚定、对党忠诚。');
 
     await user.clear(input);
@@ -508,43 +563,47 @@ describe('问卷配置页（附件8 Excel 版式）', () => {
 
   it('已被其他职务选中的人员从本列下拉中排除，且下拉支持输入搜索', async () => {
     const user = userEvent.setup({ delay: null });
-    // 党支部书记列已绑定李四
+    // 党支部书记列已绑定李四（人员管理条目 s2）
     mocks.columnList.mockImplementationOnce(async () =>
       voteColumns().map((column) =>
-        column.id === 'v2' ? { ...column, employeeId: 'e2', employeeName: '李四' } : column,
+        column.id === 'v2'
+          ? { ...column, staffDirectoryId: 's2', employeeName: '李四' }
+          : column,
       ),
     );
     renderQuestionnaire();
 
-    const combo = await screen.findByRole('combobox', { name: '主任被评人' });
+    const combo = await screen.findByRole('combobox', { name: '主任被评议人' });
     await user.click(combo);
     const listbox = await screen.findByRole('listbox');
 
-    // 李四已被党支部书记列占用：主任列的下拉里只剩张三（option 的可访问名是姓名）
-    expect(within(listbox).getByRole('option', { name: '张三' })).toBeInTheDocument();
-    expect(within(listbox).queryByRole('option', { name: '李四' })).toBeNull();
+    // 李四已被党支部书记列占用：主任列的下拉里只剩张三与王五
+    expect(within(listbox).getByRole('option', { name: /张三/ })).toBeInTheDocument();
+    expect(within(listbox).queryByRole('option', { name: /李四/ })).toBeNull();
 
-    // 输入搜索：输入「张」过滤后仍能定位到张三
+    // 输入搜索：搜索走人员管理接口（服务端过滤），输入「张」后只剩张三
     await user.type(combo, '张');
-    expect(within(listbox).getByRole('option', { name: '张三' })).toBeInTheDocument();
-    expect(within(listbox).queryByRole('option', { name: '王五' })).toBeNull();
+    await waitFor(() =>
+      expect(within(listbox).queryByRole('option', { name: /王五/ })).toBeNull(),
+    );
+    expect(within(listbox).getByRole('option', { name: /张三/ })).toBeInTheDocument();
   }, TIMEOUT_MS);
 
   it('只读账号：表上无编辑入口，内容仍完整展示', async () => {
     renderQuestionnaire([]);
 
     expect(await screen.findByLabelText('附件号')).toBeDisabled();
-    expect(screen.getByLabelText('被评列：主任')).toBeDisabled();
-    expect(screen.getByLabelText('项点名称：政治素质')).toBeDisabled();
-    expect(screen.getByLabelText('项点描述：政治素质')).toBeDisabled();
-    expect(screen.getByRole('combobox', { name: '主任被评人' })).toBeDisabled();
+    expect(screen.getByLabelText('被评议人列：主任')).toBeDisabled();
+    expect(screen.getByLabelText('评议项目名称：政治素质')).toBeDisabled();
+    expect(screen.getByLabelText('评议项目描述：政治素质')).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: '主任被评议人' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: '编辑标题' })).toBeNull();
     expect(screen.queryByRole('button', { name: '编辑填写说明' })).toBeNull();
     expect(screen.queryByRole('button', { name: '删除「主任」' })).toBeNull();
-    // 新增入口（表尾空列头 / 项点操作组）只对可写账号出现
-    expect(screen.queryByLabelText('新增被评列')).toBeNull();
-    expect(screen.queryByLabelText('新增项点名称')).toBeNull();
-    expect(screen.queryByRole('button', { name: '新增项点' })).toBeNull();
+    // 新增入口（表尾空列头 / 评议项目操作组）只对可写账号出现
+    expect(screen.queryByLabelText('新增被评议人列')).toBeNull();
+    expect(screen.queryByLabelText('新增评议项目名称')).toBeNull();
+    expect(screen.queryByRole('button', { name: '新增评议项目' })).toBeNull();
     expect(screen.getByText('办公室')).toBeInTheDocument();
   }, TIMEOUT_MS);
 });

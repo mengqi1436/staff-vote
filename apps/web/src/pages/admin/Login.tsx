@@ -3,6 +3,7 @@ import { Alert, Button, Card, Form, Input, Typography } from 'antd';
 import { useNavigate } from 'react-router';
 import { adminApi } from '../../lib/api.js';
 import { describeLoginError } from './lib.js';
+import { HelpLabel } from './shared.js';
 
 interface LoginForm {
   username: string;
@@ -13,7 +14,7 @@ interface LoginForm {
  * 管理员登录页：居中卡片，视觉全部由全局 token（Apple 风契约 v1）决定，
  * 无本地硬编码色值。
  *
- * 会话走 httpOnly Cookie（由 /api/admin/login 下发），前端不保存任何令牌。
+ * 登录状态走 httpOnly Cookie（由 /api/admin/login 下发），前端不保存任何令牌。
  * 失败提示区分 401（用户名或口令错误）与 429（尝试过于频繁），其余情况回显
  * 后端消息，不额外暴露内部信息；提示以 role="alert" 就地展示在字段下方，
  * 不靠浮层 toast —— 浮层消失后管理员会不知道刚才发生了什么。
@@ -49,11 +50,10 @@ export function AdminLogin() {
       <Card style={{ width: '100%', maxWidth: 420 }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <Typography.Title level={3} style={{ marginBottom: 4 }}>
-            职工素质评议系统 · 后台管理
+            <HelpLabel help="登录后可以配置打分表、发放随机码、导出和打印结果。登录状态会在浏览器里保留 2 小时，超时后需要重新登录；登录尝试每分钟最多 10 次，超过后稍等再试。">
+              职工素质评议系统 · 后台管理
+            </HelpLabel>
           </Typography.Title>
-          <Typography.Text type="secondary">
-            管理员登录后可配置打分表、发放随机码、导出与打印结果。
-          </Typography.Text>
         </div>
 
         <Form<LoginForm>
@@ -87,11 +87,6 @@ export function AdminLogin() {
             </Button>
           </Form.Item>
         </Form>
-
-        <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0, fontSize: 12 }}>
-          登录会话保存在浏览器 Cookie 中，有效期 2 小时，超时后需要重新登录；
-          登录尝试每分钟最多 10 次，超出后会被临时限流，稍后重试即可。
-        </Typography.Paragraph>
       </Card>
     </div>
   );

@@ -144,6 +144,46 @@ export function buildTicketsWorkbook(rows: TicketExportRow[]): Workbook {
   return workbook;
 }
 
+/** 发码结果的一列：一种票别 + 该票别本次生成的随机码。 */
+export interface TicketByTypeColumn {
+  /** 表头，例如「领导班子（A）」 */
+  header: string;
+  codes: string[];
+}
+
+/**
+ * 生成本次发码的 Excel：**一列一个票别**，列下是该票别的随机码。
+ *
+ * 与「随机码清单」（行式，带票种/批次列）刻意不同：发码现场是把码打印出来
+ * 按票别发放，按票别分列后剪开即可分别发放，不必再逐行筛票种。
+ *
+ * @param columns 票别列（顺序即输出列顺序）
+ * @returns 只含单个 sheet 的工作簿
+ */
+export function buildTicketsByTypeWorkbook(columns: TicketByTypeColumn[]): Workbook {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = '职工素质投票系统';
+  const sheet = workbook.addWorksheet('随机码');
+  // 没有可导出的票别时留一张空表（不发码就点下载属于异常路径，不给错位的空行）
+  if (columns.length === 0) return workbook;
+
+  const header = sheet.addRow(columns.map((column) => column.header));
+  header.font = { bold: true };
+  header.alignment = { vertical: 'middle', horizontal: 'center' };
+
+  // 各票别数量通常相等；不等时短列留空，保证每列的码都从第 2 行开始对齐
+  const rowCount = Math.max(0, ...columns.map((column) => column.codes.length));
+  for (let index = 0; index < rowCount; index += 1) {
+    sheet.addRow(columns.map((column) => column.codes[index] ?? ''));
+  }
+
+  sheet.columns.forEach((column, index) => {
+    // 码是 8 位定长，列宽按表头长度给足，打印后逐行核对不换行
+    column.width = Math.max(14, (columns[index]?.header.length ?? 0) + 6);
+  });
+  return workbook;
+}
+
 /** 结果报表的数据（result 服务已用 computeResults 算好）。 */
 export interface ResultsExportInput {
   departmentName: string;
@@ -435,6 +475,18 @@ export function buildSessionWorkbook(
 export async function workbookToBuffer(workbook: Workbook): Promise<Buffer> {
   const data = await workbook.xlsx.writeBuffer();
   return Buffer.from(data);
+}
+
+/**
+ * 文件名里不能出现的字符（按 Windows 最严格的一套）：
+ * 场次名由管理员自由填写，直接拼进 `Content-Disposition` 会让下载名带上非法字符。
+ */
+export function safeFileLabel(value: string, fallback = '随机码'): string {
+  const cleaned = value
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
+    .trim()
+    .slice(0, 60);
+  return cleaned || fallback;
 }
 
 /**

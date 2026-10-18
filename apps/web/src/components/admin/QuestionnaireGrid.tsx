@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Alert, Button, Input, Popconfirm, Segmented, Select, Tooltip } from 'antd';
+import { Alert, Button, Empty, Input, Popconfirm, Segmented, Select, Tooltip } from 'antd';
 import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   ApiError,
   adminApi,
   type CriterionDto,
   type DepartmentAdminDto,
-  type EmployeeDto,
+  type StaffEntryDto,
   type VoteColumnDto,
 } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
@@ -16,16 +16,16 @@ import { describeError } from '../../pages/admin/lib.js';
 import { useNotify } from '../../pages/admin/shared.js';
 
 /**
- * 问卷网格（附件8.问卷调查表.xlsx 的所见即所得版式）——工作台「问卷」页签与
- * 新建场次向导第 2 步的共享组件。
+ * 打分表网格（附件8.打分表调查表.xlsx 的所见即所得版式）——工作台「打分表」页签与
+ * 新建评议向导第 2 步的共享组件。
  *
- * 组件完全自治：按传入的场次拉取场内部门/被评列/项点/职工名单，配置直接在表上
- * 编辑、失焦自动保存。相比旧「问卷配置」页多承接了两件事（原「部门」「项点」
+ * 组件完全自治：按传入的评议拉取场内部门/被评议人列/评议项目/职工名单，配置直接在表上
+ * 编辑、失焦自动保存。相比旧「打分表配置」页多承接了两件事（原「部门」「评议项目」
  * 页签并入本网格）：
- *   - 项点（表的行）：行内新增（表尾草稿行）/删除/上移/下移，走 criteria API；
- *   - 被评列（表的列）：表尾空列头内联输入创建，不再跳页或弹窗。
+ *   - 评议项目（表的行）：行内新增（表尾草稿行）/删除/上移/下移，走 criteria API；
+ *   - 被评议人列（表的列）：表尾空列头内联输入创建，不再跳页或弹窗。
  *
- * 版式与 docs/附件文件包/附件8.问卷调查表.xlsx 同构，细节见 global.css 的
+ * 版式与 docs/附件文件包/附件8.打分表调查表.xlsx 同构，细节见 global.css 的
  * .sheet-excel 段（版式基准不可动，本组件不携带任何版式覆盖，只用既有 class）。
  * 前端权限只是体验层门控，真正的防线在后端。
  */
@@ -64,7 +64,7 @@ function InlineInput({
   ariaLabel: string;
   className?: string;
   placeholder?: string;
-  /** 多行文本（项点描述），回车换行、失焦提交。 */
+  /** 多行文本（评议项目描述），回车换行、失焦提交。 */
   multiline?: boolean;
   /** 表尾草稿行需要自动聚焦，直接开写。 */
   autoFocus?: boolean;
@@ -111,7 +111,7 @@ function InlineInput({
   );
 }
 
-/** 项点行内的小操作按钮：悬停该行才出现（复用 .sheet-edit-btn 的淡入），不破坏版面。 */
+/** 评议项目行内的小操作按钮：悬停该行才出现（复用 .sheet-edit-btn 的淡入），不破坏版面。 */
 function SheetAction({
   title,
   ariaLabel,
@@ -149,7 +149,7 @@ export function QuestionnaireGrid({
   onDepartmentChange,
 }: {
   sessionId: string | null;
-  /** 受控当前部门（工作台问卷页用 URL 同步传入）；不传时组件自选第一个部门。 */
+  /** 受控当前部门（工作台打分表页用 URL 同步传入）；不传时组件自选第一个部门。 */
   departmentId?: string;
   onDepartmentChange?: (id: string) => void;
 }) {
@@ -180,7 +180,7 @@ export function QuestionnaireGrid({
   const current: DepartmentAdminDto | null =
     departments.data?.find((item) => item.id === departmentId) ?? null;
   const isWorkshop = current?.questionnaireType === 'workshop';
-  /** 项点与表头三件套都是场次级模板：按当前部门的问卷类型取（0010 模板层）。 */
+  /** 评议项目与表头三件套都是评议级模板：按当前部门的打分表类型取（0010 模板层）。 */
   const templateType = current?.questionnaireType;
 
   // 部门配置可能已在别处（其他页面、接口调用）被修改，切换时刷新以回显最新值；
@@ -213,7 +213,7 @@ export function QuestionnaireGrid({
   );
   const criteria = usePolling(loadCriteria, 0);
 
-  /** 场次问卷模板表头（附件号/标题/填写说明）：按问卷类型各存一份 */
+  /** 评议打分表模板表头（附件号/标题/填写说明）：按打分表类型各存一份 */
   const loadTemplateHeader = useCallback(
     () =>
       templateType
@@ -224,7 +224,10 @@ export function QuestionnaireGrid({
   const templateHeader = usePolling(loadTemplateHeader, 0);
   const header = templateHeader.data;
 
-  /** 场次打分范围（scoreScope）：both 时同一张码要交负责人 + 车间两张表 */
+  /**
+   * 评议打分范围（scoreScope）：
+   * person = 只评负责人；workshop = 只评车间；both = 两张表齐交才使用。
+   */
   const loadSessionState = useCallback(
     () =>
       sessionId
@@ -237,21 +240,35 @@ export function QuestionnaireGrid({
   const sessionState = usePolling(loadSessionState, 0);
   const scoreScope = sessionState.data?.scoreScope ?? 'person';
 
-  // 职工名单：被评列第二行「职务与姓名」里选人用的候选池
-  const loadEmployees = useCallback(
-    () =>
-      departmentId
-        ? adminApi.employees.list(departmentId, sessionId)
-        : Promise.resolve<EmployeeDto[]>([]),
-    [departmentId, sessionId],
-  );
-  const employees = usePolling(loadEmployees, 0);
+  // 人员管理：被评议人列第二行「职务与姓名」里选人用的候选池。
+  // 全局搜索（姓名 / 工号 / 部门名）交给服务端：评议的部门名单再多也不把全量拉到前端。
+  const [staffOptions, setStaffOptions] = useState<StaffEntryDto[]>([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const staffSearchSeq = useRef(0);
+
+  const searchStaff = useCallback(async (keyword: string): Promise<void> => {
+    const seq = ++staffSearchSeq.current;
+    setStaffLoading(true);
+    try {
+      const rows = await adminApi.staffDirectory.list({ q: keyword.trim() || undefined, limit: 50 });
+      // 丢弃过期响应：快速输入时先发的请求可能后到，不能用旧结果覆盖新结果。
+      if (seq === staffSearchSeq.current) setStaffOptions(rows);
+    } catch {
+      if (seq === staffSearchSeq.current) setStaffOptions([]);
+    } finally {
+      if (seq === staffSearchSeq.current) setStaffLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void searchStaff('');
+  }, [searchStaff]);
 
   const notify = useNotify();
   const { can } = useAuth();
   const canWriteDepartment = can('departments.write');
   const canWriteColumn = can('criteria.write');
-  /** 打分范围是场次级配置，权限与场次编辑一致。 */
+  /** 打分范围是评议级配置，权限与评议编辑一致。 */
   const canWriteSession = can('settings.write');
 
   const [denied, setDenied] = useState<string | null>(null);
@@ -259,9 +276,9 @@ export function QuestionnaireGrid({
   const [titleDraft, setTitleDraft] = useState('');
   const [editingFooter, setEditingFooter] = useState(false);
   const [footerDraft, setFooterDraft] = useState('');
-  /** 表尾新增项点的草稿行开关。 */
+  /** 表尾新增评议项目的草稿行开关。 */
   const [criterionDraft, setCriterionDraft] = useState(false);
-  /** 新增被评列草稿的重置序号：仅创建成功后递增，重挂载输入框清空草稿。 */
+  /** 新增被评议人列草稿的重置序号：仅创建成功后递增，重挂载输入框清空草稿。 */
   const [columnDraftSeq, setColumnDraftSeq] = useState(0);
 
   const handleFailure = (caught: unknown, fallback = '操作失败，请重试'): void => {
@@ -273,8 +290,8 @@ export function QuestionnaireGrid({
   };
 
   /**
-   * 抬头配置：问卷类型归类走部门 PATCH（即时切换问卷版式）；
-   * 表头三件套（附件号/标题/填写说明）走场次模板——同一场次内
+   * 抬头配置：打分表类型归类走部门 PATCH（即时切换打分表版式）；
+   * 表头三件套（附件号/标题/填写说明）走评议模板——同一评议内
    * 同类型部门共享一份，改一处全体生效。
    */
   const saveHeader = async (patch: {
@@ -302,15 +319,18 @@ export function QuestionnaireGrid({
     }
   };
 
-  /** 打分范围（场次级，settings.write）：both 双表齐交才核销。 */
-  const saveScoreScope = async (scope: 'person' | 'both'): Promise<void> => {
+  /** 打分范围（评议级，settings.write）：负责人 / 车间 / 两张都要。 */
+  const saveScoreScope = async (scope: 'person' | 'workshop' | 'both'): Promise<void> => {
     if (!sessionId) return;
     try {
       await adminApi.sessions.update(sessionId, { scoreScope: scope });
       sessionState.refresh();
-      notify.success(
-        scope === 'both' ? '已开启双表打分：负责人 + 车间评价' : '已切回仅负责人评价',
-      );
+      const LABELS: Record<'person' | 'workshop' | 'both', string> = {
+        person: '已切换为仅负责人评价',
+        workshop: '已切换为仅车间评价',
+        both: '已开启双表打分：车间 + 负责人评价',
+      };
+      notify.success(LABELS[scope]);
     } catch (caught) {
       handleFailure(caught, '保存失败，请重试');
     }
@@ -352,19 +372,25 @@ export function QuestionnaireGrid({
     }
   };
 
-  /** 表头第二行选人：提交到被评列，null = 清除已选人员。 */
-  const saveColumnEmployee = async (row: VoteColumnDto, employeeId: string | null): Promise<void> => {
-    if (employeeId === row.employeeId) return;
+  /** 表头第二行选人：提交到被评议人列，null = 清除已选人员。 */
+  const saveColumnEmployee = async (
+    row: VoteColumnDto,
+    staffDirectoryId: string | null,
+  ): Promise<void> => {
+    if (staffDirectoryId === row.staffDirectoryId) return;
     try {
-      await adminApi.voteColumns.update(row.id, { employeeId });
-      notify.success(`「${row.name}」被评人已更新`);
+      await adminApi.voteColumns.update(
+        row.id,
+        staffDirectoryId ? { staffDirectoryId } : { employeeId: null },
+      );
+      notify.success(`「${row.name}」被评议人已更新`);
       columns.refresh();
     } catch (caught) {
       handleFailure(caught);
     }
   };
 
-  /** 项点行内联编辑：名称与描述直接 PATCH 项点，描述空串清除为 null。 */
+  /** 评议项目行内联编辑：名称与描述直接 PATCH 评议项目，描述空串清除为 null。 */
   const saveCriterion = async (
     row: CriterionDto,
     patch: { name?: string; description?: string | null },
@@ -387,7 +413,7 @@ export function QuestionnaireGrid({
     }
   };
 
-  /** 表尾空列头内联新增被评列：输入列名失焦即创建（排序取现有列数 + 1）。 */
+  /** 表尾空列头内联新增被评议人列：输入列名失焦即创建（排序取现有列数 + 1）。 */
   const commitNewColumn = async (name: string): Promise<void> => {
     const trimmed = name.trim();
     if (!trimmed || !departmentId) return;
@@ -396,7 +422,7 @@ export function QuestionnaireGrid({
         { departmentId, name: trimmed, sortOrder: (columns.data?.length ?? 0) + 1 },
         sessionId,
       );
-      notify.success(`被评列「${trimmed}」已创建`);
+      notify.success(`被评议人列「${trimmed}」已创建`);
       setColumnDraftSeq((value) => value + 1);
       columns.refresh();
     } catch (caught) {
@@ -404,7 +430,7 @@ export function QuestionnaireGrid({
     }
   };
 
-  /** 表尾草稿行新增项点：默认分值区间 0～100（与旧「评分项点」页新建默认一致）。 */
+  /** 表尾草稿行新增评议项目：默认分值区间 0～100（与旧「评议项目」页新建默认一致）。 */
   const commitDraftCriterion = async (name: string): Promise<void> => {
     setCriterionDraft(false);
     const trimmed = name.trim();
@@ -422,14 +448,14 @@ export function QuestionnaireGrid({
         },
         sessionId,
       );
-      notify.success(`项点「${trimmed}」已新增，可在表上继续补描述`);
+      notify.success(`评议项目「${trimmed}」已新增，可在表上继续补描述`);
       criteria.refresh();
     } catch (caught) {
       handleFailure(caught);
     }
   };
 
-  /** 删除项点：软删除（停用），历史评分保留，可到后端再启用。 */
+  /** 删除评议项目：软删除（停用），历史评分保留，可到后端再启用。 */
   const removeCriterion = async (row: CriterionDto): Promise<void> => {
     try {
       await adminApi.criteria.remove(row.id);
@@ -458,13 +484,13 @@ export function QuestionnaireGrid({
     }
   };
 
-  // 只显示启用的被评列：删除是软删（历史评分保留），表上不应再出现
+  // 只显示启用的被评议人列：删除是软删（历史评分保留），表上不应再出现
   const voteColumns = (columns.data ?? []).filter((column) => column.enabled);
   const enabledCriteria = (criteria.data ?? []).filter((item) => item.enabled);
-  // 表尾空列头（内联新增被评列）：只有可写时出现
+  // 表尾空列头（内联新增被评议人列）：只有可写时出现
   const canAddColumn = canWriteColumn && Boolean(current);
-  // 车间问卷固定三列（附件8 sheet2：序号 | 项点 | 得分，无被评人列）；
-  // 个人问卷列数 = 序号 + 项点 + 被评列 + 表尾新增列。
+  // 车间打分表固定三列（附件8 sheet2：序号 | 评议项目 | 得分，无被评议人列）；
+  // 个人打分表列数 = 序号 + 评议项目 + 被评议人列 + 表尾新增列。
   const columnCount = isWorkshop
     ? 3
     : 2 + voteColumns.length + (canAddColumn ? 1 : 0);
@@ -495,7 +521,7 @@ export function QuestionnaireGrid({
         />
       ) : null}
 
-      {/* 网格上方的两件常驻控件：问卷类型切换（即时保存）与手动刷新 */}
+      {/* 网格上方的两件常驻控件：打分表类型切换（即时保存）与手动刷新 */}
       <div
         style={{
           display: 'flex',
@@ -507,25 +533,26 @@ export function QuestionnaireGrid({
         }}
       >
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-          <Tooltip title="打分范围：both 时同一张码要交「负责人评价」与「车间评价」两张表，齐交才核销随机码">
+          <Tooltip title="打分范围：只评负责人、只评车间，或两者都评。选「车间 + 负责人评价」时，同一个随机码要交两张表，两张都交齐这个码才算用完">
             <Segmented
               aria-label="打分范围"
               value={scoreScope}
               disabled={!sessionId || !canWriteSession}
               options={[
-                { value: 'person', label: '仅负责人评价' },
-                { value: 'both', label: '负责人 + 车间评价' },
+                { value: 'person', label: '负责人评价' },
+                { value: 'workshop', label: '车间评价' },
+                { value: 'both', label: '车间 + 负责人评价' },
               ]}
-              onChange={(value) => void saveScoreScope(value === 'both' ? 'both' : 'person')}
+              onChange={(value) => void saveScoreScope(value as 'person' | 'workshop' | 'both')}
             />
           </Tooltip>
           <Segmented
-            aria-label="问卷类型"
+            aria-label="打分表类型"
             value={current?.questionnaireType ?? 'person'}
             disabled={!current || !canWriteDepartment}
             options={[
-              { value: 'person', label: '个人问卷' },
-              { value: 'workshop', label: '车间问卷' },
+              { value: 'person', label: '个人打分表' },
+              { value: 'workshop', label: '车间打分表' },
             ]}
             onChange={(value) => void saveHeader({ questionnaireType: String(value) })}
           />
@@ -536,7 +563,7 @@ export function QuestionnaireGrid({
             departments.loading ||
             columns.loading ||
             criteria.loading ||
-            employees.loading ||
+            staffLoading ||
             templateHeader.loading ||
             sessionState.loading
           }
@@ -544,7 +571,7 @@ export function QuestionnaireGrid({
             departments.refresh();
             columns.refresh();
             criteria.refresh();
-            employees.refresh();
+            void searchStaff('');
             templateHeader.refresh();
             sessionState.refresh();
           }}
@@ -554,13 +581,16 @@ export function QuestionnaireGrid({
       </div>
 
       {!current ? (
-        <Alert type="info" showIcon title="请先选择部门" description="每个部门各有一套问卷配置。" />
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="请先在表格上方选择部门；每个部门各有一套打分表配置。"
+        />
       ) : (
         <div className="sheet-wrap">
           {/*
-            版式与附件8.问卷调查表.xlsx 同构：
-              附件号行（黑体，无框）→ 标题行（宋体 16pt 粗体，无框）→ [空行，仅个人问卷]
-              → 表头（有框；个人问卷两行，序号与斜线格跨行）→ 项点行（有框，可直接编辑）
+            版式与附件8.打分表调查表.xlsx 同构：
+              附件号行（黑体，无框）→ 标题行（宋体 16pt 粗体，无框）→ [空行，仅个人打分表]
+              → 表头（有框；个人打分表两行，序号与斜线格跨行）→ 评议项目行（有框，可直接编辑）
               → 填写说明行（无框，关键词富文本）。
           */}
           <table className={`sheet-excel ${isWorkshop ? 'is-workshop' : 'is-person'}`}>
@@ -637,7 +667,7 @@ export function QuestionnaireGrid({
                         />
                       ) : null}
                       {canWriteDepartment ? (
-                        <Tooltip title="编辑标题（xx 为部门下拉占位）">
+                        <Tooltip title="编辑标题。标题里的 xx 会自动变成部门选择框">
                           <Button
                             type="text"
                             size="small"
@@ -653,20 +683,20 @@ export function QuestionnaireGrid({
                 </td>
               </tr>
 
-              {/* 原表个人问卷在标题与表头之间有一行空行（第 3 行），车间问卷没有 */}
+              {/* 原表个人打分表在标题与表头之间有一行空行（第 3 行），车间打分表没有 */}
               {isWorkshop ? null : (
                 <tr className="row-spacer" aria-hidden="true">
                   <td colSpan={columnCount} />
                 </tr>
               )}
 
-              {/* 表头：个人问卷两行（序号、斜线格跨行）；车间问卷单行（序号 | 项点 | 得分…） */}
+              {/* 表头：个人打分表两行（序号、斜线格跨行）；车间打分表单行（序号 | 评议项目 | 得分…） */}
               <tr className="row-head">
                 <th rowSpan={isWorkshop ? 1 : 2} className="cell-no">
                   序号
                 </th>
                 {isWorkshop ? (
-                  <th>项点</th>
+                  <th>评议项目</th>
                 ) : (
                   <th rowSpan={2} className="cell-diag">
                     {/*
@@ -678,18 +708,18 @@ export function QuestionnaireGrid({
                       <line x1="0" y1="0" x2="100%" y2="100%" stroke="#000" strokeWidth="1" />
                     </svg>
                     <span className="diag-name">职务与姓名</span>
-                    <span className="diag-criterion">评价项点</span>
+                    <span className="diag-criterion">评议项目</span>
                   </th>
                 )}
                 {isWorkshop ? (
-                  // 附件8 sheet2：车间问卷表头是「序号 | 项点 | 得分」，无被评人列
+                  // 附件8 sheet2：车间打分表表头是「序号 | 评议项目 | 得分」，无被评议人列
                   <th className="cell-col-head">得分</th>
                 ) : (
                   <>
                     {voteColumns.map((column) => (
                       <th key={column.id} className="cell-col-head">
                         <InlineInput
-                          ariaLabel={`被评列：${column.name}`}
+                          ariaLabel={`被评议人列：${column.name}`}
                           value={column.name}
                           disabled={!canWriteColumn}
                           className="col-name-input"
@@ -719,11 +749,11 @@ export function QuestionnaireGrid({
                     ))}
                     {canAddColumn ? (
                       <th className="cell-col-head">
-                        {/* 表尾空列头：输入列名失焦即创建（契约：新增被评列不再跳页/弹窗）。
+                        {/* 表尾空列头：输入列名失焦即创建（契约：新增被评议人列不再跳页/弹窗）。
                             key 绑定重置序号：创建成功后重挂载清空草稿，失败保留便于改错重试。 */}
                         <InlineInput
                           key={columnDraftSeq}
-                          ariaLabel="新增被评列"
+                          ariaLabel="新增被评议人列"
                           value=""
                           className="col-name-input"
                           placeholder="＋ 新增列"
@@ -736,8 +766,8 @@ export function QuestionnaireGrid({
               </tr>
               {isWorkshop
                 ? null
-                : // 原表第 5 行：列名下方的「姓名」格——电子版在这里为该职务选择具体被评人，
-                  // 打印空白表时留空；被评列为空时保留一格避免整行高度塌陷
+                : // 原表第 5 行：列名下方的「姓名」格——电子版在这里为该职务选择具体被评议人，
+                  // 打印空白表时留空；被评议人列为空时保留一格避免整行高度塌陷
                   (
                     <tr className="row-head row-head2">
                       {voteColumns.length === 0 ? (
@@ -748,31 +778,43 @@ export function QuestionnaireGrid({
                              （本列自己选中的保留，允许换人）。后端仍会校验，这里是体验层。 */
                           const takenByOthers = new Set(
                             voteColumns
-                              .filter((other) => other.id !== column.id && other.employeeId)
-                              .map((other) => other.employeeId as string),
+                              .filter((other) => other.id !== column.id && other.staffDirectoryId)
+                              .map((other) => other.staffDirectoryId as string),
                           );
+                          /* 已选的人可能不在当前搜索结果里（搜索词变了），补一条保证回显姓名 */
+                          const selectedOption =
+                            column.staffDirectoryId &&
+                            column.employeeName &&
+                            !staffOptions.some((entry) => entry.id === column.staffDirectoryId)
+                              ? [{ value: column.staffDirectoryId, label: column.employeeName }]
+                              : [];
                           return (
                             <td key={column.id}>
                               <Select
                                 className="col-employee-select"
-                                aria-label={`${column.name}被评人`}
+                                aria-label={`${column.name}被评议人`}
                                 variant="borderless"
                                 showSearch
-                                optionFilterProp="label"
+                                filterOption={false}
+                                onSearch={(keyword) => void searchStaff(keyword)}
                                 allowClear
-                                placeholder="选择人员"
-                                value={column.employeeId ?? undefined}
+                                placeholder="搜索姓名或部门"
+                                value={column.staffDirectoryId ?? undefined}
                                 onChange={(value) => void saveColumnEmployee(column, value ?? null)}
-                                options={(employees.data ?? [])
-                                  .filter(
-                                    (employee) =>
-                                      employee.enabled && !takenByOthers.has(employee.id),
-                                  )
-                                  .map((employee) => ({
-                                    value: employee.id,
-                                    label: employee.name,
-                                  }))}
-                                loading={employees.loading}
+                                options={[
+                                  ...selectedOption,
+                                  ...staffOptions
+                                    .filter(
+                                      (entry) => entry.enabled && !takenByOthers.has(entry.id),
+                                    )
+                                    .map((entry) => ({
+                                      value: entry.id,
+                                      label: entry.orgDepartmentName
+                                        ? `${entry.orgDepartmentName} / ${entry.name}`
+                                        : entry.name,
+                                    })),
+                                ]}
+                                loading={staffLoading}
                                 disabled={!canWriteColumn}
                               />
                             </td>
@@ -783,7 +825,7 @@ export function QuestionnaireGrid({
                     </tr>
                   )}
 
-              {/* 项点行：名称与描述在表上直接编辑（失焦自动保存）；
+              {/* 评议项目行：名称与描述在表上直接编辑（失焦自动保存）；
                   行内右上角悬停操作：上移 / 下移 / 删除，新增在表尾草稿行 */}
               {enabledCriteria.map((criterion, index) => (
                 <tr key={criterion.id} className="row-criterion">
@@ -791,11 +833,11 @@ export function QuestionnaireGrid({
                   <th className="cell-criterion" style={{ position: 'relative' }}>
                     <div className="criterion-name">
                       <InlineInput
-                        ariaLabel={`项点名称：${criterion.name}`}
+                        ariaLabel={`评议项目名称：${criterion.name}`}
                         value={criterion.name}
                         disabled={!canWriteColumn}
                         className="criterion-name-input"
-                        placeholder="点击填写项点名称"
+                        placeholder="点击填写评议项目名称"
                         onCommit={(next) => {
                           const name = next.trim();
                           if (name !== '') void saveCriterion(criterion, { name });
@@ -805,7 +847,7 @@ export function QuestionnaireGrid({
                     </div>
                     <InlineInput
                       multiline
-                      ariaLabel={`项点描述：${criterion.name}`}
+                      ariaLabel={`评议项目描述：${criterion.name}`}
                       value={criterion.description ?? ''}
                       disabled={!canWriteColumn}
                       className="criterion-desc-input"
@@ -836,7 +878,7 @@ export function QuestionnaireGrid({
                         />
                         <SheetAction
                           title="在此行下方新增"
-                          ariaLabel={`在「${criterion.name}」下方新增项点`}
+                          ariaLabel={`在「${criterion.name}」下方新增评议项目`}
                           icon={<PlusOutlined />}
                           onClick={() => setCriterionDraft(true)}
                         />
@@ -863,7 +905,7 @@ export function QuestionnaireGrid({
                     ) : null}
                   </th>
                   {isWorkshop ? (
-                    // 附件8 sheet2：车间问卷每行只剩「得分」空格，无被评人列
+                    // 附件8 sheet2：车间打分表每行只剩「得分」空格，无被评议人列
                     <td aria-hidden="true" />
                   ) : (
                     <>
@@ -884,17 +926,17 @@ export function QuestionnaireGrid({
                     <div className="criterion-name">
                       <InlineInput
                         autoFocus
-                        ariaLabel="新增项点名称"
+                        ariaLabel="新增评议项目名称"
                         value=""
                         className="criterion-name-input"
-                        placeholder="输入名称，失焦新增；留空取消"
+                        placeholder="输入名称后点别处即新增；留空则取消"
                         onCommit={(next) => void commitDraftCriterion(next)}
                       />
                       <span aria-hidden="true">：</span>
                     </div>
                   </th>
                   {isWorkshop ? (
-                    // 附件8 sheet2：车间问卷每行只剩「得分」空格，无被评人列
+                    // 附件8 sheet2：车间打分表每行只剩「得分」空格，无被评议人列
                     <td aria-hidden="true" />
                   ) : (
                     <>
@@ -916,13 +958,13 @@ export function QuestionnaireGrid({
                         type="text"
                         size="small"
                         icon={<PlusOutlined />}
-                        aria-label="新增项点"
+                        aria-label="新增评议项目"
                         onClick={() => setCriterionDraft(true)}
                       >
-                        新增项点
+                        新增评议项目
                       </Button>
                     ) : (
-                      <span className="sheet-placeholder">尚未配置项点，请先新增打分表的行。</span>
+                      <span className="sheet-placeholder">尚未配置评议项目，请先新增打分表的行。</span>
                     )}
                   </th>
                 </tr>

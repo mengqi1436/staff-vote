@@ -16,7 +16,7 @@ const testDatabaseUrl = process.env.TEST_DATABASE_URL ?? '';
 const suiteEnabled = Boolean(testDatabaseUrl);
 
 if (!suiteEnabled) {
-  console.warn('[sessions.test] 未设置 TEST_DATABASE_URL，跳过场次管理接口测试。');
+  console.warn('[sessions.test] 未设置 TEST_DATABASE_URL，跳过评议管理接口测试。');
 }
 
 // 必须在导入 src 之前改写：src/env.ts 在模块求值时读 process.env。
@@ -35,12 +35,12 @@ const describeDb = suiteEnabled ? describe : describe.skip;
 const TAG = 'SS';
 const ADMIN_USERNAME = `${TAG}admin`;
 const PASSWORD = 'Test-Passw0rd!2026';
-/** 不存在的场次 ID（PATCH 404 用例）。 */
+/** 不存在的评议 ID（PATCH 404 用例）。 */
 const MISSING_SESSION_ID = '00000000-0000-7000-8000-000000000000';
 
 const app = createApp();
 let agent: ReturnType<typeof request.agent>;
-/** 本文件建立的场次 id，afterAll 统一清理。 */
+/** 本文件建立的评议 id，afterAll 统一清理。 */
 const sessionIds: string[] = [];
 /** 本文件建立的全局字典部门 id（向导契约 B 的前置），afterAll 统一清理。 */
 const orgDepartmentIds: string[] = [];
@@ -69,11 +69,11 @@ async function newSession(name: string): Promise<string> {
  */
 async function makeStartable(sessionId: string, code: string): Promise<void> {
   const department = await prisma.department.findFirstOrThrow({ where: { sessionId } });
-  // 0010 起项点在模板层：departmentId 为空 + templateType 标明个人/车间模板；
+  // 0010 起评议项目在模板层：departmentId 为空 + templateType 标明个人/车间模板；
   // sessionId 必须显式带（此时库里常有多个场次，不能依赖「唯一场次」自动解析）
   await agent
     .post('/api/admin/criteria')
-    .send({ sessionId, templateType: 'person', name: `${code}项点`, minScore: 0, maxScore: 100 });
+    .send({ sessionId, templateType: 'person', name: `${code}评议项目`, minScore: 0, maxScore: 100 });
   await agent.post('/api/admin/vote-columns').send({ departmentId: department.id, name: `${code}列` });
   const type = await newTicketType(sessionId, code);
   const generated = await agent
@@ -88,29 +88,23 @@ async function newDepartment(sessionId: string, name: string): Promise<string> {
   return res.body.id;
 }
 
-async function newEmployee(sessionId: string, departmentId: string, name: string): Promise<string> {
-  const res = await agent.post('/api/admin/employees').send({ sessionId, departmentId, name });
-  expect(res.status).toBe(200);
-  return res.body.id;
-}
-
-/** 给场次建一个 100% 权重的票种（走接口；场次内启用合计从 0 起算）。 */
+/** 给评议建一个 100% 权重的人员类别（走接口；评议内启用合计从 0 起算）。 */
 async function newTicketType(sessionId: string, code: string): Promise<string> {
   const res = await agent
     .post('/api/admin/ticket-types')
-    .send({ sessionId, code, name: `${TAG}票种-${code}`, weightPercent: 100 });
+    .send({ sessionId, code, name: `${TAG}人员类别-${code}`, weightPercent: 100 });
   expect(res.status).toBe(200);
   return res.body.id;
 }
 
-describeDb('场次管理', () => {
+describeDb('评议管理', () => {
   beforeAll(async () => {
     await prisma.adminUser.deleteMany({ where: { username: { startsWith: TAG } } });
     await prisma.adminRole.deleteMany({ where: { code: { startsWith: TAG } } });
     // 本文件不写业务夹具（除发码用例的票），发码用例自己清；这里只保证默认场次在。
     await ensureDefaultSession(prisma);
 
-    const roleId = await createRole(`${TAG}role`, '测试-场次管理员', ALL_PERMISSION_CODES);
+    const roleId = await createRole(`${TAG}role`, '测试-评议管理员', ALL_PERMISSION_CODES);
     await prisma.adminUser.create({
       data: {
         username: ADMIN_USERNAME,
@@ -158,19 +152,19 @@ describeDb('场次管理', () => {
     await prisma.$disconnect();
   });
 
-  it('创建场次：默认 draft，列表可见，重名 409', async () => {
-    const created = await newSession(`${TAG}场次-A`);
+  it('创建评议：默认 draft，列表可见，重名 409', async () => {
+    const created = await newSession(`${TAG}评议-A`);
     expect(created).toBeTruthy();
 
     const list = await agent.get('/api/admin/sessions');
     const row = list.body.sessions.find((s: { id: string }) => s.id === created);
     expect(row.status).toBe('draft');
-    expect(row.name).toBe(`${TAG}场次-A`);
+    expect(row.name).toBe(`${TAG}评议-A`);
     expect(row.startAt).toBeNull();
     expect(row.endedAt).toBeNull();
 
     const duplicate = await agent.post('/api/admin/sessions').send({
-      name: `${TAG}场次-A`,
+      name: `${TAG}评议-A`,
       // 带全合法字段才能穿过形状校验，命中服务层的重名 409
       orgDepartmentId: orgDepartmentIds[orgDepartmentIds.length - 1],
       opensAt: '2026-01-01T00:00:00+08:00',
@@ -179,10 +173,10 @@ describeDb('场次管理', () => {
     expect(duplicate.body.error.code).toBe('SESSION_EXISTS');
   });
 
-  it('draft 场次列表携带开始投票阻塞清单；配置齐全后清空', async () => {
-    const created = await newSession(`${TAG}场次-阻塞`);
+  it('draft 评议列表携带开始投票阻塞清单；配置齐全后清空', async () => {
+    const created = await newSession(`${TAG}评议-阻塞`);
 
-    // 刚建的场次只有部门（向导自动落一条），缺项点/被评列/票种/未用码
+    // 刚建的评议只有部门（向导自动落一条），缺评议项目/被评列/人员类别/未用码
     const list = await agent.get('/api/admin/sessions');
     const row = list.body.sessions.find((s: { id: string }) => s.id === created);
     expect(Array.isArray(row.startBlockers)).toBe(true);
@@ -196,7 +190,7 @@ describeDb('场次管理', () => {
   });
 
   it('状态机：draft→voting→paused→voting→ended，ended 终态不可逆', async () => {
-    const id = await newSession(`${TAG}场次-状态机`);
+    const id = await newSession(`${TAG}评议-状态机`);
     await makeStartable(id, `${TAG}S1`);
 
     // draft → end 非法
@@ -229,7 +223,7 @@ describeDb('场次管理', () => {
   });
 
   it('状态机：paused → start 恢复 voting，且不覆盖首次 startAt', async () => {
-    const id = await newSession(`${TAG}场次-恢复`);
+    const id = await newSession(`${TAG}评议-恢复`);
     await makeStartable(id, `${TAG}S2`);
     const started = await agent.post(`/api/admin/sessions/${id}/start`);
     const firstStartAt = started.body.session.startAt as string;
@@ -241,19 +235,19 @@ describeDb('场次管理', () => {
     expect(resumed.body.session.startAt).toBe(firstStartAt);
   });
 
-  it('PATCH 更新名称与开放时间窗：缺省不改、null 清空、重名 409', async () => {
-    const id = await newSession(`${TAG}场次-编辑`);
+  it('PATCH 更新名称与开放时间：缺省不改、null 清空、重名 409', async () => {
+    const id = await newSession(`${TAG}评议-编辑`);
     const opensAt = '2026-09-01T08:00:00+08:00';
     const closesAt = '2026-09-30T18:00:00+08:00';
 
     // 合法更新：名称 + 时间窗一起改。时间按时刻比较：TIMESTAMPTZ 回读是 UTC ISO 串。
     const opensAtMs = Date.parse(opensAt);
     const closesAtMs = Date.parse(closesAt);
-    const updated = await agent.patch(`/api/admin/sessions/${id}`).send({ name: `${TAG}场次-编辑后`, opensAt, closesAt });
+    const updated = await agent.patch(`/api/admin/sessions/${id}`).send({ name: `${TAG}评议-编辑后`, opensAt, closesAt });
     expect(updated.status).toBe(200);
     expect(updated.body.session).toMatchObject({
       id,
-      name: `${TAG}场次-编辑后`,
+      name: `${TAG}评议-编辑后`,
     });
     expect(Date.parse(updated.body.session.opensAt)).toBe(opensAtMs);
     expect(Date.parse(updated.body.session.closesAt)).toBe(closesAtMs);
@@ -270,21 +264,21 @@ describeDb('场次管理', () => {
     expect(Date.parse(cleared.body.session.opensAt)).toBe(opensAtMs);
 
     // 重名 → 409 SESSION_EXISTS（排除自身：改回原名不冲突）
-    const other = await newSession(`${TAG}场次-重名他场`);
+    const other = await newSession(`${TAG}评议-重名他场`);
     const dup = await agent
       .patch(`/api/admin/sessions/${id}`)
-      .send({ name: `${TAG}场次-重名他场` });
+      .send({ name: `${TAG}评议-重名他场` });
     expect(dup.status).toBe(409);
     expect(dup.body.error.code).toBe('SESSION_EXISTS');
     const self = await agent
       .patch(`/api/admin/sessions/${id}`)
-      .send({ name: `${TAG}场次-编辑后` });
+      .send({ name: `${TAG}评议-编辑后` });
     expect(self.status).toBe(200);
     expect(other).toBeTruthy();
   });
 
   it('PATCH opensAt >= closesAt → 400 VOTE_WINDOW_INVALID', async () => {
-    const id = await newSession(`${TAG}场次-窗口校验`);
+    const id = await newSession(`${TAG}评议-窗口校验`);
     // 相等也拒绝：两侧同时设
     const equal = await agent.patch(`/api/admin/sessions/${id}`).send({
       opensAt: '2026-09-20T00:00:00+08:00',
@@ -313,13 +307,13 @@ describeDb('场次管理', () => {
     expect(oneSided.body.error.code).toBe('VOTE_WINDOW_INVALID');
   });
 
-  it('PATCH 场次不存在 → 404；ended 场次仍可改窗口', async () => {
+  it('PATCH 评议不存在 → 404；ended 评议仍可改窗口', async () => {
     const missing = await agent
       .patch(`/api/admin/sessions/${MISSING_SESSION_ID}`)
       .send({ name: 'x' });
     expect(missing.status).toBe(404);
 
-    const id = await newSession(`${TAG}场次-终态改窗`);
+    const id = await newSession(`${TAG}评议-终态改窗`);
     await makeStartable(id, `${TAG}S3`);
     await agent.post(`/api/admin/sessions/${id}/start`);
     await agent.post(`/api/admin/sessions/${id}/end`);
@@ -336,16 +330,16 @@ describeDb('场次管理', () => {
   });
 
   it('多场时未带 sessionId 的创建类请求 → 400 SESSION_REQUIRED', async () => {
-    await newSession(`${TAG}场次-B`);
+    await newSession(`${TAG}评议-B`);
     // 此时库里至少有两个非默认场次 + 默认场次（若存在）→ 肯定多场。
 
-    const dept = await agent.post('/api/admin/departments').send({ name: `${TAG}无场次部门` });
+    const dept = await agent.post('/api/admin/departments').send({ name: `${TAG}无评议部门` });
     expect(dept.status).toBe(400);
     expect(dept.body.error.code).toBe('SESSION_REQUIRED');
 
     const type = await agent
       .post('/api/admin/ticket-types')
-      .send({ code: `${TAG}NOSESS`, name: '无场次票种', weightPercent: 10 });
+      .send({ code: `${TAG}NOSESS`, name: '无评议人员类别', weightPercent: 10 });
     expect(type.status).toBe(400);
     expect(type.body.error.code).toBe('SESSION_REQUIRED');
 
@@ -358,8 +352,8 @@ describeDb('场次管理', () => {
   });
 
   it('多场时列表类接口未带 sessionId 同样 400 SESSION_REQUIRED；带了只返回该场', async () => {
-    const idA = await newSession(`${TAG}场次-列表A`);
-    const idB = await newSession(`${TAG}场次-列表B`);
+    const idA = await newSession(`${TAG}评议-列表A`);
+    const idB = await newSession(`${TAG}评议-列表B`);
     await newDepartment(idA, `${TAG}A场部门`);
     await newDepartment(idB, `${TAG}B场部门`);
 
@@ -376,9 +370,9 @@ describeDb('场次管理', () => {
     expect(names).not.toContain(`${TAG}A场部门`);
   });
 
-  it('发码票种不属于目标场次 → 400 SESSION_MISMATCH', async () => {
-    const id = await newSession(`${TAG}场次-票种校验`);
-    const otherSession = await newSession(`${TAG}场次-票种他场`);
+  it('发码人员类别不属于目标评议 → 400 SESSION_MISMATCH', async () => {
+    const id = await newSession(`${TAG}评议-人员类别校验`);
+    const otherSession = await newSession(`${TAG}评议-人员类别他场`);
     const ticketTypeId = await newTicketType(otherSession, `${TAG}T2`);
 
     const res = await agent.post('/api/admin/tickets/generate').send({
@@ -390,9 +384,9 @@ describeDb('场次管理', () => {
     expect(res.body.error.code).toBe('SESSION_MISMATCH');
   });
 
-  describe('删除场次', () => {
-    it('删除无答卷场次：204，场次及其配置数据一并消失', async () => {
-      const id = await newSession(`${TAG}场次-待删除`);
+  describe('删除评议', () => {
+    it('删除无答卷评议：204，评议及其配置数据一并消失', async () => {
+      const id = await newSession(`${TAG}评议-待删除`);
       await newDepartment(id, `${TAG}待删部门`);
       expect(await prisma.department.count({ where: { sessionId: id } })).toBeGreaterThan(0);
 
@@ -406,8 +400,8 @@ describeDb('场次管理', () => {
       expect(await prisma.voteSession.findUnique({ where: { id } })).toBeNull();
     });
 
-    it('已收答卷的场次不能删除 → 409 SESSION_HAS_SHEETS，数据原样保留', async () => {
-      const id = await newSession(`${TAG}场次-有答卷`);
+    it('已收答卷的评议不能删除 → 409 SESSION_HAS_SHEETS，数据原样保留', async () => {
+      const id = await newSession(`${TAG}评议-有答卷`);
       const department = await prisma.department.findFirstOrThrow({ where: { sessionId: id } });
       const typeId = await newTicketType(id, `${TAG}D1`);
       await prisma.scoreSheet.create({
@@ -423,8 +417,8 @@ describeDb('场次管理', () => {
       expect(await prisma.ticketType.count({ where: { sessionId: id } })).toBeGreaterThan(0);
     });
 
-    it('投票中的场次不能删除 → 409 SESSION_VOTING', async () => {
-      const id = await newSession(`${TAG}场次-投票中删`);
+    it('投票中的评议不能删除 → 409 SESSION_VOTING', async () => {
+      const id = await newSession(`${TAG}评议-投票中删`);
       await makeStartable(id, `${TAG}D2`);
       expect((await agent.post(`/api/admin/sessions/${id}/start`)).status).toBe(200);
 
@@ -433,7 +427,7 @@ describeDb('场次管理', () => {
       expect(res.body.error.code).toBe('SESSION_VOTING');
     });
 
-    it('场次不存在 → 404；无 settings.write 权限 → 403 且数据不动', async () => {
+    it('评议不存在 → 404；无 settings.write 权限 → 403 且数据不动', async () => {
       const missing = await agent.delete(`/api/admin/sessions/${MISSING_SESSION_ID}`);
       expect(missing.status).toBe(404);
 
@@ -446,7 +440,7 @@ describeDb('场次管理', () => {
         .send({ username: `${TAG}viewer`, password: PASSWORD })
         .expect(200);
 
-      const id = await newSession(`${TAG}场次-无权限删`);
+      const id = await newSession(`${TAG}评议-无权限删`);
       const denied = await viewer.delete(`/api/admin/sessions/${id}`);
       expect(denied.status).toBe(403);
       expect(await prisma.voteSession.findUnique({ where: { id } })).not.toBeNull();

@@ -14,7 +14,7 @@ import { signAdminToken } from '../../lib/token.js';
 import { ADMIN_COOKIE } from '../../middleware/adminAuth.js';
 import { ApiError } from '../../middleware/errorHandler.js';
 
-/** 会话时长，与 lib/token.ts 里签发的 2 小时保持一致。 */
+/** 登录状态时长，与 lib/token.ts 里签发的 2 小时保持一致。 */
 const SESSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 const LoginSchema = z.object({

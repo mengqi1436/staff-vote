@@ -125,7 +125,7 @@ describeDb('管理端写端点的权限门控', () => {
       data: {
         departmentId,
         sessionId,
-        name: `${TAG}项点-夹具`,
+        name: `${TAG}评议项目-夹具`,
         minScore: 0,
         maxScore: 100,
         sortOrder: 1,
@@ -137,7 +137,7 @@ describeDb('管理端写端点的权限门控', () => {
       data: {
         sessionId,
         code: `${TAG}TT-BASE`,
-        name: `${TAG}票种-夹具`,
+        name: `${TAG}人员类别-夹具`,
         weightPercent: 0,
         enabled: false,
       },
@@ -231,15 +231,15 @@ describeDb('管理端写端点的权限门控', () => {
     expect(editorImport.body.created).toBe(1);
   });
 
-  it('项点：只读账号写操作 403，有权限账号可写，GET 不受限', async () => {
-    const body = { templateType: 'person', name: `${TAG}项点-只读新建`, minScore: 0, maxScore: 100 };
+  it('评议项目：只读账号写操作 403，有权限账号可写，GET 不受限', async () => {
+    const body = { templateType: 'person', name: `${TAG}评议项目-只读新建`, minScore: 0, maxScore: 100 };
     expect((await viewer.post('/api/admin/criteria').send(body)).status).toBe(403);
     expect((await viewer.patch(`/api/admin/criteria/${criterionId}`).send({ maxScore: 90 })).status).toBe(
       403,
     );
     expect((await viewer.delete(`/api/admin/criteria/${criterionId}`)).status).toBe(403);
 
-    expect(await prisma.criterion.count({ where: { name: `${TAG}项点-只读新建` } })).toBe(0);
+    expect(await prisma.criterion.count({ where: { name: `${TAG}评议项目-只读新建` } })).toBe(0);
     expect((await prisma.criterion.findUnique({ where: { id: criterionId } }))?.maxScore).toBe(100);
 
     const list = await viewer.get(`/api/admin/criteria?departmentId=${departmentId}`).expect(200);
@@ -247,7 +247,7 @@ describeDb('管理端写端点的权限门控', () => {
 
     const ok = await editor
       .post('/api/admin/criteria')
-      .send({ templateType: 'person', name: `${TAG}项点-编辑新建`, minScore: 0, maxScore: 50 });
+      .send({ templateType: 'person', name: `${TAG}评议项目-编辑新建`, minScore: 0, maxScore: 50 });
     expect(ok.status).toBe(200);
     expect((await editor.patch(`/api/admin/criteria/${ok.body.id}`).send({ maxScore: 60 })).status).toBe(
       200,
@@ -255,21 +255,21 @@ describeDb('管理端写端点的权限门控', () => {
     expect((await editor.delete(`/api/admin/criteria/${ok.body.id}`)).status).toBe(204);
   });
 
-  it('票种：只读账号写操作 403，有权限账号可写，GET 不受限', async () => {
+  it('人员类别：只读账号写操作 403，有权限账号可写，GET 不受限', async () => {
     const code = `${TAG}TT-RO`;
     expect(
-      (await viewer.post('/api/admin/ticket-types').send({ code, name: `${TAG}票种-只读新建`, weightPercent: 0, enabled: false }))
+      (await viewer.post('/api/admin/ticket-types').send({ code, name: `${TAG}人员类别-只读新建`, weightPercent: 0, enabled: false }))
         .status,
     ).toBe(403);
     expect(
-      (await viewer.patch(`/api/admin/ticket-types/${ticketTypeId}`).send({ name: `${TAG}票种-只读改名` }))
+      (await viewer.patch(`/api/admin/ticket-types/${ticketTypeId}`).send({ name: `${TAG}人员类别-只读改名` }))
         .status,
     ).toBe(403);
     expect((await viewer.delete(`/api/admin/ticket-types/${ticketTypeId}`)).status).toBe(403);
 
     expect(await prisma.ticketType.count({ where: { code } })).toBe(0);
     expect((await prisma.ticketType.findUnique({ where: { id: ticketTypeId } }))?.name).toBe(
-      `${TAG}票种-夹具`,
+      `${TAG}人员类别-夹具`,
     );
 
     const list = await viewer.get('/api/admin/ticket-types').expect(200);
@@ -278,13 +278,13 @@ describeDb('管理端写端点的权限门控', () => {
     // 用停用票种（不参与权重合计校验）验证有权限账号可以正常写入
     const ok = await editor.post('/api/admin/ticket-types').send({
       code: `${TAG}TT-RW`,
-      name: `${TAG}票种-编辑新建`,
+      name: `${TAG}人员类别-编辑新建`,
       weightPercent: 0,
       enabled: false,
     });
     expect(ok.status).toBe(200);
     expect(
-      (await editor.patch(`/api/admin/ticket-types/${ok.body.id}`).send({ name: `${TAG}票种-编辑改名` }))
+      (await editor.patch(`/api/admin/ticket-types/${ok.body.id}`).send({ name: `${TAG}人员类别-编辑改名` }))
         .status,
     ).toBe(200);
     expect((await editor.delete(`/api/admin/ticket-types/${ok.body.id}`)).status).toBe(204);
@@ -333,12 +333,12 @@ describeDb('管理端写端点的权限门控', () => {
   it('403 文案取权限目录的中文名，可直接展示给用户', async () => {
     const res = await viewer
       .post('/api/admin/criteria')
-      .send({ templateType: 'person', name: `${TAG}项点-文案`, minScore: 0, maxScore: 10 });
+      .send({ templateType: 'person', name: `${TAG}评议项目-文案`, minScore: 0, maxScore: 10 });
 
     expect(res.status).toBe(403);
     expect(res.body.error).toMatchObject({
       code: 'PERMISSION_DENIED',
-      message: '当前账号没有「管理评分项点」权限，请联系超级管理员',
+      message: '当前账号没有「管理评议项目」权限，请联系超级管理员',
     });
   });
 });

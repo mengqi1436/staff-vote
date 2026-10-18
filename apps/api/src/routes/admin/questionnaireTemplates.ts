@@ -18,7 +18,7 @@ import {
 import { requirePermission } from '../../middleware/permission.js';
 import { operatorOf } from './helpers.js';
 
-/** 问卷表头文案可以清空（表标题留空时不渲染该行），因此不设 min(1)。 */
+/** 打分表表头文案可以清空（表标题留空时不渲染该行），因此不设 min(1)。 */
 const TemplateQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
   type: z.enum(['person', 'workshop']),

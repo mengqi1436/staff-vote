@@ -53,7 +53,7 @@ const UNUSED_CODE = 'ABCD2345';
 let unusedTotal = 3;
 
 /**
- * 渲染页面并注入权限集合与当前场次 s1（一键作废的范围必须限定在场次内）。
+ * 渲染页面并注入权限集合与当前评议 s1（一键作废的范围必须限定在评议内）。
  */
 function renderPage(permissions?: string[]) {
   return renderWithAuth(
@@ -85,24 +85,27 @@ beforeEach(() => {
   revokeBulkMock.mockResolvedValue({ revoked: 2 });
 
   listMock.mockImplementation(async (params = {}) => {
-    // 匿名边界后所有查询都带 status:'unused'：pageSize===1 的是未使用总数探测，
-    // 其余是明细分页 —— 明细固定返回一行未使用码用于行内作废断言。
+    // 未使用码总数就是列表的 total（前端不再单独探测）；
+    // pageSize===1 的调用来自「一键作废」确认框的实时数量查询，同一说明。
     if (params.status === 'unused' && params.pageSize === 1) {
       return { items: [], total: unusedTotal, page: 1, pageSize: 1 };
     }
     return {
-      items: [
-        {
-          id: 'k1',
-          code: UNUSED_CODE,
-          status: 'unused',
-          usedAt: null,
-          createdAt: '2026-09-19T02:00:00.000Z',
-          ticketType: { id: 'a', code: 'A', name: '领导班子' },
-          batchId: 'batch1',
-        },
-      ],
-      total: 1,
+      items:
+        unusedTotal > 0
+          ? [
+              {
+                id: 'k1',
+                code: UNUSED_CODE,
+                status: 'unused',
+                usedAt: null,
+                createdAt: '2026-09-19T02:00:00.000Z',
+                ticketType: { id: 'a', code: 'A', name: '领导班子' },
+                batchId: 'batch1',
+              },
+            ]
+          : [],
+      total: unusedTotal,
       page: 1,
       pageSize: params.pageSize ?? 20,
     };
@@ -150,7 +153,7 @@ describe('一键作废未使用码', () => {
     await userEvent.click(button);
 
     expect(
-      await screen.findByText(/将作废本场次当前筛选下\s*7\s*张未使用码/),
+      await screen.findByText(/将作废本评议当前筛选下\s*7\s*张未使用码/),
     ).toBeInTheDocument();
     expect(await screen.findByText(/已使用的码不受影响/)).toBeInTheDocument();
     expect(listMock).toHaveBeenCalledWith({
@@ -186,7 +189,7 @@ describe('一键作废未使用码', () => {
     await userEvent.click(confirm);
 
     expect(await screen.findByText('已作废 2 张')).toBeInTheDocument();
-    // 作废范围限定在当前场次（sessionId 必传），票种筛选未选时为 undefined
+    // 作废范围限定在当前评议（sessionId 必传），人员类别筛选未选时为 undefined
     expect(revokeBulkMock).toHaveBeenCalledWith('s1', undefined);
     // 作废后必须重新拉列表与未使用数量，界面不能停留在旧数据
     await waitFor(() => expect(listMock.mock.calls.length).toBeGreaterThan(listCallsBefore));

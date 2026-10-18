@@ -81,7 +81,7 @@ async function loginAs(username: string, password = PASSWORD): Promise<ReturnTyp
   return client;
 }
 
-/** 会话序号：给每个测试会话分配独立来源 IP（见 newSession）。 */
+/** 登录状态序号：给每个测试登录状态分配独立来源 IP（见 newSession）。 */
 let sessionSequence = 0;
 
 /**
@@ -102,7 +102,7 @@ function newSession(): ReturnType<typeof request.agent> {
     });
 }
 
-/** 全库「已启用且角色含 admins.manage」的账号 id。守卫不变式的观察口径。 */
+/** 全库「已启用且角色含 admins.manage」的账号 id。守卫不变式的观察说明。 */
 async function manageCapableAdminIds(): Promise<string[]> {
   const rows = await prisma.adminUser.findMany({
     where: {
@@ -302,7 +302,7 @@ describeDb('RBAC 账号与角色管理', () => {
     expect(await prisma.adminRole.count({ where: { code: `${TAG}unknown` } })).toBe(0);
   });
 
-  it('PATCH /roles/:id 改名称、描述与权限；角色代码不可改', async () => {
+  it('PATCH /roles/:id 改名称、描述与权限；角色标识不可改', async () => {
     const updated = await agent
       .patch(`/api/admin/roles/${fixtures.readonlyRoleId}`)
       .send({ name: '测试只读（改名）', description: '改了描述', permissions: [WRITE] });

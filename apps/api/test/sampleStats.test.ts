@@ -26,7 +26,7 @@ const describeDb = suiteEnabled ? describe : describe.skip;
 
 const TAG = 'TSS';
 
-/** 本文件建的场次 id，afterAll 兜底清理。 */
+/** 本文件建的评议 id，afterAll 兜底清理。 */
 const sessionIds: string[] = [];
 
 let seq = 0;
@@ -37,7 +37,7 @@ function nextSeq(): number {
 
 async function makeTicketType(sessionId: string, code: string, weight: number) {
   return prisma.ticketType.create({
-    data: { sessionId, code: `${TAG}${code}${nextSeq()}`, name: `${TAG}票种-${code}`, weightPercent: weight, enabled: true },
+    data: { sessionId, code: `${TAG}${code}${nextSeq()}`, name: `${TAG}人员类别-${code}`, weightPercent: weight, enabled: true },
   });
 }
 
@@ -76,7 +76,7 @@ async function makeDepartment(
   return { id: department.id, columns, criteria };
 }
 
-/** 造一张已提交打分表：scores 为 (被评列, 项点) → 分。 */
+/** 造一张已提交打分表：scores 为 (被评议人列, 评议项目) → 分。 */
 async function makeSheet(input: {
   sessionId: string;
   departmentId: string;
@@ -103,7 +103,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
 
   beforeAll(async () => {
     sessionId = (
-      await prisma.voteSession.create({ data: { name: `${TAG}场次${nextSeq()}`, status: 'ended' } })
+      await prisma.voteSession.create({ data: { name: `${TAG}评议${nextSeq()}`, status: 'ended' } })
     ).id;
     sessionIds.push(sessionId);
     // 权重 60/40，便于心算加权：raw = A均分×0.6 + B均分×0.4。
@@ -111,7 +111,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
     typeB = await makeTicketType(sessionId, 'B', 40);
 
     person = await makeDepartment(sessionId, 'P', 'person', ['甲', '乙'], ['第一项', '第二项']);
-    workshop = await makeDepartment(sessionId, 'W', 'workshop', ['车间列'], ['车间项点']);
+    workshop = await makeDepartment(sessionId, 'W', 'workshop', ['车间列'], ['车间评议项目']);
 
     // noUncheckedIndexedAccess 下解构元素仍视作可空，夹具保证两列两项必在，直接断言非空
     const jia = person.columns[0]!;
@@ -167,7 +167,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
   });
 
   afterAll(async () => {
-    // 只清理本前缀：评分项 → 打分表 → 被评列/项点 → 部门 → 票种 → 场次。
+    // 只清理本前缀：评分项 → 打分表 → 被评议人列/项点 → 部门 → 票种 → 场次。
     const departmentIds = (
       await prisma.department.findMany({ where: { sessionId: { in: sessionIds } }, select: { id: true } })
     ).map((row) => row.id);
@@ -181,7 +181,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
     await prisma.$disconnect();
   });
 
-  it('单票别行：均分、合计、综合得分与并列排名', async () => {
+  it('单人员类别行：均分、合计、综合得分与并列排名', async () => {
     const result = await computeSessionSampleStats(sessionId);
 
     expect(result.personal.criteriaNames).toEqual(['第一项', '第二项']);
@@ -207,7 +207,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
     expect(yiB!.rank).toBe(2);
   });
 
-  it('ABC汇总行：票种加权原始分与综合得分（60/40 权重心算核对）', async () => {
+  it('ABC汇总行：人员类别加权原始分与综合得分（60/40 权重心算核对）', async () => {
     const result = await computeSessionSampleStats(sessionId);
 
     const jiaSummary = result.personal.rows.find((row) => row.targetName === '甲' && row.ticketCode === 'ABC汇总');
@@ -225,10 +225,10 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
     expect(yiSummary!.rank).toBe(2);
   });
 
-  it('车间表：票别组内排名、零票种排除、项点列名', async () => {
+  it('车间表：人员类别组内排名、零人员类别排除、评议项目列名', async () => {
     const result = await computeSessionSampleStats(sessionId);
 
-    expect(result.workshop.criteriaNames).toEqual(['车间项点']);
+    expect(result.workshop.criteriaNames).toEqual(['车间评议项目']);
     // 只有 A 票一张表：A 行 + ABC汇总行，B 行不出现。
     expect(result.workshop.rows).toHaveLength(2);
     const rowA = result.workshop.rows.find((row) => row.ticketCode.startsWith('TSSA'))!;
@@ -239,7 +239,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
     expect(rowSummary.comprehensiveScore).toBe(90);
   });
 
-  it('输出顺序：票别在前（按票种顺序）、ABC汇总殿后', async () => {
+  it('输出顺序：人员类别在前（按人员类别顺序）、ABC汇总殿后', async () => {
     const result = await computeSessionSampleStats(sessionId);
     const jiaRows = result.personal.rows.filter((row) => row.targetName === '甲');
     const codes = jiaRows.map((row) => (row.ticketTypeId === null ? 'SUM' : 'T'));
@@ -254,7 +254,7 @@ describeDb('参考样表统计 computeSessionSampleStats', () => {
     expect(result.personal.rows.every((row) => !row.departmentName.includes('空部门'))).toBe(true);
   });
 
-  it('无票的被评列不产生行（无票 ≠ 0 分），行携带 voteColumnId', async () => {
+  it('无票的被评议人列不产生行（无票 ≠ 0 分），行携带 voteColumnId', async () => {
     // person 部门再加第三列「丙」：不打任何分，甲乙正常有票
     const extra = await prisma.voteColumn.create({
       data: { departmentId: person.id, sessionId, name: '丙', sortOrder: 9 },

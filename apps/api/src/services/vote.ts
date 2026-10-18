@@ -6,9 +6,14 @@ import {
   type VoteWindowSession,
 } from '../lib/settings.js';
 import { signVoteToken, type VoteTokenPayload } from '../lib/token.js';
+import { requiredSheetTypes } from '../lib/scope.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { findTemplate } from './questionnaireTemplateStore.js';
 import { z } from 'zod';
+
+// 评议要求的答卷类型（person / workshop / both 的单一真源在 lib/scope.ts）。
+// 重新导出给路由层用，调用方不必知道它住在哪个模块。
+export { requiredSheetTypes };
 
 /**
  * 投票入口的业务逻辑。
@@ -21,52 +26,52 @@ import { z } from 'zod';
  * 这是「无法从评分反推投票人」的物理保证：连字段都不存在，后续改动就无法"顺手"关联。
  */
 
-/** 投票人可见的票种信息。只到票种粒度，不含任何票据标识。 */
+/** 投票人可见的人员类别信息。只到人员类别粒度，不含任何票据标识。 */
 export interface TicketTypeView {
   id: string;
   code: string;
   name: string;
-  /** 计分权重百分比，投票页可据此提示"你的票种占 X%" */
+  /** 计分权重百分比，投票页可据此提示"你的人员类别占 X%" */
   weightPercent: number;
 }
 
 export interface DepartmentView {
   id: string;
   name: string;
-  /** person = 个人问卷（绑定部门表），workshop = 车间问卷（both 场次第二张表） */
+  /** person = 个人打分表（绑定部门表），workshop = 车间打分表（both 评议第二张表） */
   questionnaireType: string;
 }
 
 export interface CriterionView {
   id: string;
   name: string;
-  /** 项点描述，显示在打分表项点名称下方（参考表里的长文字） */
+  /** 评议项目描述，显示在打分表评议项目名称下方（参考表里的长文字） */
   description: string | null;
   minScore: number;
   maxScore: number;
 }
 
-/** 被评列：打分表的「列」。个人问卷是各被评职务，车间问卷只有一列虚拟「得分」（id 为 null）。 */
+/** 被评议人列：打分表的「列」。个人打分表是各被评职务，车间打分表只有一列虚拟「得分」（id 为 null）。 */
 export interface VoteColumnView {
-  /** 车间问卷的虚拟得分列为 null；score_items.vote_column_id 同样落 NULL。 */
+  /** 车间打分表的虚拟得分列为 null；score_items.vote_column_id 同样落 NULL。 */
   id: string | null;
   name: string;
-  /** 该职务列对应的具体被评人姓名（表头第二行「职务与姓名」），未选人为 null。 */
+  /** 该职务列对应的具体被评议人姓名（表头第二行「职务与姓名」），未选人为 null。 */
   employeeName: string | null;
 }
 
 export interface VoteSessionResult {
   token: string;
   ticketType: TicketTypeView;
-  /** 票所属场次：前端展示与后续 /status?sessionId= 查询都用它 */
+  /** 票所属评议：前端展示与后续 /status?sessionId= 查询都用它 */
   session: { id: string; name: string; status: string; scoreScope: string };
   departments: DepartmentView[];
 }
 
-/** 打分表：表头文案 + 项点（行）+ 被评列（列）。 */
+/** 打分表：表头文案 + 评议项目（行）+ 被评议人列（列）。 */
 export interface VoteSheetResult {
   department: DepartmentView;
-  /** person = 个人问卷，workshop = 车间问卷 */
+  /** person = 个人打分表，workshop = 车间打分表 */
   questionnaireType: string;
   /** 左上角附件号，如「附件1-1」 */
   headerNote: string;
@@ -80,7 +85,7 @@ export interface VoteSheetResult {
 
 /** 一个待写入的打分单元格。 */
 export interface SubmitItem {
-  /** 车间问卷虚拟得分列为 null；个人问卷为真实被评列 id。 */
+  /** 车间打分表虚拟得分列为 null；个人打分表为真实被评议人列 id。 */
   voteColumnId: string | null;
   criterionId: string;
   score: number;
@@ -134,7 +139,7 @@ export async function resolveStatusSession(sessionId?: string): Promise<{
       where: { id: sessionId },
       select: { id: true, name: true, status: true, opensAt: true, closesAt: true },
     });
-    if (!found) throw ApiError.badRequest('场次不存在', 'SESSION_NOT_FOUND');
+    if (!found) throw ApiError.badRequest('评议不存在', 'SESSION_NOT_FOUND');
     return found;
   }
   const rows = await prisma.voteSession.findMany({
@@ -174,20 +179,25 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
   const status = evaluateVoteWindow(ticket.session);
   if (!status.open) throw ApiError.forbidden(VOTE_CLOSED_MESSAGE, 'VOTE_CLOSED');
 
-  // 部门绑定：绑定码只返回被绑定的部门（停用则自然查不出 → 空数组，Gate 有零部门兜底）；
+  // 部门绑定：绑定码默认只返回被绑定的部门（停用则自然查不出 → 空数组，Gate 有零部门兜底）；
   // NULL = 不限定，保持「万能码」语义返回全部启用部门（存量码兼容）。
-  // both（两表）场次的例外与 submitVote 对齐：车间评价问卷是每人必交的第二张表，
-  // 被评车间由投票人自选，绑定码的列表也要包含全部启用车间部门。
-  const bothScope = ticket.session.scoreScope === 'both';
+  //
+  // 需要车间表的评议（scoreScope = workshop / both）里，被评车间由投票人自选：
+  //   - workshop：只列车间部门（本场次只做车间评价）；
+  //   - both：绑定部门 + 全部车间部门（负责人表仍评绑定部门）。
+  // 与 getVoteSheet / submitVote 的跨部门规则保持一致。
+  const scope = ticket.session.scoreScope;
   const departments = await prisma.department.findMany({
     where: {
       enabled: true,
       sessionId: ticket.sessionId,
-      ...(ticket.departmentId
-        ? bothScope
-          ? { OR: [{ id: ticket.departmentId }, { questionnaireType: 'workshop' }] }
-          : { id: ticket.departmentId }
-        : {}),
+      ...(scope === 'workshop'
+        ? { questionnaireType: 'workshop' }
+        : ticket.departmentId
+          ? scope === 'both'
+            ? { OR: [{ id: ticket.departmentId }, { questionnaireType: 'workshop' }] }
+            : { id: ticket.departmentId }
+          : {}),
     },
     // sortOrder 相同时用 id 兜底，保证顺序稳定：管理端调整排序时表格不应跳动。
     orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
@@ -238,13 +248,19 @@ export async function getVoteSheet(ticketId: string, departmentId: string): Prom
   });
   if (!department) throw ApiError.notFound('部门不存在或已停用');
 
-  // 部门绑定强校验：绑定码只能取绑定部门的打分表。唯一例外与 submitVote 对齐：
-  // both（两表）场次的车间评价问卷是每人必交的第二张表，被评车间由投票人自选。
+  // 部门绑定强校验：绑定码只能取绑定部门的打分表。两个例外与 submitVote 对齐：
+  //   - both / workshop 场次的「车间评价问卷」可评任意车间 —— 被评车间由投票人自选；
+  //   - 本场次不要求的问卷类型（如 person 场次取车间表）一律拒绝，
+  //     否则会出现「交了不计入核销条件的表」，票永远卡在未核销。
   const isWorkshop = department.questionnaireType === 'workshop';
+  const scope = ticket.session.scoreScope;
+  if (!requiredSheetTypes(scope).includes(department.questionnaireType)) {
+    throw ApiError.forbidden('本评议不评议该类打分表', 'SCOPE_MISMATCH');
+  }
   if (
     ticket.departmentId &&
     ticket.departmentId !== departmentId &&
-    !(ticket.session.scoreScope === 'both' && isWorkshop)
+    !(scope !== 'person' && isWorkshop)
   ) {
     throw ApiError.forbidden('该随机码仅限评议指定部门', 'TICKET_DEPARTMENT_MISMATCH');
   }
@@ -339,13 +355,18 @@ export async function submitVote(
 
   const isWorkshop = department.questionnaireType === 'workshop';
 
-  // 部门绑定强校验：绑定码默认只能提交到绑定部门。唯一例外：both（两表）场次里
-  // 「车间评价问卷」可以评任意车间（含绑定部门本身）——它是每人必交的第二张表，
-  // 被评车间由投票人自选；「负责人评价问卷」仍必须评绑定部门（本部门负责人）。
+  // 部门绑定强校验：绑定码默认只能提交到绑定部门。两个例外：
+  //   - both / workshop 场次里「车间评价问卷」可以评任意车间（含绑定部门本身），
+  //     被评车间由投票人自选；「负责人评价问卷」仍必须评绑定部门；
+  //   - 本场次不要求的问卷类型直接拒绝（否则交的表不计入核销条件，票会一直卡住）。
+  const scope = ticketRow.session.scoreScope;
+  if (!requiredSheetTypes(scope).includes(department.questionnaireType)) {
+    throw ApiError.forbidden('本评议不评议该类打分表', 'SCOPE_MISMATCH');
+  }
   if (
     ticketRow.departmentId &&
     ticketRow.departmentId !== departmentId &&
-    !(ticketRow.session.scoreScope === 'both' && isWorkshop)
+    !(scope !== 'person' && isWorkshop)
   ) {
     throw ApiError.forbidden('该随机码仅限评议指定部门', 'TICKET_DEPARTMENT_MISMATCH');
   }
@@ -378,10 +399,10 @@ export async function submitVote(
   for (const item of items) {
     const criterion = criterionById.get(item.criterionId);
     if (!criterion) {
-      throw ApiError.badRequest('打分项不属于该部门，或该项点已停用', 'ITEM_OUT_OF_DEPARTMENT');
+      throw ApiError.badRequest('打分项不属于该部门，或该评议项目已停用', 'ITEM_OUT_OF_DEPARTMENT');
     }
     if (!validVoteColumnIds.has(item.voteColumnId)) {
-      throw ApiError.badRequest('被评列不属于该部门，或该列已停用', 'ITEM_OUT_OF_DEPARTMENT');
+      throw ApiError.badRequest('被评议人列不属于该部门，或该列已停用', 'ITEM_OUT_OF_DEPARTMENT');
     }
     if (item.score < criterion.minScore || item.score > criterion.maxScore) {
       throw ApiError.badRequest(
@@ -392,7 +413,7 @@ export async function submitVote(
     // 同一单元格重复出现会撞 score_items 的唯一约束；提前拒绝，避免变成 500。
     const cell = `${item.voteColumnId}|${item.criterionId}`;
     if (seenCells.has(cell)) {
-      throw ApiError.badRequest('同一被评列与项点重复提交', 'DUPLICATE_ITEM');
+      throw ApiError.badRequest('同一被评议人列与评议项目重复提交', 'DUPLICATE_ITEM');
     }
     seenCells.add(cell);
   }
@@ -407,7 +428,7 @@ export async function submitVote(
       if (missing > 0) {
         ctx.addIssue({
           code: 'custom',
-          message: `还有 ${missing} 个项点未完成打分`,
+          message: `还有 ${missing} 个评议项目未完成打分`,
         });
       }
     });
@@ -432,7 +453,7 @@ export async function submitVote(
       })
     ).map((row) => row.sheet.department.questionnaireType);
     if (submittedTypes.includes(department.questionnaireType)) {
-      throw ApiError.conflict('该类问卷已提交，请勿重复提交', 'SHEET_TYPE_SUBMITTED');
+      throw ApiError.conflict('该类打分表已提交，请勿重复提交', 'SHEET_TYPE_SUBMITTED');
     }
 
     // 匿名边界：只写这几列。任何"顺手"加上的 ticketId / IP / UA 都会让匿名性失效。
@@ -466,12 +487,9 @@ export async function submitVote(
       })),
     });
 
-    // 全部必答类型都已提交才核销随机码：both（两表）场次要求 person+workshop 齐交，
-    // 还差表时保持 unused 等下一张；单表场次交这一张即核销（重复已在前面被 409 挡下）。
-    const requiredTypes: string[] =
-      ticketRow.session.scoreScope === 'both'
-        ? ['person', 'workshop']
-        : [department.questionnaireType];
+    // 全部必答类型都已提交才核销随机码：both 场次要求 person+workshop 齐交，
+    // workshop 场次只交车间表、person 场次只交负责人表；还差表时保持 unused 等下一张。
+    const requiredTypes = requiredSheetTypes(ticketRow.session.scoreScope);
     const completed = new Set([...submittedTypes, department.questionnaireType]);
     const allDone = requiredTypes.every((type) => completed.has(type));
     if (allDone) {
@@ -483,10 +501,10 @@ export async function submitVote(
   });
 }
 
-/** 该码的答卷进度：场次要求哪些类型、已交哪些、还差哪些（多表流程的前端依据）。 */
+/** 该码的答卷进度：评议要求哪些类型、已交哪些、还差哪些（多表流程的前端依据）。 */
 export interface VoteProgressResult {
   scoreScope: string;
-  /** 场次要求的答卷类型：score_scope=both 时为 person+workshop 两张；单表场次为绑定部门的问卷类型（万能码为空数组） */
+  /** 评议要求的答卷类型：both = person+workshop；workshop = workshop；person = person */
   required: string[];
   /** 已提交的答卷类型 */
   submitted: string[];
@@ -505,18 +523,9 @@ export async function getVoteProgress(ticket: VoteTokenPayload): Promise<VotePro
   });
   if (!ticketRow) throw ApiError.conflict('该票据已使用，不能重复提交', 'TICKET_USED');
 
-  // 必答类型：both（两表）场次固定 person+workshop 两张；单表场次就是绑定部门的
-  // 问卷类型（绑定部门的表交一张即完成）。万能码（未绑部门）无法预知类型，按空处理。
-  let required: string[] = [];
-  if (ticketRow.session.scoreScope === 'both') {
-    required = ['person', 'workshop'];
-  } else if (ticketRow.departmentId) {
-    const bound = await prisma.department.findUnique({
-      where: { id: ticketRow.departmentId },
-      select: { questionnaireType: true },
-    });
-    required = bound ? [bound.questionnaireType] : [];
-  }
+  // 必答类型只由场次打分范围决定，与绑定部门类型无关：
+  // workshop 场次哪怕码绑在负责人部门上，也只要求交车间表。
+  const required = requiredSheetTypes(ticketRow.session.scoreScope);
   const submitted = (
     await prisma.sheetTicketMap.findMany({
       where: { ticketId: ticket.sub },

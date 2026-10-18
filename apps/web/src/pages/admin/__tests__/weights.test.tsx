@@ -1,7 +1,7 @@
 /**
  * 「权重分配」表单的行为测试。
  *
- * 核心正确性是**提交顺序**：后端单行 PATCH 的校验是「启用票种合计升权后必须正好 100」，
+ * 核心正确性是**提交顺序**：后端单行 PATCH 的校验是「启用人员类别合计升权后必须正好 100」，
  * 所以一次性改权重时只能先提交降权（合计变小，恒合法）、再提交升权（合计逐步回到 100）。
  * 顺序写反就会出现「第二步被 409 拒绝」——正是本表单要解决的痛点，必须用 mock.calls 锁死。
  */
@@ -12,7 +12,7 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALL_PERMISSIONS, renderWithAuth } from '../../../test-utils.js';
 
-/** 启用票种合计 100%（50+30+20），另有停用票种 10% 不计入也不可调。 */
+/** 启用人员类别合计 100%（50+30+20），另有停用人员类别 10% 不计入也不可调。 */
 function ticketTypes() {
   return [
     { id: 'a', code: 'A', name: '领导班子', weightPercent: 50, sortOrder: 1, enabled: true },
@@ -52,7 +52,7 @@ function renderWeights(permissions: string[] = ALL_PERMISSIONS) {
 }
 
 /**
- * 修改某一行的权重：antd InputNumber 用 aria-label「<票种名> 计分占比」定位。
+ * 修改某一行的权重：antd InputNumber 用 aria-label「<人员类别名> 计分占比」定位。
  * 刻意不含「权重」二字，避免与编辑弹窗里的「权重（%）」标签在 getByLabelText 下重名。
  */
 async function setWeight(
@@ -115,7 +115,7 @@ describe('权重分配表单', () => {
     ]);
   }, TIMEOUT_MS);
 
-  it('只提交发生变化的票种', async () => {
+  it('只提交发生变化的人员类别', async () => {
     const user = userEvent.setup({ delay: null });
     renderWeights();
     await screen.findByText('合计 100%，符合要求');
@@ -134,11 +134,16 @@ describe('权重分配表单', () => {
   }, TIMEOUT_MS);
 
   it('无 ticketTypes.write 权限时不渲染保存按钮', async () => {
+    const user = userEvent.setup({ delay: null });
     renderWeights(['departments.write']);
 
     expect(await screen.findByText('权重分配')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /保存权重/ })).toBeNull();
-    expect(screen.getByText(/调整权重需「管理票种与权重」权限/)).toBeInTheDocument();
+    // 权限原因收在「权重分配」旁的说明图标里
+    await user.hover(screen.getAllByRole('button', { name: '查看说明' })[0]!);
+    expect(
+      await screen.findByText(/调整权重需「管理人员类别与权重」权限/),
+    ).toBeInTheDocument();
   }, TIMEOUT_MS);
 
   it('某条失败时停止提交并提示已成功项数与后端消息', async () => {
@@ -149,7 +154,7 @@ describe('权重分配表单', () => {
         throw new ApiError(
           409,
           'WEIGHT_SUM_INVALID',
-          '启用票种权重合计为 110%，不得超过 100%（差额 -10）',
+          '启用人员类别权重合计为 110%，不得超过 100%（差额 -10）',
         );
       }
       return { ...ticketTypes().find((type) => type.id === id), ...body };
@@ -164,7 +169,7 @@ describe('权重分配表单', () => {
 
     const notices = await screen.findAllByText(/已成功 1 项，第 2 项失败：/);
     expect(notices[0]?.textContent).toContain(
-      '启用票种权重合计为 110%，不得超过 100%（差额 -10）',
+      '启用人员类别权重合计为 110%，不得超过 100%（差额 -10）',
     );
     // 失败即停：不再有第 3 次提交
     expect(mocks.update).toHaveBeenCalledTimes(2);

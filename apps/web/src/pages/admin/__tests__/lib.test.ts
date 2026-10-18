@@ -1,13 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError } from '../../../lib/api.js';
-import {
-  describeLoginError,
-  formatDateTime,
-  summarizeWeights,
-} from '../lib.js';
+import { summarizeWeights } from '../lib.js';
 
 describe('summarizeWeights', () => {
-  it('启用票种合计 100 时差额为 0', () => {
+  it('启用人员类别合计 100 时差额为 0', () => {
     expect(
       summarizeWeights([
         { weightPercent: 50, enabled: true },
@@ -17,7 +12,7 @@ describe('summarizeWeights', () => {
     ).toEqual({ total: 100, diff: 0, enabledCount: 3 });
   });
 
-  it('停用票种不计入合计（与后端校验口径一致）', () => {
+  it('停用人员类别不计入合计（与后端校验说明一致）', () => {
     expect(
       summarizeWeights([
         { weightPercent: 60, enabled: true },

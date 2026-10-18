@@ -5,19 +5,19 @@ import type { VoteColumnBrief, VoteCriterionDto } from '../../lib/api.js';
 /**
  * 打分表（与 docs/参考表.xlsx 的结构一一对应）。
  *
- * 表形来自参考表：抬头（附件号）→ 表标题 → 列头（序号 / 项点 / 各被评列）
- * → 项点行（序号 + 项点名称与描述 + 每列一个分数格）→ 表尾填写说明。
+ * 表形来自参考表：抬头（附件号）→ 表标题 → 列头（序号 / 评议项目 / 各被评议人列）
+ * → 评议项目行（序号 + 评议项目名称与描述 + 每列一个分数格）→ 表尾填写说明。
  *
  * 手感仍然是给普通职工用的：Tab 走原生顺序连续录入，方向键与 Enter 在网格内移动，
  * 所以用原生 table + 原生 input，而不是 antd 的受控表格组件（后者的键盘顺序与
- * 滚动容器都不受我们控制）。项点行通常只有几行，不再分页。
+ * 滚动容器都不受我们控制）。评议项目行通常只有几行，不再分页。
  *
- * 无障碍：每格都有固定 id（`cell-<被评列>-<项点>`），提交失败时的 error summary 用它
+ * 无障碍：每格都有固定 id（`cell-<被评议人列>-<评议项目>`），提交失败时的 error summary 用它
  * 逐条链接到出错的那一格；区间说明以 aria-describedby 关联，非法时 aria-invalid
  * 并把原因读给读屏听。标红只是给明眼人的提示，不是唯一表意手段。
  */
 
-/** 打分表数据：被评列 id → 项点 id → 输入框原文（提交时才转成整数）。 */
+/** 打分表数据：被评议人列 id → 评议项目 id → 输入框原文（提交时才转成整数）。 */
 export type ScoreValues = Record<string, Record<string, string>>;
 
 /** 单元格唯一键，用于标红集合与定位。 */
@@ -28,14 +28,14 @@ export function cellKey(voteColumnId: string, criterionId: string): string {
 /**
  * 单元格的 DOM id，同时也是 error summary 里链接的锚点。
  *
- * 用 id 而不是行列号：行列号会随部门切换变化，被评列 + 项点才是稳定的，
+ * 用 id 而不是行列号：行列号会随部门切换变化，被评议人列 + 评议项目才是稳定的，
  * 这样错误条目总能跳回正确的那一格。
  */
 export function cellElementId(voteColumnId: string, criterionId: string): string {
   return `cell-${voteColumnId}-${criterionId}`;
 }
 
-/** 区间说明的 id：项点行里的隐藏说明与每格的 aria-describedby 必须指向同一个元素。 */
+/** 区间说明的 id：评议项目行里的隐藏说明与每格的 aria-describedby 必须指向同一个元素。 */
 export function rangeElementId(criterionId: string): string {
   return `range-${criterionId}`;
 }
@@ -75,8 +75,8 @@ export interface CellError {
  * 全表校验，按表格顺序返回所有不合格单元格。
  *
  * 提交前调用；返回空数组表示可以提交。第一项即最该带用户去的位置。
- * @param criteria 行（项点）
- * @param voteColumns 列（被评列）
+ * @param criteria 行（评议项目）
+ * @param voteColumns 列（被评议人列）
  * @param values 当前填写内容
  */
 export function collectScoreErrors(
@@ -141,11 +141,11 @@ function focusCell(container: HTMLElement | null, row: number, col: number): voi
 export interface ScoreTableProps {
   criteria: VoteCriterionDto[];
   voteColumns: VoteColumnBrief[];
-  /** 问卷类型：person = 个人问卷（表头两行），workshop = 车间问卷（表头单行） */
+  /** 打分表类型：person = 个人打分表（表头两行），workshop = 车间打分表（表头单行） */
   questionnaireType: string;
   /** 左上角附件号，如「附件1-1」 */
   headerNote: string;
-  /** 表标题，如「xx车间负责人评价问卷」；留空则不渲染该行 */
+  /** 表标题，如「xx车间负责人评价打分表」；留空则不渲染该行 */
   title: string;
   /** 表尾填写说明；留空则不渲染该行 */
   footerNote: string;
@@ -160,7 +160,7 @@ export interface ScoreTableProps {
   focusTarget?: { row: number; col: number } | null;
 }
 
-/** 打分表：行 = 评价项点，列 = 被评列，单元格只能填整数。 */
+/** 打分表：行 = 评议项目，列 = 被评议人列，单元格只能填整数。 */
 export function ScoreTable({
   criteria,
   voteColumns,
@@ -182,7 +182,7 @@ export function ScoreTable({
    */
   const [touched, setTouched] = useState<ReadonlySet<string>>(NO_TOUCHED);
 
-  // 换部门或换项点/被评列会整批换行，把「已触碰」记录清掉
+  // 换部门或换评议项目/被评议人列会整批换行，把「已触碰」记录清掉
   useEffect(() => {
     setTouched(NO_TOUCHED);
   }, [criteria, voteColumns]);
@@ -220,10 +220,10 @@ export function ScoreTable({
 
   const columnCount = 2 + voteColumns.length;
   /**
-   * 个人问卷的表头是两行：各被评列的列名只占第一行，第二行留空
+   * 个人打分表的表头是两行：各被评议人列的列名只占第一行，第二行留空
    * （参考表里 C..G 上下两格并未合并，列名落在上半格），
-   * 「序号」与「职务与姓名 / 评价项点」则跨两行。
-   * 车间问卷只有一行：`序号 | 项点 | 得分`。
+   * 「序号」与「职务与姓名 / 评议项目」则跨两行。
+   * 车间打分表只有一行：`序号 | 评议项目 | 得分`。
    */
   const twoRowHeader = questionnaireType !== 'workshop';
 
@@ -266,12 +266,12 @@ export function ScoreTable({
             <th rowSpan={twoRowHeader ? 2 : 1} className="criterion-head">
               {twoRowHeader ? (
                 <>
-                  {/* 参考表的写法：「职务与姓名」靠右、「评价项点」靠左，两行错开 */}
+                  {/* 参考表的写法：「职务与姓名」靠右、「评议项目」靠左，两行错开 */}
                   <span className="head-name">职务与姓名</span>
-                  <span className="head-criterion">评价项点</span>
+                  <span className="head-criterion">评议项目</span>
                 </>
               ) : (
-                '项点'
+                '评议项目'
               )}
             </th>
             {voteColumns.map((column) => (
@@ -319,8 +319,8 @@ export function ScoreTable({
 
       {/*
         允许区间：不占版面，每格的 aria-describedby 指向这里。
-        刻意放在表格外：放进项点单元格会被算进 rowheader 的可访问名称，
-        读屏念项点时会与 aria-describedby 重复播报一次。
+        刻意放在表格外：放进评议项目单元格会被算进 rowheader 的可访问名称，
+        读屏念评议项目时会与 aria-describedby 重复播报一次。
       */}
       <div style={SR_ONLY}>
         {criteria.map((criterion) => (
@@ -346,8 +346,8 @@ interface CriterionRowProps {
 }
 
 /**
- * 一个项点行。用 memo 隔开：连续录入时只有正在输入的那一行重渲染，
- * 项点行多、被评列多时这是「不卡手」的前提。
+ * 一个评议项目行。用 memo 隔开：连续录入时只有正在输入的那一行重渲染，
+ * 评议项目行多、被评议人列多时这是「不卡手」的前提。
  */
 const CriterionRow = memo(function CriterionRow({
   criterion,
@@ -369,8 +369,8 @@ const CriterionRow = memo(function CriterionRow({
       </td>
       <th scope="row" className="criterion-cell">
         {/*
-          参考表的这一格是「政治素质：」换行后接缩进四格的描述，冒号属于项点名与描述之间的
-          分隔符，不存进后台的项点名称里（否则管理员每配一项都要自己敲冒号）。
+          参考表的这一格是「政治素质：」换行后接缩进四格的描述，冒号属于评议项目名与描述之间的
+          分隔符，不存进后台的评议项目名称里（否则管理员每配一项都要自己敲冒号）。
         */}
         <div className="criterion-name">
           {criterion.name}

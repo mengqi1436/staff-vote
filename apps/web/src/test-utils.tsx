@@ -43,7 +43,7 @@ export function adminWith(permissions: string[] = ALL_PERMISSIONS): AdminMe {
   };
 }
 
-/** 测试用的场次上下文缺省值：未选择场次、无场次列表。 */
+/** 测试用的评议上下文缺省值：未选择评议、无评议列表。 */
 const DEFAULT_SESSION_STATE = {
   sessionId: null as string | null,
   setSessionId: () => {},
@@ -52,8 +52,8 @@ const DEFAULT_SESSION_STATE = {
   reload: () => {},
 };
 
-/** 造一条测试场次记录：新字段（全局部门）默认为空，兼容旧场次形态。 */
-function testSession(id: string, name = '测试场次', overrides: Partial<AdminSessionDto> = {}): AdminSessionDto {
+/** 造一条测试评议记录：新字段（全局部门）默认为空，兼容旧评议形态。 */
+function testSession(id: string, name = '测试评议', overrides: Partial<AdminSessionDto> = {}): AdminSessionDto {
   return {
     id,
     name,
@@ -78,9 +78,9 @@ function testSession(id: string, name = '测试场次', overrides: Partial<Admin
  *
  * @param ui 被测组件
  * @param permissions 授予的权限码；默认全部。传 `[]` 即为只读账号
- * @param sessionId 注入的当前场次 id；默认 null（未选择场次）。传 id 时也注入
- *   对应的单场次列表，供页面断言「带 sessionId 的请求参数」
- * @param sessionOverrides 注入场次记录的字段覆盖（如 { status: 'ended' }），
+ * @param sessionId 注入的当前评议 id；默认 null（未选择评议）。传 id 时也注入
+ *   对应的单评议列表，供页面断言「带 sessionId 的请求参数」
+ * @param sessionOverrides 注入评议记录的字段覆盖（如 { status: 'ended' }），
  *   供需要非 draft 状态（统计页签开放等）的用例使用；不影响名字与 id
  * @returns testing-library 的 render 结果
  */
@@ -94,7 +94,7 @@ export function renderWithAuth(
   const sessionState = {
     ...DEFAULT_SESSION_STATE,
     sessionId,
-    sessions: sessionId ? [testSession(sessionId, '测试场次', sessionOverrides)] : [],
+    sessions: sessionId ? [testSession(sessionId, '测试评议', sessionOverrides)] : [],
   };
   return render(
     <SessionContext.Provider value={sessionState}>

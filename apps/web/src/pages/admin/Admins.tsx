@@ -22,7 +22,7 @@ import type { TableColumnsType } from 'antd';
 import { adminApi, type AdminUserDto, type PermissionDto, type RoleDto } from '../../lib/api.js';
 import { useAuth } from '../../lib/auth.js';
 import { describeError, formatDateTime } from './lib.js';
-import { ErrorState, LoadingState, PageHeader, useNotify } from './shared.js';
+import { ErrorState, HelpLabel, LoadingState, PageHeader, useNotify } from './shared.js';
 
 /**
  * 账号与权限（RBAC）管理页。
@@ -61,7 +61,7 @@ export function AdminAdmins() {
   if (!can(MANAGE_PERMISSION)) {
     return (
       <div>
-        <PageHeader title="账号与权限" description="管理后台账号、角色与权限分配。" />
+        <PageHeader title="账号与权限" description="管理后台账号、角色，以及每个账号能做什么。" />
         <Alert
           type="warning"
           showIcon
@@ -360,7 +360,7 @@ function RbacPanel() {
             </Button>
             <Popconfirm
               title={`删除账号「${row.username}」？`}
-              description="删除后该账号立即无法登录，未过期的会话也会立即失效。"
+              description="删除后该账号立即无法登录，已经登录的也会立刻退出。"
               okText="删除"
               cancelText="取消"
               okButtonProps={{ danger: true }}
@@ -387,7 +387,7 @@ function RbacPanel() {
         </Space>
       ),
     },
-    { title: '代码', dataIndex: 'code', width: 160 },
+    { title: '角色标识', dataIndex: 'code', width: 160 },
     {
       title: '权限数',
       dataIndex: 'permissions',
@@ -442,17 +442,17 @@ function RbacPanel() {
 
   const adminTab = (
     <Card
-      title="管理员账号"
+      title={
+        <HelpLabel help="每个账号按角色获得权限，没有角色就只能查看、不能修改。系统里至少要留一个已启用、还能管理账号与权限的账号，否则以后没人能再改权限。">
+          管理员账号
+        </HelpLabel>
+      }
       extra={
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdminCreate}>
           新增管理员
         </Button>
       }
     >
-      <Typography.Paragraph type="secondary">
-        每个账号按角色获得权限；没有角色等价于只读。系统必须至少保留一个已启用、
-        且拥有「管理管理员账号与角色权限」权限的账号，否则将无人能再管理权限。
-      </Typography.Paragraph>
       <Table<AdminUserDto>
         rowKey="id"
         size="small"
@@ -467,17 +467,17 @@ function RbacPanel() {
 
   const roleTab = (
     <Card
-      title="角色与权限"
+      title={
+        <HelpLabel help="权限按模块分组勾选，保存后马上生效，相关账号不用重新登录。内置角色可以改名称和权限，但不能删除。">
+          角色与权限
+        </HelpLabel>
+      }
       extra={
         <Button type="primary" icon={<PlusOutlined />} onClick={openRoleCreate}>
           新增角色
         </Button>
       }
     >
-      <Typography.Paragraph type="secondary">
-        权限按模块分组勾选；保存后立即生效 —— 每次操作都按最新权限执行，
-        相关账号不必重新登录。内置角色可以改名称与权限，但不允许删除。
-      </Typography.Paragraph>
       <Table<RoleDto>
         rowKey="id"
         size="small"
@@ -493,7 +493,7 @@ function RbacPanel() {
   if (!adminRows || !roleRows) {
     return (
       <div>
-        <PageHeader title="账号与权限" description="管理后台账号、角色与权限分配。" />
+        <PageHeader title="账号与权限" description="管理后台账号、角色，以及每个账号能做什么。" />
         {error ? <ErrorState error={error} onRetry={() => void load()} /> : <LoadingState />}
       </div>
     );
@@ -503,7 +503,7 @@ function RbacPanel() {
     <div>
       <PageHeader
         title="账号与权限"
-        description="管理后台账号、角色与权限分配。权限改动保存后立即生效，无需相关账号重新登录。"
+        description="管理后台账号、角色，以及每个账号能做什么。权限改完马上生效，相关账号不必重新登录。"
         extra={
           <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
             刷新
@@ -542,9 +542,18 @@ function RbacPanel() {
         <Form<AdminForm> form={adminForm} layout="vertical" requiredMark={false}>
           <Form.Item
             name="username"
-            label="用户名"
+            label={
+              <HelpLabel
+                help={
+                  editingAdmin
+                    ? '用户名是登录后台时用的名字，创建后不能修改。'
+                    : '登录后台时用的名字，全系统不能重复。'
+                }
+              >
+                用户名
+              </HelpLabel>
+            }
             rules={editingAdmin ? [] : [{ required: true, message: '请输入用户名' }]}
-            extra={editingAdmin ? '用户名是登录凭据，不可修改' : '登录后台用的账号名，全系统唯一'}
           >
             <Input placeholder="例如：zhangsan" maxLength={64} disabled={Boolean(editingAdmin)} />
           </Form.Item>
@@ -564,8 +573,7 @@ function RbacPanel() {
 
           <Form.Item
             name="roleId"
-            label="角色"
-            extra="留空表示不分配角色，等价于只读"
+            label={<HelpLabel help="不选角色时，这个账号只能查看，不能修改任何内容。">角色</HelpLabel>}
           >
             <Select
               allowClear
@@ -579,9 +587,10 @@ function RbacPanel() {
             <>
               <Form.Item
                 name="enabled"
-                label="启用"
+                label={
+                  <HelpLabel help="停用后这个账号马上不能登录，已经登录的也会立刻退出。">启用</HelpLabel>
+                }
                 valuePropName="checked"
-                extra="停用后该账号立即无法登录，未过期的会话也会立即失效"
               >
                 {/* 开关内不放文字：白字在未选中态的浅底上不达 AA 对比度（Settings 页同款纪律），
                     状态由 label 与 extra 文字表达 */}
@@ -590,9 +599,8 @@ function RbacPanel() {
 
               <Form.Item
                 name="password"
-                label="重置口令"
+                label={<HelpLabel help="留空表示这次不改口令。">重置口令</HelpLabel>}
                 rules={[{ min: 8, message: '口令至少 8 位' }]}
-                extra="留空表示不修改口令"
               >
                 <Input.Password
                   placeholder="至少 8 位"
@@ -619,9 +627,18 @@ function RbacPanel() {
         <Form<RoleForm> form={roleForm} layout="vertical" requiredMark={false}>
           <Form.Item
             name="code"
-            label="角色代码"
-            rules={editingRole ? [] : [{ required: true, message: '请输入角色代码' }]}
-            extra={editingRole ? '角色代码是权限判定的锚点，不可修改' : '用于程序内部识别，建议用英文，例如 review_admin'}
+            label={
+              <HelpLabel
+                help={
+                  editingRole
+                    ? '系统靠这个标识来认角色，创建后不能修改。'
+                    : '系统用它区分不同角色，建议用英文，例如 review_admin。'
+                }
+              >
+                角色标识
+              </HelpLabel>
+            }
+            rules={editingRole ? [] : [{ required: true, message: '请输入角色标识' }]}
           >
             <Input placeholder="例如：review_admin" maxLength={64} disabled={Boolean(editingRole)} />
           </Form.Item>

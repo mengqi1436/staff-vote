@@ -21,6 +21,7 @@ import { usePolling } from '../../lib/usePolling.js';
 import { describeError, formatDateTime } from './lib.js';
 import {
   ErrorState,
+  HelpLabel,
   LoadingState,
   PageHeader,
   StaleDataAlert,
@@ -33,12 +34,12 @@ interface OrgDepartmentForm {
 }
 
 /**
- * 全局部门管理（跨场次主数据，路由 /admin/departments）。
+ * 全局部门管理（跨评议主数据，路由 /admin/departments）。
  *
- * 与场次工作台里那套「场内部门」不同：本页维护的是单位层面的部门字典，
- * 新建场次时从这里选定部门，场内部门由后端按所选字典自动落一条。
- * 删除被场次引用的部门会被后端拒绝（409 ORG_DEPARTMENT_IN_USE）——
- * 历史场次必须保留它建场时的部门名，停用（不再出现在建场下拉）是唯一安全的下线方式。
+ * 与评议工作台里那套「场内部门」不同：本页维护的是单位层面的部门列表，
+ * 新建评议时从这里选定部门，场内部门由后端按所选字典自动落一条。
+ * 删除被评议引用的部门会被后端拒绝（409 ORG_DEPARTMENT_IN_USE）——
+ * 历史评议必须保留它建场时的部门名，停用（不再出现在建场下拉）是唯一安全的下线方式。
  */
 export function AdminOrgDepartments() {
   const load = useCallback(() => adminApi.orgDepartments.list(), []);
@@ -62,7 +63,7 @@ export function AdminOrgDepartments() {
       setDenied(caught.message);
       return;
     }
-    // 删除被场次引用（409 ORG_DEPARTMENT_IN_USE）时后端 message 已解释原因，原文透出
+    // 删除被评议引用（409 ORG_DEPARTMENT_IN_USE）时后端 message 已解释原因，原文透出
     notify.error(describeError(caught, fallback));
   };
 
@@ -180,7 +181,7 @@ export function AdminOrgDepartments() {
             <span>
               <Popconfirm
                 title="删除该部门？"
-                description="若已被场次引用将删除失败，可改用「停用」。"
+                description="若已被评议引用将删除失败，可改用「停用」。"
                 okText="删除"
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
@@ -201,7 +202,7 @@ export function AdminOrgDepartments() {
     <>
       <PageHeader
         title="部门管理"
-        description="全局部门字典（跨场次复用）：新建场次时从这里选定部门，场内部门随之自动生成。"
+        description="这是一份全单位共用的部门列表，每次新建评议时从中选部门，评议里的部门会自动带上。"
         extra={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
@@ -233,21 +234,14 @@ export function AdminOrgDepartments() {
       {!data && error ? <ErrorState error={error} onRetry={refresh} /> : null}
 
       {data ? (
-        <Card title="部门一览" extra={`共 ${departments.length} 个`}>
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            title="字典口径"
-            description={
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
-                <li>这里维护的是单位层面的部门目录；每个场次实际参评的部门在建场时选定并自动落入该场次。</li>
-                <li>删除被场次引用的部门会被拒绝（历史场次要保留它建场时的部门名），此时请改用「停用」。</li>
-                <li>停用后不再出现在新建场次的部门下拉中；已建场次不受影响。</li>
-                <li>排序数字小的排在前面，决定建场下拉中的顺序。</li>
-              </ul>
-            }
-          />
+        <Card
+          title={
+            <HelpLabel help="这里维护全单位共用的部门列表，每次评议从这里选部门。已经被评议用过的部门不能删除（评议要保留当时的部门名），可以改成停用；停用后不会再出现在新建评议的部门选项里，已有的评议不受影响。排序数字小的排在前面，决定选项里的先后顺序。">
+              部门一览
+            </HelpLabel>
+          }
+          extra={`共 ${departments.length} 个`}
+        >
           <Table<OrgDepartmentDto>
             rowKey="id"
             size="small"
@@ -256,7 +250,7 @@ export function AdminOrgDepartments() {
             dataSource={departments}
             pagination={false}
             scroll={{ x: 'max-content' }}
-            locale={{ emptyText: '尚未配置部门，请先新增全局部门，再创建评议场次' }}
+            locale={{ emptyText: '尚未配置部门，请先新增部门，再创建评议' }}
           />
         </Card>
       ) : loading ? (
@@ -281,7 +275,11 @@ export function AdminOrgDepartments() {
           >
             <Input placeholder="例如：办公室" maxLength={64} />
           </Form.Item>
-          <Form.Item name="sortOrder" label="排序" extra="数字小的排在前面" style={{ marginBottom: 0 }}>
+          <Form.Item
+            name="sortOrder"
+            label={<HelpLabel help="数字小的排在前面，决定新建评议时部门选项的先后顺序。">排序</HelpLabel>}
+            style={{ marginBottom: 0 }}
+          >
             <InputNumber min={0} precision={0} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
