@@ -121,7 +121,8 @@ components:
 
 - 只允许出现在 `pages/vote/Gate.tsx` 的入口场景（`components/vote/GateScene.tsx` + `gateMotion.ts`），后台一律不准用。
 - 只动 `transform` / `opacity`，不写 CSS keyframes，不改 `.sheet-excel` 与 `.score-table` 任何版式规则。
-- 必须走 `gsap.matchMedia()` 的 `(prefers-reduced-motion: no-preference)` 分支，`reduce` 时直接落终态、不建补间。
+- 能否播由 `components/vote/gateMotion.ts` 的 `canPlayGateMotion()` 判定，**判定不过就不播、也不渲染舞台**（只留文字，不许出现「一辆停在终点的车」）：用户要求减少动效、内核不认识 `prefers-reduced-motion`、内核不支持 `min-height: 100dvh`（Chrome 108 以前）三种情况都归到这条。判定通过才建补间，补间只动 `transform` / `opacity`。
+- `.gate-scene` 的 `min-height` 必须同时写 `100vh` 与 `100dvh`（vh 在前）。只写 `dvh` 时，Chrome 108 以前会丢弃该声明，容器塌成 0 高，绝对定位的舞台跑到内容上方（列车压住标题），这是已修过的线上故障。
 - 装饰层 `aria-hidden="true"` + `pointer-events: none`：不参与读屏、不挡操作。
 - 场景与内容用「内容居中 + 舞台绝对定位贴底」分离，两者不争布局；窄屏与矮屏（`max-height: 720px` 或 `max-width: 640px`）隐藏舞台，舞台不可见时内容必须立即交付、不许让人干等动画。
 - 未开放状态不用卡片容器：内容直接落在页面背景上，层级靠字号与留白建立。状态标题以**场次状态为主、时间窗为辅**判定（已结束 / 已暂停 / 尚未开始 / 未开放），四种状态给四种行动指引，不许一律说「未开放」。

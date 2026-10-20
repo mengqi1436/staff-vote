@@ -680,13 +680,20 @@ td.col-comprehensive {
    编排交给 GSAP timeline；这里只定义几何与静态外观。站台、轨道与文字由主色
    #0066cc 派生；列车是 CR400AF 写实涂装（银灰/黑窗带/红线），属 DESIGN.md
    记录在案的例外，不参与全局 token 体系。动画只碰 transform / opacity，
-   不写任何 CSS keyframes，reduced-motion 由 gateMotion 的 matchMedia 兜底。
+   不写任何 CSS keyframes；是否播放由 gateMotion 的 canPlayGateMotion() 判定
+   （reduced-motion、老内核都归到「不播，只留文字」）。
    ============================================================================= */
 
 /* 内容严格居中：列车绝对定位到视口底部，不参与居中计算 */
 .gate-scene {
   position: relative;
-  /* dvh 而非 vh：移动浏览器地址栏会算进 100vh，导致内容被推到可视区下方 */
+  /*
+   * 两行都要：dvh 而非 vh——移动浏览器地址栏会算进 100vh，内容被推到可视区下方。
+   * 前一行 vh 是给老内核（Chrome 108 以前）的回退：它们直接丢弃 dvh，
+   * 容器会塌成 0 高，absolute 的 .gate-stage 就贴着塌陷容器跑到内容上方，
+   * 表现为「列车位置错乱、压在标题文字上」。
+   */
+  min-height: 100vh;
   min-height: 100dvh;
   display: flex;
   align-items: center;

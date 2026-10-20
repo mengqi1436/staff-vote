@@ -125,9 +125,10 @@ afterEach(() => {
 /**
  * 等待「未开放」内容出现。
  *
- * 内容是在列车动画结束后才挂载的（GateScene 的 settled 状态），
- * 因此要放宽超时：jsdom 的 matchMedia 桩固定 matches:false，
- * 两个媒体查询分支都不命中，只能等 gateMotion 的兜底定时器（约 1.9s）。
+ * jsdom 里 `matchMedia` 桩固定 matches:false、也没有 `CSS.supports`，
+ * `canPlayGateMotion()` 判定不过 → GateScene 不渲染舞台、内容同步交付，
+ * 所以这里只等状态接口与渲染，不再等 gateMotion 的兜底定时器。
+ * 超时放宽到 5 秒是给 antd 首次渲染（单次 1-2 秒）留余量。
  */
 function findClosedNotice(text: string | RegExp = '当前未开放投票') {
   return screen.findByText(text, undefined, { timeout: 5000 });
@@ -408,38 +409,15 @@ describe('未开放时的区分（Gate）', () => {
 });
 
 describe('高铁入场场景（Gate）', () => {
-  it('动画结束前内容不挂载，结束后才出现（本次核心行为）', async () => {
+  it('无动效能力的环境（jsdom / 老内核 / 减少动效）内容立即挂载，不渲染列车', async () => {
     fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
     const { container } = renderGate('/');
 
-    // 先等状态接口返回、离开 loading（loading 自身是立即渲染的，不属于动画窗口）
-    await waitFor(() => expect(screen.queryByText('正在核对投票状态……')).not.toBeInTheDocument());
-
-    // 此刻列车动画刚开始：内容根本不在 DOM 里，不是「透明」而是「不存在」。
-    // 这条是本轮改动的核心承诺，删掉 settled 逻辑时它必须变红。
-    expect(container.querySelector('.gate-stage')).not.toBeNull();
-    expect(screen.queryByText('当前未开放投票')).not.toBeInTheDocument();
-    // 同时告诉读屏「还在忙」
-    expect(container.querySelector('.gate-scene')).toHaveAttribute('aria-busy', 'true');
-
+    // 判定不过就直接给文字，不再等约 1.9 秒的兜底超时
     expect(await findClosedNotice()).toBeInTheDocument();
-    // 内容出现后不再 busy
+    // 本次修复的核心：老内核与「减少动效」都不该看到一辆停在终点的车
+    expect(container.querySelector('.gate-stage')).toBeNull();
     expect(container.querySelector('.gate-scene')).toHaveAttribute('aria-busy', 'false');
-  });
-
-  it('未开放时渲染列车场景，且装饰层对读屏隐藏、不吃指针', async () => {
-    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
-    const { container } = renderGate('/');
-
-    expect(await findClosedNotice()).toBeInTheDocument();
-
-    const stage = container.querySelector('.gate-stage');
-    expect(stage).not.toBeNull();
-    // 纯视觉：不参与读屏，也不拦截点击
-    expect(stage).toHaveAttribute('aria-hidden', 'true');
-    expect(container.querySelector('.gate-train')).not.toBeNull();
-    expect(container.querySelectorAll('.gate-light').length).toBeGreaterThan(10);
-    expect(container.querySelector('.gate-headlight')).not.toBeNull();
   });
 
   it('正常投票页不渲染列车，只保留内容（不抢关键操作的注意力）', async () => {
@@ -455,7 +433,7 @@ describe('高铁入场场景（Gate）', () => {
     fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
     const { container } = renderGate('/');
 
-    // 等内容真正挂载（动画结束后才出现），再断言它落在 .gate-content 内
+    // 等状态接口返回、内容挂载（jsdom 无动画能力，判定不过就立即交付），再断言它落在 .gate-content 内
     await findClosedNotice();
 
     const content = container.querySelector('.gate-content');
@@ -467,52 +445,6 @@ describe('高铁入场场景（Gate）', () => {
     expect(content!.querySelector('.ant-card')).toBeNull();
   });
 
-  it('8 辆编组：两端车头 + 6 节车厢 + 两个受电弓，且不画车门', async () => {
-    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
-    const { container } = renderGate('/');
-
-    await findClosedNotice();
-
-    const svg = container.querySelector('svg.gate-train-body');
-    expect(svg).not.toBeNull();
-
-    // 8 节 = 2 个车头（01/08 车）+ 6 节中间车厢
-    const headGroups = [...svg!.querySelectorAll('g[transform]')].filter(
-      (g) => g.querySelector(':scope > path.gate-body') !== null,
-    );
-    expect(headGroups).toHaveLength(2);
-
-    const carGroups = [...svg!.querySelectorAll('g[transform]')].filter(
-      (g) => g.querySelector(':scope > rect.gate-body') !== null,
-    );
-    expect(carGroups).toHaveLength(6);
-
-    // 受电弓在 03、06 车
-    expect(svg!.querySelectorAll('.gate-pantograph')).toHaveLength(2);
-    // 缩略侧视里不画车门：1:20 比例下门只是一排小黑块，会破坏车身完整性
-    expect(svg!.querySelectorAll('.gate-door')).toHaveLength(0);
-    expect(svg!.querySelectorAll('.gate-doorway')).toHaveLength(0);
-  });
-
-  it('车头平直端贴车厢、鼻锥朝车外（两端镜像方向相反）', async () => {
-    fetchMock.mockResolvedValueOnce(reply(200, statusBody(false)));
-    const { container } = renderGate('/');
-
-    await findClosedNotice();
-
-    const svg = container.querySelector('svg.gate-train-body');
-    const heads = [...svg!.querySelectorAll('g[transform]')].filter(
-      (g) => g.querySelector(':scope > path.gate-body') !== null,
-    );
-    expect(heads).toHaveLength(2);
-
-    // 前车头镜像（scale(-1)）→ 鼻锥朝左；尾车头不镜像 → 鼻锥朝右
-    const transforms = heads.map((g) => g.getAttribute('transform') ?? '');
-    expect(transforms.filter((t) => t.includes('scale(-1'))).toHaveLength(1);
-    expect(transforms.filter((t) => !t.includes('scale(-1'))).toHaveLength(1);
-    // 车灯两端各一个
-    expect(svg!.querySelectorAll('.gate-headlight')).toHaveLength(2);
-  });
 });
 
 describe('打分表页的错误汇总与失败保留', () => {

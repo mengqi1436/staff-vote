@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { playGateMotion } from './gateMotion.js';
+import { canPlayGateMotion, playGateMotion } from './gateMotion.js';
 
 /**
  * 投票入口（Gate）的高铁主题入场场景：整列复兴号驶入并停在站台。
@@ -161,26 +161,32 @@ function Pantograph({ x }: { x: number }) {
  * 高铁入场场景壳：列车驶入停稳后，才把卡片内容交给 React 渲染。
  *
  * 内容不参与补间：动画播完前它根本不在 DOM 里，所以不存在「淡入到一半
- * 被打断」或「卡片先闪一下再动」的问题。reduced-motion 下没有补间，
- * gateMotion 会立即回调，内容照常出现（无障碍基线不退化）。
+ * 被打断」或「卡片先闪一下再动」的问题。
+ *
+ * 能不能播由 `canPlayGateMotion()` 定：老内核（不认 dvh / reduce 媒体查询）
+ * 与系统开启「减少动态效果」时直接不播，**连舞台都不渲染**——只留文字。
+ * 之前 reduce 分支只交付内容、舞台照旧渲染，用户看到的就是「一辆停在终点
+ * 的车，没有动画」，那是最常见的误解来源。
  */
 export function GateScene({ withTrain, children }: { withTrain: boolean; children: ReactNode }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  // 没有列车时（正常投票页）内容立即可见，不需要等待
-  const [settled, setSettled] = useState(!withTrain);
+  // withTrain 只说明「这个页面本该有列车」，能不能播还得看平台
+  const animate = withTrain && canPlayGateMotion();
+  // 不播时内容立即可见；播时等内容落定
+  const [settled, setSettled] = useState(!animate);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (root === null) return undefined;
-    setSettled(!withTrain);
-    return playGateMotion({ root, withTrain, onSettled: () => setSettled(true) });
-  }, [withTrain]);
+    if (root === null || !animate) return undefined;
+    setSettled(false);
+    return playGateMotion({ root, onSettled: () => setSettled(true) });
+  }, [animate]);
 
   return (
-    <div ref={rootRef} className="gate-scene" aria-busy={withTrain && !settled}>
+    <div ref={rootRef} className="gate-scene" aria-busy={animate && !settled}>
       {/* 动画期间内容不在 DOM 里，读屏不会误读半成品 */}
       <div className="gate-content">{settled ? children : null}</div>
-      {withTrain ? (
+      {animate ? (
         <div className="gate-stage" aria-hidden="true">
           <div className="gate-platform" />
           <div className="gate-track" />
