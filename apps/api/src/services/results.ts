@@ -1,14 +1,15 @@
 /**
  * 结果与导出数据。
  *
- * **计分口径只有一份**：这里负责取数、组装与排名，真正的权重与归一化计算全部
- * 交给 `lib/scoring.ts` 的 computeResults。结果页与 Excel 导出共用同一次计算的
- * 输出，避免「页面一个数、导出另一个数」这类最难解释的差异。
+ * **计分口径只有一份**：这里负责取数、组装与排名，真正的归一化计算全部交给
+ * `lib/scoring.ts` 的 computeResults。结果页与 Excel 导出共用同一次计算的输出，
+ * 避免「页面一个数、导出另一个数」这类最难解释的差异。
  *
- * 维度是**被评列**（主任、党支部书记、车间得分…）而不是职工：参考表的打分对象是
- * 职务/车间，职工名单不参与打分（见 docs/参考表.xlsx 与 0003_questionnaire 迁移）。
+ * 统计维度是**人员类别 × 被评列**：不同人员类别分别统计、不合并、不加权，排名只在
+ * 同一人员类别内有效。被评列是主任、党支部书记、车间得分…而不是职工：参考表的
+ * 打分对象是职务/车间，职工名单不参与打分（见 docs/参考表.xlsx 与 0003 迁移）。
  *
- * 软删除后的数据仍然参与统计：被停用的部门、被评列、项点、票种都不会从结果里
+ * 软删除后的数据仍然参与统计：被停用的部门、被评列、项点、人员类别都不会从结果里
  * 消失，只有 `enabled` 标记变 false，保证历史成绩可读（设计文档第 15 节）。
  */
 import { computeResults } from '../lib/scoring.js';
@@ -25,12 +26,16 @@ export interface ResultCriterionScore {
 }
 
 export interface ResultRow {
+  /** 同一人员类别内按综合得分降序的排名；跨类别不可比，不输出跨类别排名 */
   rank: number;
+  ticketTypeId: string;
+  ticketTypeCode: string;
   /** 车间打分表唯一一格虚拟「得分」列为 null */
   voteColumnId: string | null;
   voteColumnName: string;
   /** 被评议人列是否启用；停用的列仍出现在结果里，便于解释历史成绩 */
   enabled: boolean;
+  /** 类别内综合得分：各项归一化分的等权平均 */
   comprehensiveScore: number;
   criteria: ResultCriterionScore[];
 }
@@ -49,7 +54,6 @@ export interface ResultsDto {
     id: string;
     code: string;
     name: string;
-    weightPercent: number;
   }>;
   sheetCount: number;
   generatedAt: string;
@@ -58,25 +62,32 @@ export interface ResultsDto {
 /** 结果页与导出共用的一次性计算结果。 */
 export interface DepartmentResults {
   dto: ResultsDto;
-  /** 各项明细（被评议人列 × 有成数据的评议项目），导出用 */
+  /** 各项明细（人员类别 × 被评议人列 × 有数据的评议项目），导出用 */
   details: Array<{
+    ticketTypeCode: string;
     voteColumnName: string;
     criterionName: string;
     rawScore: number;
     normalizedScore: number;
-    ticketTypes: string[];
   }>;
   /** 全部人员类别 + 是否真正参与计分，导出「参与人员类别说明」sheet 用 */
-  ticketTypes: Array<{ code: string; name: string; weightPercent: number; involved: boolean }>;
-  /** 人员类别说明明细（名称已填好），导出「人员类别单项明细 / 票别合计明细」sheet 用 */
+  ticketTypes: Array<{ code: string; name: string; involved: boolean }>;
+  /** 人员类别说明明细（名称已填好），导出「人员类别单项明细 / 合计明细」sheet 用 */
   perTicketType: {
     criteriaRows: Array<{
       ticketTypeCode: string;
       voteColumnName: string;
       criterionName: string;
       avg: number;
+      /** 该人员类别在本部门的已提交答卷数 */
+      sheetCount: number;
     }>;
-    columnRows: Array<{ ticketTypeCode: string; voteColumnName: string; average: number }>;
+    columnRows: Array<{
+      ticketTypeCode: string;
+      voteColumnName: string;
+      comprehensiveScore: number;
+      sheetCount: number;
+    }>;
   };
 }
 
@@ -133,7 +144,6 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
       minScore: criterion.minScore,
       maxScore: criterion.maxScore,
     })),
-    ticketTypes: ticketTypes.map((type) => ({ id: type.id, weightPercent: type.weightPercent })),
     sheets: sheets.map((sheet) => ({
       ticketTypeId: sheet.ticketTypeId,
       items: sheet.items.map((item) => ({
@@ -154,70 +164,99 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
       ? { name: '得分', enabled: true }
       : columnById.get(voteColumnId) ?? { name: '', enabled: false };
 
-  // 排名：综合得分降序，同分并列（1、2、2、4 式），同分内按列名稳定排序。
-  const sorted = [...scoring.voteColumns].sort((a, b) => {
-    if (b.comprehensiveScore !== a.comprehensiveScore) return b.comprehensiveScore - a.comprehensiveScore;
-    const nameA = columnMetaOf(a.voteColumnId).name;
-    const nameB = columnMetaOf(b.voteColumnId).name;
-    return nameA.localeCompare(nameB, 'zh-CN');
-  });
-
-  let rank = 0;
-  let previousScore: number | null = null;
-  const rows: ResultRow[] = sorted.map((column, index) => {
-    if (previousScore === null || column.comprehensiveScore !== previousScore) {
-      rank = index + 1;
-      previousScore = column.comprehensiveScore;
-    }
-    const meta = columnMetaOf(column.voteColumnId);
-    return {
-      rank,
-      voteColumnId: column.voteColumnId,
-      voteColumnName: meta?.name ?? '',
-      enabled: meta?.enabled ?? false,
-      comprehensiveScore: column.comprehensiveScore,
-      criteria: column.criteria.map((criterion) => ({
-        criterionId: criterion.criterionId,
-        criterionName: criterionById.get(criterion.criterionId)?.name ?? '',
-        rawScore: criterion.rawScore,
-        normalizedScore: criterion.normalizedScore,
-        participatingTicketTypeIds: criterion.participatingTicketTypeIds,
-      })),
-    };
-  });
-
   const codeOf = (ticketTypeId: string): string =>
     ticketTypeById.get(ticketTypeId)?.code ?? ticketTypeId;
 
+  // 该类别在该部门有几张已提交答卷（一码一票，一张表即一票）。
+  const sheetCountByTicketType = new Map<string, number>();
+  // 「人员类别|被评议人列」有打分记录：无票 ≠ 0 分，没发这类票的列不出行。
+  const scoredKeys = new Set<string>();
+  for (const sheet of sheets) {
+    sheetCountByTicketType.set(sheet.ticketTypeId, (sheetCountByTicketType.get(sheet.ticketTypeId) ?? 0) + 1);
+    for (const item of sheet.items) scoredKeys.add(`${sheet.ticketTypeId}|${item.voteColumnId}`);
+  }
+
+  // 顺序按人员类别配置顺序（sortOrder/code），与结果页、统计页一致。
+  const typeOrder = new Map(ticketTypes.map((type, index) => [type.id, index]));
+  const perType = [...scoring.perTicketType].sort(
+    (a, b) => (typeOrder.get(a.ticketTypeId) ?? 0) - (typeOrder.get(b.ticketTypeId) ?? 0),
+  );
+
+  // 行 = 人员类别 × 有票的被评列；排名只在该人员类别内比（综合得分降序、
+  // 同分并列 1、2、2、4 式，同分内按列名稳定排序）。
+  const rows: ResultRow[] = [];
+  for (const type of perType) {
+    const columns = type.voteColumns
+      .filter((column) => scoredKeys.has(`${type.ticketTypeId}|${column.voteColumnId}`))
+      .sort((a, b) => {
+        if (b.comprehensiveScore !== a.comprehensiveScore) return b.comprehensiveScore - a.comprehensiveScore;
+        const nameA = columnMetaOf(a.voteColumnId).name;
+        const nameB = columnMetaOf(b.voteColumnId).name;
+        return nameA.localeCompare(nameB, 'zh-CN');
+      });
+
+    let rank = 0;
+    let previousScore: number | null = null;
+    columns.forEach((column, index) => {
+      if (previousScore === null || column.comprehensiveScore !== previousScore) {
+        rank = index + 1;
+        previousScore = column.comprehensiveScore;
+      }
+      const meta = columnMetaOf(column.voteColumnId);
+      rows.push({
+        rank,
+        ticketTypeId: type.ticketTypeId,
+        ticketTypeCode: codeOf(type.ticketTypeId),
+        voteColumnId: column.voteColumnId,
+        voteColumnName: meta?.name ?? '',
+        enabled: meta?.enabled ?? false,
+        comprehensiveScore: column.comprehensiveScore,
+        criteria: column.criteria.map((criterion) => ({
+          criterionId: criterion.criterionId,
+          criterionName: criterionById.get(criterion.criterionId)?.name ?? '',
+          rawScore: criterion.rawScore,
+          normalizedScore: criterion.normalizedScore,
+          participatingTicketTypeIds: criterion.participatingTicketTypeIds,
+        })),
+      });
+    });
+  }
+
   const details = rows.flatMap((row) =>
     row.criteria.map((criterion) => ({
+      ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
       criterionName: criterion.criterionName,
       rawScore: criterion.rawScore,
       normalizedScore: criterion.normalizedScore,
-      ticketTypes: criterion.participatingTicketTypeIds.map(codeOf),
     })),
   );
 
   const involved = new Set(scoring.ticketTypesInvolved);
 
-  // 票别口径展开成带名称的行：单项（票种×被评对象×项点）与合计（票种×被评对象）。
+  // 人员类别口径展开成带名称的行：单项（类别 × 被评对象 × 项点）与合计（类别 × 被评对象）。
+  // 与结果页同一过滤：该类别没打过分的列不进导出，避免 0 分行挤占阅读。
+  const scoredColumnsOf = (type: (typeof perType)[number]) =>
+    type.voteColumns.filter((column) => scoredKeys.has(`${type.ticketTypeId}|${column.voteColumnId}`));
+
   const perTicketType = {
-    criteriaRows: scoring.perTicketType.flatMap((ticketType) =>
-      ticketType.voteColumns.flatMap((column) =>
+    criteriaRows: perType.flatMap((type) =>
+      scoredColumnsOf(type).flatMap((column) =>
         column.criteria.map((criterion) => ({
-          ticketTypeCode: codeOf(ticketType.ticketTypeId),
+          ticketTypeCode: codeOf(type.ticketTypeId),
           voteColumnName: columnMetaOf(column.voteColumnId).name,
           criterionName: criterionById.get(criterion.criterionId)?.name ?? '',
-          avg: criterion.avg,
+          avg: criterion.rawScore,
+          sheetCount: sheetCountByTicketType.get(type.ticketTypeId) ?? 0,
         })),
       ),
     ),
-    columnRows: scoring.perTicketType.flatMap((ticketType) =>
-      ticketType.voteColumns.map((column) => ({
-        ticketTypeCode: codeOf(ticketType.ticketTypeId),
+    columnRows: perType.flatMap((type) =>
+      scoredColumnsOf(type).map((column) => ({
+        ticketTypeCode: codeOf(type.ticketTypeId),
         voteColumnName: columnMetaOf(column.voteColumnId).name,
-        average: column.average,
+        comprehensiveScore: column.comprehensiveScore,
+        sheetCount: sheetCountByTicketType.get(type.ticketTypeId) ?? 0,
       })),
     ),
   };
@@ -239,7 +278,6 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
           id: type.id,
           code: type.code,
           name: type.name,
-          weightPercent: type.weightPercent,
         })),
       sheetCount: sheets.length,
       generatedAt: new Date().toISOString(),
@@ -248,7 +286,6 @@ export async function computeDepartmentResults(departmentId: string): Promise<De
     ticketTypes: ticketTypes.map((type) => ({
       code: type.code,
       name: type.name,
-      weightPercent: type.weightPercent,
       involved: involved.has(type.id),
     })),
     perTicketType,

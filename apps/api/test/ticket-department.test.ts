@@ -37,6 +37,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
+const { generateCode } = await import('../src/lib/code.js');
 const { cleanupRbac, createAdmin, createRole } = await import('./rbac-fixtures.js');
 
 /** 没有可用测试库就整组跳过。 */
@@ -114,7 +115,6 @@ async function makeEnabledTicketType(sessionId: string, label: string): Promise<
       sessionId,
       code: `${TAG}TT${nextSeq()}${label}`,
       name: `${TAG}人员类别-${label}`,
-      weightPercent: 100,
       enabled: true,
     },
   });
@@ -158,7 +158,7 @@ async function makeRawTicket(
   });
   const ticket = await prisma.ticket.create({
     data: {
-      code: `${TAG}CODE${nextSeq()}`,
+      code: generateCode(),
       ticketTypeId,
       batchId: batch.id,
       sessionId,

@@ -11,11 +11,11 @@ type RawQueryClient = Pick<PrismaClient, '$queryRaw'>;
 /**
  * 场次问卷模板（session_questionnaire_templates）的原生 SQL 读写层。
  *
- * 背景：Prisma 7.10 queryCompiler 对该模型的 API 调用（findUnique/create/upsert/
- * findMany 全部）会编译出引用不存在列的坏 SQL，报 P2022 "The column `(not available)`
- * does not exist"；同表原生 SQL 一切正常。已实测排除复合主键形态、字段名、中文默认值、
- * 模型定义位置等因素，根因未定位（生成器/编译器 bug）。因此该表读写一律走本模块，
- * 不要使用 prisma.sessionQuestionnaireTemplate。
+ * 背景：Prisma 7.10 queryCompiler 曾对该模型的 API 调用（findUnique/create/upsert/
+ * findMany 全部）编译出引用不存在列的坏 SQL，报 P2022 "The column `(not available)`
+ * does not exist"；同表原生 SQL 一切正常。2026-10-20 给 footerNote 补了
+ * `@map("footer_note")`，schema drift 已消除；P2022 是否由此彻底修复尚未验证，
+ * 因此该表读写仍走本模块，不要直接使用 prisma.sessionQuestionnaireTemplate。
  */
 
 /** 行的 camelCase 形态（与旧 Prisma 模型字段同名，调用方无感迁移）。 */

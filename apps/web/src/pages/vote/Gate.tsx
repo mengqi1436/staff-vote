@@ -179,9 +179,11 @@ function ClosedNotice({ status }: { status: VoteStatus | null }) {
 export function VoteGate() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  // 规范化用户输入：去空白与连字符、转大写（镜像后端 lib/code.ts 的 normalizeCode）。
-  const normalize = (raw: string) => raw.replace(/[\s-]/g, '').toUpperCase();
-  // 扫码链接形如 /?code=K7M2QP9X，进页面就带进输入框
+  // 规范化用户输入：NFKC（全角数字转半角）后只留数字，最多 12 位（与后端 lib/code.ts 一致）。
+  // 用 \D 一次去掉空格、连字符等分隔符，粘贴打印纸上的「1234 5678 9012」也能直接用；
+  // 限长放在归一化之后（不能用原生 maxLength：它会在去掉空格前截断，把码截短）。
+  const normalize = (raw: string) => raw.normalize('NFKC').replace(/\D/g, '').slice(0, 12);
+  // 扫码链接形如 /?code=123456789012，进页面就带进输入框
   const linkedCode = normalize(searchParams.get('code') ?? '');
 
   const [status, setStatus] = useState<VoteStatus | null>(null);
@@ -317,17 +319,18 @@ export function VoteGate() {
           <Input
             id="vote-code"
             value={code}
-            placeholder="请输入随机码"
+            placeholder="请输入 12 位随机码"
             autoComplete="off"
             spellCheck={false}
+            inputMode="numeric"
             aria-describedby="vote-code-hint"
             status={formError === null ? undefined : 'error'}
-            // 与后端 normalizeCode 保持一致：去空白、去连字符、转大写，让职工看到的就是要提交的
-            onChange={(event) => setCode(event.target.value.replace(/[\s-]/g, '').toUpperCase())}
+            // 与后端 normalizeCode 保持一致：只留数字、限长 12 位，让职工看到的就是要提交的
+            onChange={(event) => setCode(normalize(event.target.value))}
             style={{ textAlign: 'center' }}
           />
           <Typography.Paragraph id="vote-code-hint" type="secondary" style={{ margin: '8px 0 0' }}>
-            随机码不区分大小写，中间的空格与连字符可以照抄。
+            12 位数字，中间的空格可以照抄。
           </Typography.Paragraph>
 
           {formError === null ? null : (

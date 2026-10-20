@@ -39,7 +39,7 @@ export class ApiError extends Error {
     return new ApiError(409, code, message);
   }
 
-  /** 422：语义校验失败（请求形状合法但业务规则不满足，如时间窗顺序、权重合计）。 */
+  /** 422：语义校验失败（请求形状合法但业务规则不满足，如时间窗顺序、人员类别分配为空）。 */
   static unprocessable(message: string, code: string): ApiError {
     return new ApiError(422, code, message);
   }

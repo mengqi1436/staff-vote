@@ -26,7 +26,6 @@ vi.mock('../../../lib/api.js', async () => {
             id: 'a',
             code: 'A',
             name: '领导班子',
-            weightPercent: 100,
             sortOrder: 1,
             enabled: true,
           },
@@ -77,7 +76,7 @@ const DEPARTMENTS = [
 
 const UNUSED_ROW = {
   id: 'k1',
-  code: 'ABCD2345',
+  code: '123456789012',
   status: 'unused' as const,
   usedAt: null,
   createdAt: '2026-09-19T02:00:00.000Z',

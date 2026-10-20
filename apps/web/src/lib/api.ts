@@ -200,7 +200,6 @@ export interface TicketPlanItem {
   /** 人员类别编码，评议内唯一（1-8 字符） */
   code: string;
   name: string;
-  weightPercent: number;
   /** 本人员类别要发放的随机码数量；0 = 只建人员类别不发码 */
   count: number;
 }
@@ -238,7 +237,6 @@ export interface TicketTypeDto {
   id: string;
   code: string;
   name: string;
-  weightPercent: number;
   sortOrder: number;
   enabled: boolean;
   /** 已发放数量，仅列表接口返回 */
@@ -250,10 +248,10 @@ export interface TicketTypeDto {
 /**
  * 投票登录状态里的人员类别视图。
  *
- * 后端只返回这四项（不含 sortOrder / enabled），因此不能用完整的 TicketTypeDto 描述：
+ * 后端只返回这三项（不含 sortOrder / enabled），因此不能用完整的 TicketTypeDto 描述：
  * 类型上存在、运行时恒为 undefined 的字段会误导调用方写出永远不成立的判断。
  */
-export type VoteTicketTypeDto = Pick<TicketTypeDto, 'id' | 'code' | 'name' | 'weightPercent'>;
+export type VoteTicketTypeDto = Pick<TicketTypeDto, 'id' | 'code' | 'name'>;
 
 export interface VoteSessionResult {
   token: string;
@@ -402,7 +400,6 @@ export interface StatsOverview {
     id: string;
     code: string;
     name: string;
-    weightPercent: number;
     issued: number;
     used: number;
     unused: number;
@@ -434,9 +431,9 @@ export interface SampleStatRowDto {
   voteColumnId: string;
   /** 被评对象：个人表为被评议人列名（主任…），车间表为车间名 */
   targetName: string;
-  /** 人员类别 ID；「ABC汇总」行为 null */
-  ticketTypeId: string | null;
-  /** 人员类别显示：A / B / C /「ABC汇总」 */
+  /** 人员类别 ID（不同类别分别统计，没有汇总行） */
+  ticketTypeId: string;
+  /** 人员类别显示：A / B / C */
   ticketCode: string;
   /** 各评议项目得分，顺序与 criteriaNames 对齐 */
   scores: number[];
@@ -444,7 +441,7 @@ export interface SampleStatRowDto {
   total: number;
   /** 综合评价得分 */
   comprehensiveScore: number;
-  /** 综合评价得分排序（组内同分并列） */
+  /** 同一人员类别内的综合评价得分排名（同分并列） */
   rank: number;
 }
 
@@ -472,12 +469,18 @@ export interface CriterionScoreDto {
 }
 
 export interface ResultRowDto {
+  /** 同一人员类别内按综合得分降序的排名；跨类别不可比，后端不输出跨类别排名 */
   rank: number;
-  voteColumnId: string;
+  /** 本行所属人员类别；结果按类别分别统计，不做跨类合并 */
+  ticketTypeId: string;
+  ticketTypeCode: string;
+  /** 车间打分表的虚拟「得分」列为 null */
+  voteColumnId: string | null;
   /** 被评对象（被评议人列名：主任、党支部书记、车间得分…） */
   voteColumnName: string;
   /** 该被评议人列是否仍在启用；停用的列仍出现在结果里，便于解释历史成绩 */
   enabled: boolean;
+  /** 类别内综合得分：各项归一化分的等权平均 */
   comprehensiveScore: number;
   criteria: CriterionScoreDto[];
 }
@@ -486,7 +489,7 @@ export interface ResultsDto {
   department: DepartmentBrief;
   criteria: Array<{ id: string; name: string; minScore: number; maxScore: number; enabled: boolean }>;
   rows: ResultRowDto[];
-  ticketTypesInvolved: Array<{ id: string; code: string; name: string; weightPercent: number }>;
+  ticketTypesInvolved: Array<{ id: string; code: string; name: string }>;
   sheetCount: number;
   generatedAt: string;
 }
@@ -630,8 +633,8 @@ export const adminApi = {
     remove: (id: string) => request<void>(`/admin/sessions/${id}`, { method: 'DELETE' }),
     /**
      * 人员类别规划（建场向导第 3 步）：本次提交集合 = 启用人员类别全集，
-     * 逐人员类别 upsert 并按 count 建批发码（count=0 只建人员类别）；
-     * 启用人员类别权重合计必须恰为 100，违反返回 422 WEIGHT_SUM。
+     * 逐人员类别 upsert 并按 count 建批发码（count=0 只建人员类别）。
+     * 人员类别只决定发码数量，不再有计分占比字段。
      */
     ticketPlan: (sessionId: string, types: TicketPlanItem[]) =>
       request<TicketPlanResult>(`/admin/sessions/${sessionId}/ticket-plan`, {

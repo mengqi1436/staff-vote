@@ -13,7 +13,7 @@ import { ErrorState, LoadingState } from './shared.js';
  *
  * 评议会结束后这份表要签字归档，所以它必须是一份正式表格，而不是「网页的打印版」：
  *   抬头（单位，取 system.title）→ 表名 → 制表信息行
- *   → 表体（标准 1px 实线打印表格）→ 口径注（写清计分口径与参与票种）→ 签字栏。
+ *   → 表体（标准 1px 实线打印表格）→ 口径注（写清计分口径与参与人员类别）→ 签字栏。
  *
  * 打印靠浏览器原生「打印 / 另存为 PDF」，不引入 PDF 库；交互控件加 .no-print，
  * 由 @media print 隐藏（见 styles/global.css）。表格宽，默认按 A4 横向出纸。
@@ -159,9 +159,7 @@ export function AdminPrintSheet() {
   }
 
   const involvedText = data.ticketTypesInvolved.length
-    ? data.ticketTypesInvolved
-        .map((type) => `${type.name}（${type.code}，权重 ${type.weightPercent}%）`)
-        .join('、')
+    ? data.ticketTypesInvolved.map((type) => `${type.name}（${type.code}）`).join('、')
     : '暂无（本部门尚未收到任何一张票）';
 
   return (
@@ -204,7 +202,7 @@ export function AdminPrintSheet() {
 
         {data.ticketTypesInvolved.length === 0 ? (
           <p style={{ margin: '12px 0 0', fontSize: 12 }}>
-            本表尚未收到任何票：参与计算的票种为空，各项得分与综合得分一栏均为空。
+            本表尚未收到任何票：参与计算的人员类别为空，各项得分与综合得分一栏均为空。
           </p>
         ) : null}
 
@@ -224,8 +222,9 @@ export function AdminPrintSheet() {
           <table className="sheet-table">
             <thead>
               <tr>
-                <th className="num" style={{ width: 64 }}>
-                  排名
+                <th style={{ width: 96 }}>人员类别</th>
+                <th className="num" style={{ width: 96 }}>
+                  类别内排名
                 </th>
                 <th style={{ width: 160 }}>被评对象</th>
                 {data.criteria.map((criterion) => (
@@ -243,7 +242,8 @@ export function AdminPrintSheet() {
             </thead>
             <tbody>
               {data.rows.map((row) => (
-                <tr key={row.voteColumnId}>
+                <tr key={`${row.ticketTypeId}|${row.voteColumnId ?? 'score'}`}>
+                  <td>{row.ticketTypeCode}</td>
                   <td className="num">
                     <span className="tabular">{row.rank}</span>
                   </td>
@@ -269,21 +269,24 @@ export function AdminPrintSheet() {
         <div style={{ marginTop: 16, fontSize: 12, fontWeight: 600 }}>口径注</div>
         <ol style={{ margin: '4px 0 0', paddingLeft: 20, fontSize: 12, lineHeight: 1.8 }}>
           <li>
-            表中各项得分为「票种加权后的原始分」，仍落在该项点表头标注的区间内：某项得分 =
-            Σ(该票种在该项的均分 × 票种权重) ÷ Σ(票种权重)，只取在该项点真正有票的票种。综合得分为百分制。
+            结果按人员类别分别统计，不做跨类合并：表中每一行是一个人员类别在一个被评对象上的成绩。
+            排名只在同一人员类别内比较，不同类别之间不可比。
+          </li>
+          <li>
+            表中各项得分为该人员类别在本项点已提交答卷的平均原始分，仍落在该项点表头标注的区间内。
           </li>
           <li>
             综合得分口径：各项先按自身区间归一化到百分制（(得分 − 起评分) ÷ (满分 − 起评分) ×
-            100），再取等权平均。某项点在本部门一张票都没有时，该项不参与平均，也不会按 0
+            100），再取等权平均。某项点在该类别一张票都没有时，该项不参与平均，也不会按 0
             分计入；各项满分一致时即为算术平均。
           </li>
           <li>
-            弃权、不填按 0 分计入：某票种在本部门只要有已提交的表，该票种在本部门的每一格都参与平均，
+            弃权、不填按 0 分计入：某人员类别在本部门只要有已提交的表，该类别的每一格都参与平均，
             某张表缺某一格即按 0 分计入该格。
           </li>
           <li>
-            实际参与计算的票种：{involvedText}
-            。某票种在本部门一张表都没有时整票种不参与（那是没发这种票，不是弃权）。
+            实际参与计算的人员类别：{involvedText}
+            。某人员类别在本部门一张表都没有时该类不出现（那是没发这类码，不是弃权）。
           </li>
           <li>
             本表数据取自本部门已提交的评分记录，与「导出 Excel」同源；被评对象是职务/车间（被评列），不是具体职工。

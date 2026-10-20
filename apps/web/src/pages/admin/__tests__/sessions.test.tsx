@@ -123,7 +123,7 @@ vi.mock('../../../lib/api.js', async () => {
         // 契约 D：人员类别规划返回建种与发码结果
         ticketPlan: vi.fn(async () => ({
           ticketTypes: [
-            { id: 't1', code: 'A', name: '职工代表', weightPercent: 100, sortOrder: 1, enabled: true },
+            { id: 't1', code: 'A', name: '职工代表', sortOrder: 1, enabled: true },
           ],
           generated: [{ ticketTypeId: 't1', batchId: 'b1', count: 10 }],
         })),
@@ -274,7 +274,7 @@ describe('评议管理页', () => {
     );
   }, 20_000);
 
-  it('新建评议向导第 3 步：权重合计实时校验，达 100 后提交 ticketPlan 并显示发码数', async () => {
+  it('新建评议向导第 3 步：只填编码/名称/数量即可提交 ticketPlan 并显示发码数', async () => {
     const user = userEvent.setup();
     renderWithRoutes(<Route path="/admin/sessions" element={<AdminSessions />} />, '/admin/sessions');
 
@@ -290,21 +290,17 @@ describe('评议管理页', () => {
     await user.click(await screen.findByRole('button', { name: /添加人员类别/ }));
     await user.type(await screen.findByLabelText('人员类别编码（第 1 行）'), 'A');
     await user.type(screen.getByLabelText('人员类别名称（第 1 行）'), '职工代表');
-    await user.type(screen.getByLabelText('人员类别权重（第 1 行）'), '80');
     await user.type(screen.getByLabelText('发码数量（第 1 行）'), '10');
 
-    // 权重合计实时校验：80% 时按钮禁用并写清差额
-    expect(screen.getByText(/还差 20%/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /保存人员类别并生成随机码/ })).toBeDisabled();
-
-    await user.clear(screen.getByLabelText('人员类别权重（第 1 行）'));
-    await user.type(screen.getByLabelText('人员类别权重（第 1 行）'), '100');
-    expect(await screen.findByText(/符合要求/)).toBeInTheDocument();
+    // 人员类别只决定发码数量：没有权重输入，填完编码/名称即可提交
+    expect(screen.queryByLabelText('人员类别权重（第 1 行）')).toBeNull();
+    expect(screen.queryByText(/权重合计/)).toBeNull();
+    expect(screen.getByRole('button', { name: /保存人员类别并生成随机码/ })).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: /保存人员类别并生成随机码/ }));
     await waitFor(() =>
       expect(vi.mocked(adminApi.sessions.ticketPlan)).toHaveBeenCalledWith('s9', [
-        { code: 'A', name: '职工代表', weightPercent: 100, count: 10 },
+        { code: 'A', name: '职工代表', count: 10 },
       ]),
     );
 
@@ -358,7 +354,7 @@ describe('评议管理页', () => {
 
   it('开始投票被 SESSION_INCOMPLETE 拒绝时，弹窗列出缺项清单并引导回工作台（契约 M）', async () => {
     vi.mocked(adminApi.sessions.start).mockRejectedValueOnce(
-      new ApiError(409, 'SESSION_INCOMPLETE', '1. 启用部门不足；2. 启用人员类别权重合计未达 100%'),
+      new ApiError(409, 'SESSION_INCOMPLETE', '1. 启用部门不足；2. 启用人员类别不足'),
     );
     const user = userEvent.setup();
     renderWithRoutes(<Route path="/admin/sessions" element={<AdminSessions />} />, '/admin/sessions');
@@ -368,7 +364,7 @@ describe('评议管理页', () => {
 
     // confirm 弹窗的标题在 Modal 壳与 confirm 体内各渲染一份，用 findAllByText
     expect(await screen.findAllByText(/配置未完成，还不能开始投票/)).not.toHaveLength(0);
-    expect(screen.getByText(/启用人员类别权重合计未达 100%/)).toBeInTheDocument();
+    expect(screen.getByText(/启用人员类别不足/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '去工作台继续配置' })).toBeInTheDocument();
   });
 
@@ -501,14 +497,14 @@ describe('评议工作台', () => {
     expect(screen.getByText(/开放时间：/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /编辑开放时间/ })).toBeInTheDocument();
 
-    // 页签顺序：打分表 → 人员类别权重 → 随机码 → 统计 → 结果导出
+    // 页签顺序：打分表 → 人员类别 → 随机码 → 统计 → 结果导出
     //（「部门」「评议项目」页签已移除：场内部门建场自动生成、评议项目并入打分表网格；
     //  「职工」页签已迁到全局人员管理 /admin/employees）
     const labels = screen
       .getAllByRole('tab')
       .map((tab) => tab.textContent)
       .filter((text) => text !== null);
-    expect(labels).toEqual(['打分表', '人员类别权重', '随机码', '统计', '结果导出']);
+    expect(labels).toEqual(['打分表', '人员类别', '随机码', '统计', '结果导出']);
 
     // 路由评议已同步进上下文：初始「打分表」页签按当前评议拉取场内部门
     await waitFor(() =>

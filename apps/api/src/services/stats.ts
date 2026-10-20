@@ -20,7 +20,6 @@ export interface StatsTicketTypeRow {
   id: string;
   code: string;
   name: string;
-  weightPercent: number;
   issued: number;
   used: number;
   unused: number;
@@ -178,7 +177,6 @@ export async function getStatsOverview(sessionId: string): Promise<StatsOverview
         id: type.id,
         code: type.code,
         name: type.name,
-        weightPercent: type.weightPercent,
         issued: count.issued,
         used: count.used,
         unused: count.unused,

@@ -4,69 +4,68 @@ import { computeResults, type ScoringInput } from '../src/lib/scoring.js';
 /**
  * 计分口径测试。
  *
- * 锁定的是「参考表口径 + 设计文档第 13 节」：票种加权、项点归一化后等权平均，
- * 以及参考表明确要求的「弃权、不填视为 0 分」。口径若被改动，这些断言必须一起改，
- * 不允许静默漂移。
+ * 锁定的是「参考表口径 + 设计文档第 13 节」：**按人员类别分别统计、不跨类别合并、
+ * 不加权**；类别内多张答卷同格取均分；项点归一化后等权平均；以及参考表明确要求的
+ * 「弃权、不填视为 0 分」。口径若被改动，这些断言必须一起改，不允许静默漂移。
  */
 
 function input(partial: Partial<ScoringInput>): ScoringInput {
   return {
     voteColumnIds: [],
     criteria: [],
-    ticketTypes: [],
     sheets: [],
     ...partial,
   };
 }
 
-describe('computeResults —— 人员类别加权', () => {
+describe('computeResults —— 按人员类别分别统计（不合并、不加权）', () => {
   it('单一人员类别时，结果等于该人员类别均分', () => {
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [{ ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 80 }] }],
       }),
     );
 
-    const column = result.voteColumns[0];
+    const column = result.perTicketType[0]?.voteColumns[0];
+    expect(result.perTicketType.map((row) => row.ticketTypeId)).toEqual(['tA']);
     expect(column?.criteria[0]?.rawScore).toBe(80);
+    expect(column?.criteria[0]?.normalizedScore).toBe(80);
     expect(column?.comprehensiveScore).toBe(80);
   });
 
-  it('多人员类别按权重百分比加权', () => {
-    // A 票 50% 打 90 分；B 票 50% 打 70 分 → 0.5*90 + 0.5*70 = 80
+  it('多人员类别分别输出各自得分，不产生任何合并值', () => {
+    // A 打 90、B 打 50：分别输出 90 与 50。旧口径会合并成一个跨类别总分
+    // （此处若按等权合并是 70、按权重合并会是别的数），新口径下两者都不存在。
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [
-          { id: 'tA', weightPercent: 50 },
-          { id: 'tB', weightPercent: 50 },
-        ],
         sheets: [
           { ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 90 }] },
-          { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 70 }] },
+          { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 50 }] },
         ],
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(80);
+    const byType = new Map(result.perTicketType.map((row) => [row.ticketTypeId, row]));
+    expect(byType.get('tA')?.voteColumns[0]?.criteria[0]?.rawScore).toBe(90);
+    expect(byType.get('tB')?.voteColumns[0]?.criteria[0]?.rawScore).toBe(50);
+    expect(byType.get('tA')?.voteColumns[0]?.comprehensiveScore).toBe(90);
+    expect(byType.get('tB')?.voteColumns[0]?.comprehensiveScore).toBe(50);
+    // 跨类别合并口径已整体删除：不存在任何 70 之类的合并结果
+    expect((result as unknown as Record<string, unknown>).voteColumns).toBeUndefined();
+    expect(result.perTicketType).toHaveLength(2);
   });
 
-  it('某人员类别零票时，按实际有票的人员类别重新归一化，不把缺失人员类别当 0 分', () => {
-    // A 票占 50% 但没有任何 A 票提交；只剩 B(30) 与 C(20)。
-    // 归一化后： (75*30 + 85*20) / 50 = 79，而不是 (0*50 + 75*30 + 85*20)/100 = 39.5
+  it('零票人员类别不参与：既不出现，也不当 0 分拉低同类别的其他人', () => {
+    // 只有 B(75) 与 C(85) 有票；A 一张表都没有。旧口径会把两者归一化成 80，
+    // 新口径下各自独立：B 输出 75、C 输出 85，A 不出现。
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [
-          { id: 'tA', weightPercent: 50 },
-          { id: 'tB', weightPercent: 30 },
-          { id: 'tC', weightPercent: 20 },
-        ],
         sheets: [
           { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 75 }] },
           { ticketTypeId: 'tC', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 85 }] },
@@ -74,8 +73,8 @@ describe('computeResults —— 人员类别加权', () => {
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(79);
-    expect(result.voteColumns[0]?.criteria[0]?.participatingTicketTypeIds).toEqual(['tB', 'tC']);
+    expect(result.perTicketType.map((row) => row.ticketTypeId)).toEqual(['tB', 'tC']);
+    expect(result.perTicketType.map((row) => row.voteColumns[0]?.criteria[0]?.rawScore)).toEqual([75, 85]);
     expect(result.ticketTypesInvolved).toEqual(['tB', 'tC']);
   });
 
@@ -85,7 +84,6 @@ describe('computeResults —— 人员类别加权', () => {
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [{ id: 'tB', weightPercent: 100 }],
         sheets: [
           { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 60 }] },
           { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 90 }] },
@@ -94,26 +92,8 @@ describe('computeResults —— 人员类别加权', () => {
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(80);
-  });
-
-  it('权重为 0 的人员类别不参与计算', () => {
-    const result = computeResults(
-      input({
-        voteColumnIds: ['v1'],
-        criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [
-          { id: 'tA', weightPercent: 0 },
-          { id: 'tB', weightPercent: 100 },
-        ],
-        sheets: [
-          { ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 10 }] },
-          { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 90 }] },
-        ],
-      }),
-    );
-
-    expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(90);
+    expect(result.perTicketType[0]?.voteColumns[0]?.criteria[0]?.rawScore).toBe(80);
+    expect(result.perTicketType[0]?.voteColumns[0]?.comprehensiveScore).toBe(80);
   });
 });
 
@@ -126,7 +106,6 @@ describe('computeResults —— 弃权、不填视为 0 分（参考表说明）
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [{ id: 'tB', weightPercent: 100 }],
         sheets: [
           { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 60 }] },
           { ticketTypeId: 'tB', items: [] },
@@ -134,7 +113,7 @@ describe('computeResults —— 弃权、不填视为 0 分（参考表说明）
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(30);
+    expect(result.perTicketType[0]?.voteColumns[0]?.criteria[0]?.rawScore).toBe(30);
   });
 
   it('缺格按 0 分只影响本格，同表其他格照常计分', () => {
@@ -146,7 +125,6 @@ describe('computeResults —— 弃权、不填视为 0 分（参考表说明）
           { id: 'c1', minScore: 0, maxScore: 100 },
           { id: 'c2', minScore: 0, maxScore: 100 },
         ],
-        ticketTypes: [{ id: 'tB', weightPercent: 100 }],
         sheets: [
           {
             ticketTypeId: 'tB',
@@ -160,23 +138,23 @@ describe('computeResults —— 弃权、不填视为 0 分（参考表说明）
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria.find((c) => c.criterionId === 'c1')?.rawScore).toBe(70);
-    expect(result.voteColumns[0]?.criteria.find((c) => c.criterionId === 'c2')?.rawScore).toBe(20);
+    const criteria = result.perTicketType[0]?.voteColumns[0]?.criteria;
+    expect(criteria?.find((c) => c.criterionId === 'c1')?.rawScore).toBe(70);
+    expect(criteria?.find((c) => c.criterionId === 'c2')?.rawScore).toBe(20);
   });
 
-  it('本部门一张表都没有时，评议项目结果为空且综合得分为 0（不是 0 分参与）', () => {
-    // 没发过票与「投了但弃权」是两件事：一张表都没有时整票种跳过，不制造 0 分。
+  it('本部门一张表都没有时不产生任何人员类别结果（不是 0 分参与）', () => {
+    // 没发过票与「投了但弃权」是两件事：一张表都没有时整个类别都不出现。
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [],
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria).toEqual([]);
-    expect(result.voteColumns[0]?.comprehensiveScore).toBe(0);
+    expect(result.perTicketType).toEqual([]);
+    expect(result.ticketTypesInvolved).toEqual([]);
   });
 });
 
@@ -187,13 +165,14 @@ describe('computeResults —— 评议项目间汇总', () => {
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 60, maxScore: 100 }],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [{ ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 80 }] }],
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria[0]?.rawScore).toBe(80);
-    expect(result.voteColumns[0]?.criteria[0]?.normalizedScore).toBe(50);
+    const column = result.perTicketType[0]?.voteColumns[0];
+    expect(column?.criteria[0]?.rawScore).toBe(80);
+    expect(column?.criteria[0]?.normalizedScore).toBe(50);
+    expect(column?.comprehensiveScore).toBe(50);
   });
 
   it('各项满分不同时归一化到百分制后再等权平均', () => {
@@ -206,7 +185,6 @@ describe('computeResults —— 评议项目间汇总', () => {
           { id: 'c1', minScore: 0, maxScore: 100 },
           { id: 'c2', minScore: 0, maxScore: 20 },
         ],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [
           {
             ticketTypeId: 'tA',
@@ -219,8 +197,9 @@ describe('computeResults —— 评议项目间汇总', () => {
       }),
     );
 
-    expect(result.voteColumns[0]?.criteria.map((c) => c.normalizedScore)).toEqual([90, 80]);
-    expect(result.voteColumns[0]?.comprehensiveScore).toBe(85);
+    const column = result.perTicketType[0]?.voteColumns[0];
+    expect(column?.criteria.map((c) => c.normalizedScore)).toEqual([90, 80]);
+    expect(column?.comprehensiveScore).toBe(85);
   });
 
   it('非法区间（max <= min）不产生 NaN', () => {
@@ -228,29 +207,24 @@ describe('computeResults —— 评议项目间汇总', () => {
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 100, maxScore: 100 }],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [
           { ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 100 }] },
         ],
       }),
     );
 
-    expect(Number.isNaN(result.voteColumns[0]?.comprehensiveScore)).toBe(false);
-    expect(result.voteColumns[0]?.comprehensiveScore).toBe(100);
+    expect(Number.isNaN(result.perTicketType[0]?.voteColumns[0]?.comprehensiveScore)).toBe(false);
+    expect(result.perTicketType[0]?.voteColumns[0]?.comprehensiveScore).toBe(100);
   });
 });
 
-describe('computeResults —— perTicketType 人员类别说明（人员类别×被评议人列×评议项目 / 人员类别×被评议人列）', () => {
-  it('每人员类别对每格输出平均分，人员类别对列输出均分', () => {
-    // tA 对 v1·c1 打 90；tB 两张表打 60 / 90 → 75。
+describe('computeResults —— perTicketType 人员类别结果（人员类别×被评议人列×评议项目 / 人员类别×被评议人列）', () => {
+  it('每人员类别对每格输出平均分与归一化分，人员类别对列输出类别内综合分', () => {
+    // tA 对 v1·c1 打 90；tB 两张表打 60 / 90 → 75。两者互不影响。
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [
-          { id: 'tA', weightPercent: 50 },
-          { id: 'tB', weightPercent: 50 },
-        ],
         sheets: [
           { ticketTypeId: 'tA', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 90 }] },
           { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 60 }] },
@@ -260,20 +234,21 @@ describe('computeResults —— perTicketType 人员类别说明（人员类别�
     );
 
     const byType = new Map(result.perTicketType.map((row) => [row.ticketTypeId, row]));
-    expect(byType.get('tA')?.voteColumns[0]?.criteria[0]?.avg).toBe(90);
-    expect(byType.get('tA')?.voteColumns[0]?.average).toBe(90);
-    expect(byType.get('tB')?.voteColumns[0]?.criteria[0]?.avg).toBe(75);
-    expect(byType.get('tB')?.voteColumns[0]?.average).toBe(75);
+    expect(byType.get('tA')?.voteColumns[0]?.criteria[0]?.rawScore).toBe(90);
+    expect(byType.get('tA')?.voteColumns[0]?.criteria[0]?.normalizedScore).toBe(90);
+    expect(byType.get('tA')?.voteColumns[0]?.comprehensiveScore).toBe(90);
+    expect(byType.get('tB')?.voteColumns[0]?.criteria[0]?.rawScore).toBe(75);
+    expect(byType.get('tB')?.voteColumns[0]?.criteria[0]?.normalizedScore).toBe(75);
+    expect(byType.get('tB')?.voteColumns[0]?.comprehensiveScore).toBe(75);
   });
 
   it('缺格计 0 进入平均，多列多格相互独立', () => {
     // tB 两张表：一张填 v1·c1=80，另一张全缺 → c1 均分 40。
-    // v2 没有任何票填过 → 两格都是 0，列均分 0。
+    // v2 没有任何票填过 → 该格是 0，且没有参与人员类别（无票 ≠ 0 分，由调用方过滤）。
     const result = computeResults(
       input({
         voteColumnIds: ['v1', 'v2'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [{ id: 'tB', weightPercent: 100 }],
         sheets: [
           { ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 80 }] },
           { ticketTypeId: 'tB', items: [] },
@@ -281,15 +256,17 @@ describe('computeResults —— perTicketType 人员类别说明（人员类别�
       }),
     );
 
-    const column = result.perTicketType[0]?.voteColumns;
-    expect(column?.find((c) => c.voteColumnId === 'v1')?.criteria[0]?.avg).toBe(40);
-    expect(column?.find((c) => c.voteColumnId === 'v1')?.average).toBe(40);
-    expect(column?.find((c) => c.voteColumnId === 'v2')?.criteria[0]?.avg).toBe(0);
-    expect(column?.find((c) => c.voteColumnId === 'v2')?.average).toBe(0);
+    const columns = result.perTicketType[0]?.voteColumns;
+    expect(columns?.find((c) => c.voteColumnId === 'v1')?.criteria[0]?.rawScore).toBe(40);
+    expect(columns?.find((c) => c.voteColumnId === 'v1')?.comprehensiveScore).toBe(40);
+    expect(columns?.find((c) => c.voteColumnId === 'v1')?.criteria[0]?.participatingTicketTypeIds).toEqual(['tB']);
+    expect(columns?.find((c) => c.voteColumnId === 'v2')?.criteria[0]?.rawScore).toBe(0);
+    expect(columns?.find((c) => c.voteColumnId === 'v2')?.comprehensiveScore).toBe(0);
+    expect(columns?.find((c) => c.voteColumnId === 'v2')?.criteria[0]?.participatingTicketTypeIds).toEqual([]);
   });
 
-  it('列内均分是各格平均分的等权平均（round2 一致）', () => {
-    // v1 上 c1 均分 80、c2 均分 75 → 列均分 77.5
+  it('类别内综合分是各格平均分的等权平均（round2 一致）', () => {
+    // v1 上 c1 均分 80、c2 均分 75 → 类别内综合 77.5
     const result = computeResults(
       input({
         voteColumnIds: ['v1'],
@@ -297,7 +274,6 @@ describe('computeResults —— perTicketType 人员类别说明（人员类别�
           { id: 'c1', minScore: 0, maxScore: 100 },
           { id: 'c2', minScore: 0, maxScore: 100 },
         ],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [
           {
             ticketTypeId: 'tA',
@@ -311,7 +287,35 @@ describe('computeResults —— perTicketType 人员类别说明（人员类别�
     );
 
     const column = result.perTicketType[0]?.voteColumns[0];
-    expect(column?.average).toBe(77.5);
+    expect(column?.criteria.map((c) => c.rawScore)).toEqual([80, 75]);
+    expect(column?.comprehensiveScore).toBe(77.5);
+  });
+
+  it('类别内综合分用归一化分等权平均，不是原始分等权平均', () => {
+    // c1 满分 100 得 90 → 90；c2 满分 20 得 16 → 80。
+    // 归一化等权 = 85；若错用原始分等权则是 (90+16)/2 = 53。
+    const result = computeResults(
+      input({
+        voteColumnIds: ['v1'],
+        criteria: [
+          { id: 'c1', minScore: 0, maxScore: 100 },
+          { id: 'c2', minScore: 0, maxScore: 20 },
+        ],
+        sheets: [
+          {
+            ticketTypeId: 'tA',
+            items: [
+              { voteColumnId: 'v1', criterionId: 'c1', score: 90 },
+              { voteColumnId: 'v1', criterionId: 'c2', score: 16 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const column = result.perTicketType[0]?.voteColumns[0];
+    expect(column?.comprehensiveScore).toBe(85);
+    expect(column?.comprehensiveScore).not.toBe(53);
   });
 
   it('零人员类别排除：一张表都没有的人员类别不出现在 perTicketType', () => {
@@ -319,15 +323,12 @@ describe('computeResults —— perTicketType 人员类别说明（人员类别�
       input({
         voteColumnIds: ['v1'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [
-          { id: 'tA', weightPercent: 50 },
-          { id: 'tB', weightPercent: 50 },
-        ],
         sheets: [{ ticketTypeId: 'tB', items: [{ voteColumnId: 'v1', criterionId: 'c1', score: 70 }] }],
       }),
     );
 
     expect(result.perTicketType.map((row) => row.ticketTypeId)).toEqual(['tB']);
+    expect(result.ticketTypesInvolved).toEqual(['tB']);
   });
 });
 
@@ -337,7 +338,6 @@ describe('computeResults —— 多被评议人列隔离', () => {
       input({
         voteColumnIds: ['v1', 'v2'],
         criteria: [{ id: 'c1', minScore: 0, maxScore: 100 }],
-        ticketTypes: [{ id: 'tA', weightPercent: 100 }],
         sheets: [
           {
             ticketTypeId: 'tA',
@@ -350,7 +350,8 @@ describe('computeResults —— 多被评议人列隔离', () => {
       }),
     );
 
-    expect(result.voteColumns.find((c) => c.voteColumnId === 'v1')?.comprehensiveScore).toBe(100);
-    expect(result.voteColumns.find((c) => c.voteColumnId === 'v2')?.comprehensiveScore).toBe(20);
+    const columns = result.perTicketType[0]?.voteColumns;
+    expect(columns?.find((c) => c.voteColumnId === 'v1')?.comprehensiveScore).toBe(100);
+    expect(columns?.find((c) => c.voteColumnId === 'v2')?.comprehensiveScore).toBe(20);
   });
 });

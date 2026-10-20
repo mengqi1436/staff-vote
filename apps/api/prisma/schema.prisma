@@ -309,19 +309,17 @@ model Criterion {
   @@map("criteria")
 }
 
-/// 票种（A / B / C ...）。weightPercent 即「占比」，用于最终加权求和。
+/// 人员类别（A / B / C ...）。只决定发码数量，不参与计分加权。
 model TicketType {
-  id            String   @id @default(uuid(7))
-  sessionId     String   @map("session_id")
-  /// 票种编码在场次内唯一：不同场次可以各自有 A/B/C。
-  code          String
-  name          String
-  /// 启用票种的 weightPercent 合计必须为 100，由服务层在写入时校验
-  weightPercent Int      @map("weight_percent")
-  sortOrder     Int      @default(0) @map("sort_order")
-  enabled       Boolean  @default(true)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id        String   @id @default(uuid(7))
+  sessionId String   @map("session_id")
+  /// 人员类别编码在场次内唯一：不同场次可以各自有 A/B/C。
+  code      String
+  name      String
+  sortOrder Int      @default(0) @map("sort_order")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   session     VoteSession   @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   tickets     Ticket[]
@@ -396,7 +394,7 @@ model Ticket {
 
 /// 一张提交的打分表。
 /// 匿名边界：本表**不含** ticketId / IP / UA，因此无法从评分反推投票人；
-/// 票种只保留到类别粒度（A/B/C），这是加权求和所必需的最小信息。
+/// 人员类别只保留到类别粒度（A/B/C），这是按类别分别统计所必需的最小信息。
 model ScoreSheet {
   id           String   @id @default(uuid(7))
   departmentId String   @map("department_id")
@@ -471,7 +469,7 @@ model Setting {
   @@map("settings")
 }
 
-/// 管理动作留痕：发码、改权重、改开放时间。
+/// 管理动作留痕：发码、启停人员类别、改开放时间。
 model AuditLog {
   id        String   @id @default(uuid(7))
   action    String
@@ -486,10 +484,11 @@ model AuditLog {
 /// 所有同类型部门共用：改一处，全场生效（0010 起取代部门级三件套字段）。
 model SessionQuestionnaireTemplate {
   /// 单列代理主键 + 下方 @@unique 保证「每场次每类型一套模板」。
-  /// 注意：Prisma 7.10 queryCompiler 对本模型的 API 调用会编译出引用不存在列的
-  /// 坏 SQL（P2022 "column (not available)"）；已实测排除复合主键形态、字段名、
-  /// 非默认值、模型位置等因素，根因未定位。绕开方式：模板表读写一律走
-  /// services/questionnaireTemplateStore.ts 的原生 SQL，不用 prisma.sessionQuestionnaireTemplate。
+  /// 注意：Prisma 7.10 queryCompiler 对本模型的 API 调用曾编译出引用不存在列的
+  /// 坏 SQL（P2022 "column (not available)"）。2026-10-20 补上 footerNote 的
+  /// `@map("footer_note")` 后 schema drift 已消除；P2022 是否由此彻底修复尚未验证。
+  /// 绕开方式：模板表读写仍走 services/questionnaireTemplateStore.ts 的原生 SQL，
+  /// 不用 prisma.sessionQuestionnaireTemplate。
   id         String   @id @default(uuid(7))
   sessionId  String   @map("session_id")
   /// person = 个人问卷模板，workshop = 车间问卷模板。存字符串，与 departments.questionnaireType 同口径。
@@ -499,7 +498,7 @@ model SessionQuestionnaireTemplate {
   /// 表标题（参考表里的「xx车间负责人评价问卷」；xx 段在渲染时替换为部门名）。
   title      String   @default("")
   /// 表尾填写说明（参考表里合并整行的说明文字，含满分与弃权口径）。
-  footerNote String   @default("")
+  footerNote String   @default("") @map("footer_note")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 

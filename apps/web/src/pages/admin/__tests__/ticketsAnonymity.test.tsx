@@ -29,7 +29,6 @@ vi.mock('../../../lib/api.js', async () => {
             id: 'a',
             code: 'A',
             name: '领导班子',
-            weightPercent: 100,
             sortOrder: 1,
             enabled: true,
             issuedCount: 10,
@@ -64,7 +63,7 @@ const listMock = vi.mocked(adminApi.tickets.list);
 /** 未使用码行：明细里唯一允许出现的状态。 */
 const UNUSED_ROW = {
   id: 'k1',
-  code: 'ABCD2345',
+  code: '123456789012',
   status: 'unused' as const,
   usedAt: null,
   createdAt: '2026-09-19T02:00:00.000Z',
@@ -100,7 +99,7 @@ describe('随机码明细匿名边界', () => {
   it('列表请求固定 status:unused，无法按已使用筛选', async () => {
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
     expect(listMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'unused', sessionId: 's1' }),
     );
@@ -111,7 +110,7 @@ describe('随机码明细匿名边界', () => {
   it('明细表没有状态列、使用时间列与行内导出答卷入口', async () => {
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
     expect(screen.queryByText('状态')).toBeNull();
     expect(screen.queryByText('使用时间')).toBeNull();
     expect(screen.queryByRole('button', { name: '导出答卷' })).toBeNull();
@@ -121,7 +120,7 @@ describe('随机码明细匿名边界', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
     expect(screen.queryByRole('combobox', { name: '按状态筛选' })).toBeNull();
 
     // 不再是 <a href> 直链：错误响应会被拦下，而不是把 JSON 存成 .xlsx
@@ -136,12 +135,10 @@ describe('随机码明细匿名边界', () => {
 
     expect(await screen.findByText('人员类别使用统计')).toBeInTheDocument();
     // 已作废 = 已发放 10 − 已使用 4 − 未使用 3 = 3
-    // 「领导班子（A）」在统计卡与明细表都会出现，取带统计数字的那一行
-    const statsRow = screen
-      .getAllByText('领导班子（A）')
-      .map((el) => el.closest('tr')!)
-      .find((tr) => tr.textContent.includes('10'))!;
-    expect(statsRow).toBeTruthy();
+    // 「领导班子（A）」在发码表与统计卡里都出现，定位限定在统计卡内，避免命中发码表那一行
+    const statsCard = screen.getByText('人员类别使用统计').closest('.ant-card') as HTMLElement;
+    const statsRow = within(statsCard).getByText('领导班子（A）').closest('tr')!;
+    expect(statsRow.textContent).toContain('10');
     expect(statsRow.textContent).toContain('4');
     expect(statsRow.textContent).toContain('3');
   }, 15_000);
@@ -150,7 +147,7 @@ describe('随机码明细匿名边界', () => {
 describe('发码结果按人员类别分组', () => {
   /**
    * 一次给多个人员类别发码后，结果弹窗必须能看出「哪些码是哪个人员类别」。
-   * 曾经只收集码字符串，管理员面对一堆码分不清人员类别（发错人员类别 = 发错权重）。
+   * 曾经只收集码字符串，管理员面对一堆码分不清人员类别（发错类别等于把码发给了错的人）。
    */
   it('多人员类别一次发码：弹窗按人员类别分组并各自标注张数', async () => {
     const user = userEvent.setup();
@@ -164,7 +161,6 @@ describe('发码结果按人员类别分组', () => {
         id: 'a',
         code: 'A',
         name: '领导班子',
-        weightPercent: 50,
         sortOrder: 1,
         enabled: true,
         issuedCount: 0,
@@ -175,7 +171,6 @@ describe('发码结果按人员类别分组', () => {
         id: 'c',
         code: 'C',
         name: '职工',
-        weightPercent: 50,
         sortOrder: 2,
         enabled: true,
         issuedCount: 0,
@@ -190,7 +185,10 @@ describe('发码结果按人员类别分组', () => {
           ticketTypeId,
           batchId: ticketTypeId === 'a' ? 'batch-a' : 'batch-c',
           count,
-          codes: ticketTypeId === 'a' ? ['AAAA1111', 'AAAA2222'] : ['CCCC3333'],
+          codes:
+            ticketTypeId === 'a'
+              ? ['100000000001', '100000000002']
+              : ['300000000003'],
         } as never;
       },
     );
@@ -231,8 +229,8 @@ describe('发码结果按人员类别分组', () => {
     expect(within(dialog).getByText('职工（C）')).toBeInTheDocument();
     expect(within(dialog).getByText(/2 张/)).toBeInTheDocument();
     expect(within(dialog).getByText(/1 张/)).toBeInTheDocument();
-    expect(within(dialog).getByText('AAAA1111')).toBeInTheDocument();
-    expect(within(dialog).getByText('CCCC3333')).toBeInTheDocument();
+    expect(within(dialog).getByText('100000000001')).toBeInTheDocument();
+    expect(within(dialog).getByText('300000000003')).toBeInTheDocument();
 
     // 只保留下载：复制全部与「我已保存」都已移除
     expect(within(dialog).queryByText('复制全部')).toBeNull();
@@ -262,7 +260,6 @@ describe('发码结果按人员类别分组', () => {
         id: 'a',
         code: 'A',
         name: '领导班子',
-        weightPercent: 100,
         sortOrder: 1,
         enabled: true,
         issuedCount: 0,

@@ -1,22 +1,22 @@
 /**
  * 「统计」页签的参考样表口径统计（docs/附件文件包/参考样表.xlsx）。
  *
- * 样表形态：行 = 被评对象 × 票别（A / B / C / ABC汇总），列 = 各项点得分 +
+ * 样表形态：行 = 被评对象 × 人员类别（A / B / C），列 = 各项点得分 +
  * 「1-5合计」+ 综合评价得分 + 综合评价得分排序。两张表：
- *   - 个人问卷表：行 = person 部门的被评列（主任、党支部书记…）× 票别；
- *   - 车间问卷表：行 = workshop 部门（车间本身即被评对象）× 票别。
+ *   - 个人问卷表：行 = person 部门的被评列（主任、党支部书记…）× 人员类别；
+ *   - 车间问卷表：行 = workshop 部门（车间本身即被评对象）× 人员类别。
  *
  * **计分口径只有一份**：全部数值来自 lib/scoring.ts 的 computeResults ——
- *   - 单票别行的项点得分 = 该票别对被评对象在该项点的均分（弃权/不填计 0）；
- *   - 单票别行的综合评价得分 = 该票别各项点均分的等权平均（scoring 的票别口径）；
- *   - ABC汇总行的项点得分 = 票种加权后的原始分；综合评价得分 = 加权归一化等权平均
- *     （与「结果导出」完全一致）；
+ *   - 人员类别行的项点得分 = 该类别对被评对象在该项点的均分（弃权/不填计 0）；
+ *   - 人员类别行的综合评价得分 = 该类别的类别内综合分（各项点归一化到百分制后
+ *     等权平均，与「结果导出」完全一致）；
  *   - 「1-5合计」= 各项点得分之和（样表口径；项点满分不一致时此列仅作参考，
  *     以综合评价得分为准 —— 与 scoring.ts 的口径说明一致）。
+ *   - 不同人员类别分别统计、不合并、不加权，因此没有「ABC汇总」行。
  *
- * 排名（样表「综合评价得分排序」）：综合得分降序、同分并列（1、2、2 式）。
- *   - 个人表：部门 × 票别组内排名（被评对象之间比）；
- *   - 车间表：票别组内排名（车间之间比，样表表2即一张表内多车间）。
+ * 排名（样表「综合评价得分排序」）：同一人员类别内综合得分降序、同分并列（1、2、2 式）。
+ *   - 个人表：部门 × 人员类别组内排名（被评对象之间比）；
+ *   - 车间表：人员类别组内排名（车间之间比，样表表2即一张表内多车间）。
  *
  * 全部数据一次取回、内存分组，每部门调一次纯函数 computeResults，无 N+1。
  * 没有任何已提交打分表的部门不产生行（样表只统计「已提交的表单」）。
@@ -32,17 +32,17 @@ export interface SampleStatRow {
   voteColumnId: string | null;
   /** 被评对象：个人表为被评议人列名（主任…），车间表为车间名（部门自身） */
   targetName: string;
-  /** 人员类别 ID；ABC汇总行为 null */
-  ticketTypeId: string | null;
-  /** 人员类别显示：A / B / C / 「ABC汇总」 */
+  /** 人员类别 ID */
+  ticketTypeId: string;
+  /** 人员类别显示：A / B / C */
   ticketCode: string;
   /** 各评议项目得分，顺序与 criteriaNames 对齐 */
   scores: number[];
   /** 1-5合计：各评议项目得分之和 */
   total: number;
-  /** 综合评价得分 */
+  /** 综合评价得分：类别内各格归一化分的等权平均 */
   comprehensiveScore: number;
-  /** 综合评价得分排序（组内同分并列） */
+  /** 综合评价得分排序（同一人员类别内同分并列） */
   rank: number;
 }
 
@@ -61,10 +61,6 @@ export interface SessionSampleStatsDto {
   sheetCount: number;
   generatedAt: string;
 }
-
-/** ABC汇总行的人员类别占位键。 */
-const SUMMARY_KEY = 'SUMMARY';
-const SUMMARY_CODE = 'ABC汇总';
 
 /** 同分并列排名：综合得分降序，1、2、2、4 式。 */
 function assignRanks(rows: SampleStatRow[]): void {
@@ -88,9 +84,8 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** 人员类别显示码：有人员类别 ID 用其代码，汇总行用「ABC汇总」。 */
-function codeOf(ticketTypeId: string | null, codeById: Map<string, string>): string {
-  if (ticketTypeId === null) return SUMMARY_CODE;
+/** 人员类别显示码：取不到时退回 ID，宁可露出 ID 也不显示空。 */
+function codeOf(ticketTypeId: string, codeById: Map<string, string>): string {
   return codeById.get(ticketTypeId) ?? ticketTypeId;
 }
 
@@ -184,7 +179,6 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
     const scoring = computeResults({
       voteColumnIds: isWorkshop ? [null] : departmentColumns.map((column) => column.id),
       criteria: mergedCriteria.map((c) => ({ id: c.id, minScore: c.minScore, maxScore: c.maxScore })),
-      ticketTypes: ticketTypes.map((type) => ({ id: type.id, weightPercent: type.weightPercent })),
       sheets: departmentSheets.map((sheet) => ({
         ticketTypeId: sheet.ticketTypeId,
         items: sheet.items.map((item) => ({
@@ -202,22 +196,22 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
       voteColumnId === null ? '得分' : (columnById.get(voteColumnId)?.name ?? '');
 
     // scoring 对「无票的列」也会填 0 分条目（criteria 非空），无法靠其判别有无票；
-    // 用原始 items 统计 (票别, 被评列) 是否真有打分记录：无票 ≠ 0 分，样表只列有票
-    // 的对象，否则全 0 行会挤占排序名次、误导阅读。
+    // 用原始 items 统计 (人员类别, 被评列) 是否真有打分记录：无票 ≠ 0 分，样表只列
+    // 有票的对象，否则全 0 行会挤占排序名次、误导阅读。
     const scoredKeys = new Set<string>();
     for (const sheet of departmentSheets) {
       for (const item of sheet.items) scoredKeys.add(`${sheet.ticketTypeId}|${item.voteColumnId}`);
     }
 
-    // 票别行：perTicketType 已排除零票种（一张表都没有的票种不出现）；
-    // 该票别下一张表都没打过的被评列不产生行。
+    // 人员类别行：perTicketType 已排除零票类别（一张表都没有的类别不出现）；
+    // 该类别下一张表都没打过的被评列不产生行。不做跨类别合并，故没有汇总行。
     for (const ticketTypeResult of scoring.perTicketType) {
       for (const column of ticketTypeResult.voteColumns) {
         if (!scoredKeys.has(`${ticketTypeResult.ticketTypeId}|${column.voteColumnId}`)) continue;
         const ordered = [...column.criteria].sort(
           (a, b) => (criterionOrder.get(a.criterionId) ?? 0) - (criterionOrder.get(b.criterionId) ?? 0),
         );
-        const scores = ordered.map((c) => c.avg);
+        const scores = ordered.map((c) => c.rawScore);
         bucket.push({
           departmentId: department.id,
           departmentName: department.name,
@@ -227,37 +221,15 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
           ticketCode: codeOf(ticketTypeResult.ticketTypeId, codeById),
           scores,
           total: round2(scores.reduce((sum, value) => sum + value, 0)),
-          comprehensiveScore: column.average,
+          comprehensiveScore: column.comprehensiveScore,
           rank: 0,
         });
       }
     }
-
-    // ABC汇总行：票种加权口径（与「结果导出」一致）；任一票别都没打过的列不出现。
-    const scoredColumns = new Set([...scoredKeys].map((key) => key.split('|')[1]));
-    for (const column of scoring.voteColumns) {
-      // 模板串把 null（车间虚拟列）字符串化成 'null'，与 scoredKeys 的键格式保持一致
-      if (!scoredColumns.has(`${column.voteColumnId}`)) continue;
-      const ordered = [...column.criteria].sort(
-        (a, b) => (criterionOrder.get(a.criterionId) ?? 0) - (criterionOrder.get(b.criterionId) ?? 0),
-      );
-      const scores = ordered.map((c) => c.rawScore);
-      bucket.push({
-        departmentId: department.id,
-        departmentName: department.name,
-        voteColumnId: column.voteColumnId,
-        targetName: columnNameOf(column.voteColumnId),
-        ticketTypeId: null,
-        ticketCode: SUMMARY_CODE,
-        scores,
-        total: round2(scores.reduce((sum, value) => sum + value, 0)),
-        comprehensiveScore: column.comprehensiveScore,
-        rank: 0,
-      });
-    }
   }
 
-  // 排名：个人表在「部门 × 票别」组内比被评对象；车间表在「票别」组内比车间。
+  // 排名：同一人员类别内比。个人表在「部门 × 人员类别」组内比被评对象；
+  // 车间表在「人员类别」组内比车间（跨部门同类别的车间一起排名）。
   const rankRows = (rows: SampleStatRow[], groupKey: (row: SampleStatRow) => string): void => {
     const groups = new Map<string, SampleStatRow[]>();
     for (const row of rows) {
@@ -268,10 +240,10 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
     }
     for (const group of groups.values()) assignRanks(group);
   };
-  rankRows(rawRows.personal, (row) => `${row.departmentId}|${row.ticketTypeId ?? SUMMARY_KEY}`);
-  rankRows(rawRows.workshop, (row) => row.ticketTypeId ?? SUMMARY_KEY);
+  rankRows(rawRows.personal, (row) => `${row.departmentId}|${row.ticketTypeId}`);
+  rankRows(rawRows.workshop, (row) => row.ticketTypeId);
 
-  // 输出顺序：部门（sortOrder）→ 被评对象 → 票别（票种顺序在前、ABC汇总在后）。
+  // 输出顺序：部门（sortOrder）→ 被评对象 → 人员类别（按人员类别配置顺序）。
   const typeOrder = new Map(ticketTypes.map((type, index) => [type.id, index]));
   const sortRows = (rows: SampleStatRow[]): SampleStatRow[] =>
     rows.sort((a, b) => {
@@ -281,9 +253,7 @@ export async function computeSessionSampleStats(sessionId: string): Promise<Sess
         return deptA - deptB;
       }
       if (a.targetName !== b.targetName) return a.targetName.localeCompare(b.targetName, 'zh-CN');
-      const orderA = a.ticketTypeId === null ? Number.MAX_SAFE_INTEGER : (typeOrder.get(a.ticketTypeId) ?? 0);
-      const orderB = b.ticketTypeId === null ? Number.MAX_SAFE_INTEGER : (typeOrder.get(b.ticketTypeId) ?? 0);
-      return orderA - orderB;
+      return (typeOrder.get(a.ticketTypeId) ?? 0) - (typeOrder.get(b.ticketTypeId) ?? 0);
     });
 
   return {

@@ -55,7 +55,7 @@ function formatDateTime(value: Date | null): string {
 function fillSheet(
   sheet: Worksheet,
   info: Array<[string, string]>,
-  columns: Array<{ header: string; key: string; width: number }>,
+  columns: Array<{ header: string; key: string; width: number; text?: boolean }>,
   rows: Array<Record<string, string | number | null>>,
 ): void {
   for (const [label, value] of info) {
@@ -66,7 +66,11 @@ function fillSheet(
   const headerRow = sheet.addRow(columns.map((column) => column.header));
   headerRow.font = { bold: true };
   for (const [index, column] of columns.entries()) {
-    sheet.getColumn(index + 1).width = column.width;
+    const target = sheet.getColumn(index + 1);
+    target.width = column.width;
+    // 纯数字的长码（随机码）必须钉成文本格式：只写字符串时人工在 Excel
+    // 重存仍可能被转成数值，12 位码的前导零会丢。
+    if (column.text) target.numFmt = '@';
   }
   for (const row of rows) {
     sheet.addRow(columns.map((column) => row[column.key] ?? ''));
@@ -129,8 +133,8 @@ export function buildTicketsWorkbook(rows: TicketExportRow[]): Workbook {
     sheet,
     [],
     [
-      { header: '随机码', key: 'code', width: 14 },
-      { header: '票种', key: 'ticketType', width: 22 },
+      { header: '随机码', key: 'code', width: 16, text: true },
+      { header: '人员类别', key: 'ticketType', width: 22 },
       { header: '批次', key: 'batchId', width: 40 },
       { header: '创建时间', key: 'createdAt', width: 22 },
     ],
@@ -178,8 +182,10 @@ export function buildTicketsByTypeWorkbook(columns: TicketByTypeColumn[]): Workb
   }
 
   sheet.columns.forEach((column, index) => {
-    // 码是 8 位定长，列宽按表头长度给足，打印后逐行核对不换行
-    column.width = Math.max(14, (columns[index]?.header.length ?? 0) + 6);
+    // 码是 12 位定长纯数字，列宽按表头长度给足，打印后逐行核对不换行；
+    // 文本格式保证前导零与人工重存后的原样。
+    column.width = Math.max(16, (columns[index]?.header.length ?? 0) + 6);
+    column.numFmt = '@';
   });
   return workbook;
 }
@@ -188,37 +194,45 @@ export function buildTicketsByTypeWorkbook(columns: TicketByTypeColumn[]): Workb
 export interface ResultsExportInput {
   departmentName: string;
   generatedAt: Date;
-  /** 综合排名 */
+  /** 综合排名（每个人员类别一组，排名为类别内排名） */
   rows: Array<{
     rank: number;
+    ticketTypeCode: string;
     voteColumnName: string;
     comprehensiveScore: number;
     criterionCount: number;
   }>;
-  /** 各项明细：每行一个「被评列 × 项点」 */
+  /** 各项明细：每行一个「人员类别 × 被评列 × 项点」 */
   details: Array<{
+    ticketTypeCode: string;
     voteColumnName: string;
     criterionName: string;
     rawScore: number;
     normalizedScore: number;
-    ticketTypes: string[];
   }>;
-  /** 参与票种口径：含未参与计分的票种，便于解释口径 */
-  ticketTypes: Array<{ code: string; name: string; weightPercent: number; involved: boolean }>;
+  /** 参与人员类别口径：含未参与计分的人员类别，便于解释口径 */
+  ticketTypes: Array<{ code: string; name: string; involved: boolean }>;
   /**
-   * 票别口径（计分四口径中的「票别×被评列×项点」与「票别×被评列」）。
-   * 行已按票种展开，名称由 results 服务填好，这里只负责排版。
+   * 人员类别口径（计分「人员类别×被评列×项点」与「人员类别×被评列」）。
+   * 行已按人员类别展开，名称由 results 服务填好，这里只负责排版。
    */
   perTicketType: {
-    /** 票别单项明细：每行一个「票种 × 被评对象 × 项点」 */
+    /** 人员类别单项明细：每行一个「人员类别 × 被评对象 × 项点」 */
     criteriaRows: Array<{
       ticketTypeCode: string;
       voteColumnName: string;
       criterionName: string;
       avg: number;
+      /** 该人员类别在本部门的已提交答卷数 */
+      sheetCount: number;
     }>;
-    /** 票别合计明细：每行一个「票种 × 被评对象」 */
-    columnRows: Array<{ ticketTypeCode: string; voteColumnName: string; average: number }>;
+    /** 人员类别合计明细：每行一个「人员类别 × 被评对象」 */
+    columnRows: Array<{
+      ticketTypeCode: string;
+      voteColumnName: string;
+      comprehensiveScore: number;
+      sheetCount: number;
+    }>;
   };
 }
 
@@ -232,8 +246,10 @@ function sheetName(base: string, suffix = ''): string {
 }
 
 /**
- * 把结果报表的五个 sheet（综合排名 / 各项明细 / 参与票种口径 / 票别单项 / 票别合计）
- * 写进指定工作簿。buildResultsWorkbook 与整场导出（每个启用部门一组）共用。
+ * 把结果报表的五个 sheet（综合排名 / 各项明细 / 参与人员类别说明 /
+ * 人员类别单项明细 / 人员类别合计明细）写进指定工作簿。
+ * 人员类别明细两张是主表（同一份 perTicketType 口径，不做跨类别合并）。
+ * buildResultsWorkbook 与整场导出（每个启用部门一组）共用。
  * @param suffix sheet 名后缀（如 `-技术部`）；空串 = 单部门导出的原始名
  */
 function fillResultsSheets(workbook: Workbook, input: ResultsExportInput, suffix = ''): void {
@@ -247,12 +263,14 @@ function fillResultsSheets(workbook: Workbook, input: ResultsExportInput, suffix
     info,
     [
       { header: '排名', key: 'rank', width: 8 },
+      { header: '人员类别', key: 'ticketTypeCode', width: 12 },
       { header: '被评对象', key: 'voteColumnName', width: 20 },
       { header: '综合得分', key: 'comprehensiveScore', width: 12 },
       { header: '计分项点数', key: 'criterionCount', width: 12 },
     ],
     input.rows.map((row) => ({
       rank: row.rank,
+      ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
       comprehensiveScore: row.comprehensiveScore,
       criterionCount: row.criterionCount,
@@ -263,76 +281,78 @@ function fillResultsSheets(workbook: Workbook, input: ResultsExportInput, suffix
     workbook.addWorksheet(sheetName('各项明细', suffix)),
     [],
     [
+      { header: '人员类别', key: 'ticketTypeCode', width: 12 },
       { header: '被评对象', key: 'voteColumnName', width: 20 },
       { header: '项点', key: 'criterionName', width: 24 },
       { header: '原始分', key: 'rawScore', width: 12 },
       { header: '归一化分', key: 'normalizedScore', width: 12 },
-      { header: '参与票种', key: 'ticketTypes', width: 24 },
     ],
     input.details.map((row) => ({
+      ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
       criterionName: row.criterionName,
       rawScore: row.rawScore,
       normalizedScore: row.normalizedScore,
-      ticketTypes: row.ticketTypes.join('/'),
     })),
   );
 
   fillSheet(
-    workbook.addWorksheet(sheetName('参与票种口径', suffix)),
+    workbook.addWorksheet(sheetName('参与人员类别说明', suffix)),
     info,
     [
-      { header: '票种', key: 'code', width: 10 },
+      { header: '人员类别', key: 'code', width: 10 },
       { header: '名称', key: 'name', width: 24 },
-      { header: '权重百分比', key: 'weightPercent', width: 14 },
       { header: '是否参与计分', key: 'involved', width: 16 },
     ],
     input.ticketTypes.map((row) => ({
       code: row.code,
       name: row.name,
-      weightPercent: row.weightPercent,
       involved: row.involved ? '是' : '否',
     })),
   );
 
-  // 票别口径的两个明细 sheet：评分内容仍匿名，这里只到票别 × 被评对象粒度。
+  // 人员类别口径的两张明细主表：评分内容仍匿名，这里只到人员类别 × 被评对象粒度。
   fillSheet(
-    workbook.addWorksheet(sheetName('票别单项明细', suffix)),
+    workbook.addWorksheet(sheetName('人员类别单项明细', suffix)),
     [],
     [
-      { header: '票种', key: 'ticketTypeCode', width: 10 },
+      { header: '人员类别', key: 'ticketTypeCode', width: 10 },
       { header: '被评对象', key: 'voteColumnName', width: 20 },
       { header: '项点', key: 'criterionName', width: 24 },
       { header: '平均分', key: 'avg', width: 12 },
+      { header: '票数', key: 'sheetCount', width: 8 },
     ],
     input.perTicketType.criteriaRows.map((row) => ({
       ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
       criterionName: row.criterionName,
       avg: row.avg,
+      sheetCount: row.sheetCount,
     })),
   );
 
   fillSheet(
-    workbook.addWorksheet(sheetName('票别合计明细', suffix)),
+    workbook.addWorksheet(sheetName('人员类别合计明细', suffix)),
     [],
     [
-      { header: '票种', key: 'ticketTypeCode', width: 10 },
+      { header: '人员类别', key: 'ticketTypeCode', width: 10 },
       { header: '被评对象', key: 'voteColumnName', width: 20 },
-      { header: '平均分', key: 'average', width: 12 },
+      { header: '综合得分', key: 'comprehensiveScore', width: 12 },
+      { header: '票数', key: 'sheetCount', width: 8 },
     ],
     input.perTicketType.columnRows.map((row) => ({
       ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
-      average: row.average,
+      comprehensiveScore: row.comprehensiveScore,
+      sheetCount: row.sheetCount,
     })),
   );
 }
 
 /**
- * 生成结果报表工作簿：综合排名 / 各项明细 / 参与票种口径。
+ * 生成结果报表工作簿：综合排名 / 各项明细 / 参与人员类别说明 / 人员类别明细。
  * @param input 排名、明细与口径数据
- * @returns 三个 sheet 的工作簿
+ * @returns 五个 sheet 的工作簿
  */
 export function buildResultsWorkbook(input: ResultsExportInput): Workbook {
   const workbook = new ExcelJS.Workbook();
@@ -400,7 +420,7 @@ export function buildAnswerSheetWorkbook(input: AnswerSheetExportInput): Workboo
 
   sheet.addRow([]);
   sheet.addRow(['提交时间', formatDateTime(input.submittedAt)]);
-  sheet.addRow(['票别', input.ticketTypeLabel]);
+  sheet.addRow(['人员类别', input.ticketTypeLabel]);
 
   return workbook;
 }
@@ -447,9 +467,9 @@ export function buildSessionWorkbook(
     [],
     [
       { header: '序号', key: 'seq', width: 6 },
-      { header: '随机码', key: 'code', width: 14 },
+      { header: '随机码', key: 'code', width: 16, text: true },
       { header: '提交时间', key: 'submittedAt', width: 22 },
-      { header: '票别', key: 'ticketTypeCode', width: 10 },
+      { header: '人员类别', key: 'ticketTypeCode', width: 10 },
       ...summary.columns.map((column, index) => ({
         header: column.header,
         key: `score${index}`,

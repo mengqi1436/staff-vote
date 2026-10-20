@@ -89,6 +89,24 @@ vi.mock('../../../lib/api.js', async () => {
         update: vi.fn(),
         remove: vi.fn(),
       },
+      /** 人员类别页：权重删除后，写权限门控落在新增与行内操作上 */
+      ticketTypes: {
+        list: vi.fn(async () => [
+          {
+            id: 't1',
+            code: 'A',
+            name: '领导班子',
+            sortOrder: 1,
+            enabled: true,
+            issuedCount: 10,
+            usedCount: 4,
+            unusedCount: 3,
+          },
+        ]),
+        create: vi.fn(),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
       settings: {
         get: vi.fn(async () => ({
           'system.title': '某某单位职工素质评议',
@@ -102,6 +120,7 @@ vi.mock('../../../lib/api.js', async () => {
 const { AdminDepartments } = await import('../Departments.js');
 const { AdminEmployees } = await import('../Employees.js');
 const { AdminSettings } = await import('../Settings.js');
+const { AdminTicketTypes } = await import('../TicketTypes.js');
 
 /** 渲染单个页面并注入权限集合。 */
 function renderPage(node: ReactElement, permissions: string[]) {
@@ -194,6 +213,27 @@ describe('后台三页写操作权限门控', () => {
     renderPage(<AdminEmployees />, []);
     expect(await screen.findByRole('button', { name: /编\s*辑/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /停\s*用/ })).toBeDisabled();
+  });
+
+  it('人员类别页：只读账号不渲染「新增人员类别」，行内操作与启用开关保留但禁用', async () => {
+    renderPage(<AdminTicketTypes />, []);
+    // 先等数据到货，避免把「还在加载」误判成「按钮被隐藏」
+    expect(await screen.findByText('领导班子')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /新增人员类别/ })).not.toBeInTheDocument();
+    // 操作列与启用列不消失，改为禁用（整列消失会让表格看起来缺列）
+    expect(screen.getByRole('button', { name: /编\s*辑/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /删\s*除/ })).toBeDisabled();
+    expect(screen.getByRole('switch', { name: /领导班子 启用状态/ })).toBeDisabled();
+    // 读操作不受影响
+    expect(screen.getByRole('button', { name: /刷\s*新/ })).toBeInTheDocument();
+  });
+
+  it('人员类别页：有权限账号可新增并操作行内按钮', async () => {
+    renderPage(<AdminTicketTypes />, ALL_PERMISSIONS);
+    expect(await screen.findByRole('button', { name: /新增人员类别/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /编\s*辑/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /删\s*除/ })).toBeEnabled();
+    expect(screen.getByRole('switch', { name: /领导班子 启用状态/ })).toBeEnabled();
   });
 
   // ---------------------------------------------------------------------------

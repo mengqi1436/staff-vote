@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  *   A. 全局部门字典 /org-departments CRUD（写需 departments.write，读=登录即可）
  *   B. POST /sessions：事务建评议 + 自动插入场内同名部门（409/404/422 校验）
  *   C. POST /sessions/:id/start 完整性校验（409 SESSION_INCOMPLETE + detail 中文缺项清单）
- *   D. PUT /sessions/:id/ticket-plan 人员类别分配聚合（422 WEIGHT_SUM / 409 有答卷禁移除）
+ *   D. PUT /sessions/:id/ticket-plan 人员类别分配聚合（409 有答卷禁移除）
  *   E. 投票提交事务写 sheet_ticket_map 受控映射
  *   F. 按随机码导出答卷（附件8 形态）与整场整合导出（答卷汇总）
  *
@@ -29,6 +29,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
+const { generateCode } = await import('../src/lib/code.js');
 const { hashPassword } = await import('../src/lib/password.js');
 const { ALL_PERMISSION_CODES } = await import('../src/lib/permissions.js');
 const { createRole } = await import('./rbac-fixtures.js');
@@ -86,15 +87,13 @@ async function setupQuestionnaire(sessionId: string): Promise<string> {
 }
 
 /** 建一张孤立票据（自带批次），返回票据行。 */
-let ticketSeq = 0;
 async function createTicket(sessionId: string, ticketTypeId: string) {
-  ticketSeq += 1;
   const batch = await prisma.ticketBatch.create({
     data: { ticketTypeId, sessionId, count: 1, operator: 'wizard.test' },
   });
   return prisma.ticket.create({
     data: {
-      code: `${TAG}${ticketSeq}${Date.now() % 1000}`,
+      code: generateCode(),
       ticketTypeId,
       batchId: batch.id,
       sessionId,
@@ -479,19 +478,13 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       expect(afterColumn.status).toBe(409);
       expect(afterColumn.body.error.detail.join('\n')).not.toContain('被评议人列');
 
-      // 补 4：票种（权重合计 50 ≠ 100 → 出现权重缺项）
+      // 补 4：人员类别（建类别但不发码 → 只剩随机码缺项）
       const ticketType = await prisma.ticketType.create({
-        data: { sessionId: session.id, code: 'A', name: 'A 票', weightPercent: 50 },
+        data: { sessionId: session.id, code: 'A', name: 'A 票' },
       });
-      const afterHalfWeight = await agent.post(`/api/admin/sessions/${session.id}/start`);
-      expect(afterHalfWeight.status).toBe(409);
-      expect(afterHalfWeight.body.error.detail.join('\n')).toContain('权重合计为 50%');
-
-      // 权重补到 100 → 只剩随机码缺项
-      await prisma.ticketType.update({ where: { id: ticketType.id }, data: { weightPercent: 100 } });
-      const afterWeight = await agent.post(`/api/admin/sessions/${session.id}/start`);
-      expect(afterWeight.status).toBe(409);
-      const remaining = afterWeight.body.error.detail as string[];
+      const afterTicketType = await agent.post(`/api/admin/sessions/${session.id}/start`);
+      expect(afterTicketType.status).toBe(409);
+      const remaining = afterTicketType.body.error.detail as string[];
       expect(remaining).toHaveLength(1);
       expect(remaining[0]).toContain('随机码');
 
@@ -506,7 +499,7 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       const sessionId = await newSession(`${TAG}评议-C恢复`);
       await setupQuestionnaire(sessionId);
       const ticketType = await prisma.ticketType.create({
-        data: { sessionId, code: 'A', name: 'A 票', weightPercent: 100 },
+        data: { sessionId, code: 'A', name: 'A 票' },
       });
       await createTicket(sessionId, ticketType.id);
 
@@ -532,9 +525,9 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       const sessionId = await newSession(`${TAG}评议-D正向`);
       const res = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票（领导评议）', weightPercent: 50, count: 3 },
-          { code: 'B', name: 'B 票（部门互评）', weightPercent: 30, count: 2 },
-          { code: 'C', name: 'C 票（职工评议）', weightPercent: 20, count: 0 },
+          { code: 'A', name: 'A 票（领导评议）', count: 3 },
+          { code: 'B', name: 'B 票（部门互评）', count: 2 },
+          { code: 'C', name: 'C 票（职工评议）', count: 0 },
         ],
       });
       expect(res.status).toBe(200);
@@ -566,42 +559,28 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       expect(typeByCode.get('C')!.sortOrder).toBe(2);
     });
 
-    it('权重合计 ≠ 100 → 422 WEIGHT_SUM，整批不落库', async () => {
-      const sessionId = await newSession(`${TAG}评议-D权重`);
-      const res = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
-        types: [
-          { code: 'A', name: 'A 票', weightPercent: 60, count: 1 },
-          { code: 'B', name: 'B 票', weightPercent: 30, count: 1 },
-        ],
-      });
-      expect(res.status).toBe(422);
-      expect(res.body.error.code).toBe('WEIGHT_SUM');
-      expect(await prisma.ticketType.count({ where: { sessionId } })).toBe(0);
-      expect(await prisma.ticketBatch.count({ where: { sessionId } })).toBe(0);
-    });
-
-    it('未列入的现有人员类别被软停用；upsert 更新 name/weight 且重新启用已停用人员类别', async () => {
+    it('未列入的现有人员类别被软停用；upsert 更新 name 且重新启用已停用人员类别', async () => {
       const sessionId = await newSession(`${TAG}评议-D停用`);
       // 第一轮：A/B/C
       await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票', weightPercent: 50, count: 0 },
-          { code: 'B', name: 'B 票', weightPercent: 30, count: 0 },
-          { code: 'C', name: 'C 票', weightPercent: 20, count: 0 },
+          { code: 'A', name: 'A 票', count: 0 },
+          { code: 'B', name: 'B 票', count: 0 },
+          { code: 'C', name: 'C 票', count: 0 },
         ],
       });
-      // 第二轮：只交 A（改权重）与 D（新人员类别）→ B/C 软停用
+      // 第二轮：只交 A（改名称）与 D（新人员类别）→ B/C 软停用
       const second = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票改', weightPercent: 80, count: 0 },
-          { code: 'D', name: 'D 票', weightPercent: 20, count: 1 },
+          { code: 'A', name: 'A 票改', count: 0 },
+          { code: 'D', name: 'D 票', count: 1 },
         ],
       });
       expect(second.status).toBe(200);
 
       const rows = await prisma.ticketType.findMany({ where: { sessionId } });
       const byCode = new Map(rows.map((row) => [row.code, row]));
-      expect(byCode.get('A')).toMatchObject({ name: 'A 票改', weightPercent: 80, enabled: true });
+      expect(byCode.get('A')).toMatchObject({ name: 'A 票改', enabled: true });
       expect(byCode.get('B')!.enabled).toBe(false);
       expect(byCode.get('C')!.enabled).toBe(false);
       expect(byCode.get('D')).toMatchObject({ enabled: true });
@@ -610,9 +589,9 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       // 第三轮：重新启用 B（upsert 复活）——A/B/D 合计 80+10+10
       const third = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票改', weightPercent: 80, count: 0 },
-          { code: 'B', name: 'B 票', weightPercent: 10, count: 0 },
-          { code: 'D', name: 'D 票', weightPercent: 10, count: 0 },
+          { code: 'A', name: 'A 票改', count: 0 },
+          { code: 'B', name: 'B 票', count: 0 },
+          { code: 'D', name: 'D 票', count: 0 },
         ],
       });
       expect(third.status).toBe(200);
@@ -620,12 +599,12 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       expect(revived!.enabled).toBe(true);
     });
 
-    it('已有答卷的人员类别被移出集合 → 409 TICKET_TYPE_HAS_SHEETS；改 name/weight 仍允许', async () => {
+    it('已有答卷的人员类别被移出集合 → 409 TICKET_TYPE_HAS_SHEETS；改 name 仍允许', async () => {
       const sessionId = await newSession(`${TAG}评议-D答卷`);
       await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票', weightPercent: 50, count: 1 },
-          { code: 'B', name: 'B 票', weightPercent: 50, count: 1 },
+          { code: 'A', name: 'A 票', count: 1 },
+          { code: 'B', name: 'B 票', count: 1 },
         ],
       });
       const typeA = await prisma.ticketType.findFirstOrThrow({ where: { sessionId, code: 'A' } });
@@ -646,7 +625,7 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
 
       // 移除 A → 409
       const removed = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
-        types: [{ code: 'B', name: 'B 票', weightPercent: 100, count: 0 }],
+        types: [{ code: 'B', name: 'B 票', count: 0 }],
       });
       expect(removed.status).toBe(409);
       expect(removed.body.error.code).toBe('TICKET_TYPE_HAS_SHEETS');
@@ -654,8 +633,8 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       // A 的 code 保留在集合中（改 name/weight）→ 200
       const kept = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票改', weightPercent: 60, count: 0 },
-          { code: 'B', name: 'B 票', weightPercent: 40, count: 0 },
+          { code: 'A', name: 'A 票改', count: 0 },
+          { code: 'B', name: 'B 票', count: 0 },
         ],
       });
       expect(kept.status).toBe(200);
@@ -665,15 +644,15 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
       const sessionId = await newSession(`${TAG}评议-D校验`);
       const duplicate = await agent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
         types: [
-          { code: 'A', name: 'A 票', weightPercent: 50, count: 0 },
-          { code: 'A', name: 'A 票二号', weightPercent: 50, count: 0 },
+          { code: 'A', name: 'A 票', count: 0 },
+          { code: 'A', name: 'A 票二号', count: 0 },
         ],
       });
       expect(duplicate.status).toBe(400);
       expect(duplicate.body.error.code).toBe('VALIDATION_FAILED');
 
       const denied = await readonlyAgent.put(`/api/admin/sessions/${sessionId}/ticket-plan`).send({
-        types: [{ code: 'A', name: 'A 票', weightPercent: 100, count: 0 }],
+        types: [{ code: 'A', name: 'A 票', count: 0 }],
       });
       expect(denied.status).toBe(403);
     });
@@ -720,7 +699,7 @@ describeDb('新建评议向导（org-departments / sessions / ticket-plan / 导�
         data: { departmentId: department.id, sessionId: session.id, name: '主任' },
       });
       const ticketType = await prisma.ticketType.create({
-        data: { sessionId: session.id, code: 'A', name: 'A 票（领导评议）', weightPercent: 100 },
+        data: { sessionId: session.id, code: 'A', name: 'A 票（领导评议）' },
       });
       return {
         sessionId: session.id,

@@ -24,7 +24,7 @@ export const apiLimiter = rateLimit({
 /**
  * 随机码登录限流。
  *
- * 这是安全边界而非体验优化：8 位码虽有约 1.1e12 组合，但限流让枚举在
+ * 这是安全边界而非体验优化：12 位纯数字码虽有 10^12 组合，但限流让枚举在
  * 现实时间内不可行，也顺带压制同一 IP 的大量无效尝试。
  */
 export const voteLoginLimiter = rateLimit({

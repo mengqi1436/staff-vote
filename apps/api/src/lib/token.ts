@@ -23,7 +23,7 @@ export interface VoteTokenPayload {
   kind: 'vote';
   /** 随机码 ID（UUID），用于提交时的原子使用。令牌里不含码明文。 */
   sub: string;
-  /** 人员类别 ID，用于计分加权。 */
+  /** 人员类别 ID，用于按类别分别统计。 */
   ticketTypeId: string;
 }
 
@@ -43,7 +43,7 @@ export function signAdminToken(adminId: string, username: string): string {
  * 刻意不含随机码明文：评分表本身也不记录 ticketId，
  * 因此即使令牌泄漏，也无法从令牌反推某张评分表由哪张码投出。
  * @param ticketId 随机码 ID，提交时用于原子核销
- * @param ticketTypeId 票种 ID，用于加权计算
+ * @param ticketTypeId 人员类别 ID，用于按类别分别统计
  */
 export function signVoteToken(ticketId: string, ticketTypeId: string): string {
   const payload: VoteTokenPayload = { kind: 'vote', sub: ticketId, ticketTypeId };

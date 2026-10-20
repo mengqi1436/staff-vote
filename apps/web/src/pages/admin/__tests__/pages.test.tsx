@@ -59,14 +59,13 @@ vi.mock('../../../lib/api.js', async () => {
       id: 'a',
       code: 'A',
       name: '领导班子',
-      weightPercent: 60,
       sortOrder: 1,
       enabled: true,
       issuedCount: 10,
       usedCount: 4,
     },
-    { id: 'b', code: 'B', name: '中层干部', weightPercent: 30, sortOrder: 2, enabled: true },
-    { id: 'c', code: 'C', name: '职工代表', weightPercent: 20, sortOrder: 3, enabled: false },
+    { id: 'b', code: 'B', name: '中层干部', sortOrder: 2, enabled: true },
+    { id: 'c', code: 'C', name: '职工代表', sortOrder: 3, enabled: false },
   ];
 
   const overview = {
@@ -75,7 +74,6 @@ vi.mock('../../../lib/api.js', async () => {
         id: 'a',
         code: 'A',
         name: '领导班子',
-        weightPercent: 60,
         issued: 10,
         used: 4,
         unused: 5,
@@ -117,6 +115,8 @@ vi.mock('../../../lib/api.js', async () => {
     rows: [
       {
         rank: 1,
+        ticketTypeId: 'a',
+        ticketTypeCode: 'A',
         voteColumnId: 'v1',
         voteColumnName: '主任',
         enabled: true,
@@ -132,7 +132,7 @@ vi.mock('../../../lib/api.js', async () => {
         ],
       },
     ],
-    ticketTypesInvolved: [{ id: 'a', code: 'A', name: '领导班子', weightPercent: 100 }],
+    ticketTypesInvolved: [{ id: 'a', code: 'A', name: '领导班子' }],
     sheetCount: 1,
     generatedAt: '2026-09-19T02:00:00.000Z',
   };
@@ -191,7 +191,7 @@ vi.mock('../../../lib/api.js', async () => {
           items: [
             {
               id: 'k1',
-              code: 'ABCD2345',
+              code: '123456789012',
               status: 'unused',
               usedAt: null,
               createdAt: '2026-09-19T02:00:00.000Z',
@@ -364,22 +364,20 @@ describe('后台页面渲染', () => {
     expect(screen.queryByRole('combobox', { name: '当前评议' })).not.toBeInTheDocument();
   });
 
-  it('人员类别页实时显示启用人员类别权重合计与差额（停用人员类别不计入）', async () => {
+  it('人员类别页展示类别一览且不再有权重列', async () => {
     renderPage(<AdminTicketTypes />);
 
-    // 60 + 30 为启用人员类别，停用的 20 不计入 → 还差 10%
-    const summary = await screen.findByText('启用人员类别权重合计 90%，还差 10%');
-    expect(summary).toBeInTheDocument();
-    // 企业风：合计不足 100 时用 error 型 Alert 警示
-    expect(summary.closest('.ant-alert-error')).not.toBeNull();
     expect(await screen.findByText('职工代表')).toBeInTheDocument();
+    // 权重列与权重合计都随「人员类别只决定发码数量」一起移除
+    expect(screen.queryByRole('columnheader', { name: '权重' })).toBeNull();
+    expect(screen.queryByText(/权重合计/)).toBeNull();
   });
 
   it('发码页渲染批量发码表单与码明细', async () => {
     renderPage(<AdminTickets />);
 
     expect(await screen.findByText('批量发码')).toBeInTheDocument();
-    expect(await screen.findByText('ABCD2345')).toBeInTheDocument();
+    expect(await screen.findByText('123456789012')).toBeInTheDocument();
     // 状态列文字表意（Tag 颜色仅辅助）
     expect(await screen.findByText('未使用')).toBeInTheDocument();
   });
@@ -431,6 +429,9 @@ describe('后台页面渲染', () => {
     // 结果是按被评议人列出的：被评对象是职务/车间，不是职工
     expect(await screen.findByText('主任')).toBeInTheDocument();
     expect(await screen.findByRole('columnheader', { name: '被评对象' })).toBeInTheDocument();
+    // 去权重后结果按人员类别分行：类别列与类别内排名必须真实渲染
+    expect(await screen.findByRole('columnheader', { name: '人员类别' })).toBeInTheDocument();
+    expect(await screen.findByRole('columnheader', { name: '类别内排名' })).toBeInTheDocument();
     expect(await screen.findByText(/共收到 1 张提交表/)).toBeInTheDocument();
     // Button 带 href 时渲染成 a 标签，角色是 link 而不是 button
     expect(screen.getByRole('link', { name: /导\s*出\s*Excel/ })).toBeInTheDocument();
@@ -450,6 +451,8 @@ describe('后台页面渲染', () => {
     expect(await screen.findByText('某某单位职工素质评议')).toBeInTheDocument();
     // 表体按被评议人列出结果（不再有姓名与工号列）
     expect(await screen.findByText('主任')).toBeInTheDocument();
+    expect(await screen.findByRole('columnheader', { name: '人员类别' })).toBeInTheDocument();
+    expect(await screen.findByRole('columnheader', { name: '类别内排名' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: '工号' })).not.toBeInTheDocument();
     expect(await screen.findByText(/考评人签字/)).toBeInTheDocument();
     // 最终交付物的打印增强必须保留：A4 横向、表头跨页重复、行不切断
@@ -477,7 +480,8 @@ describe('后台页面渲染', () => {
     await user.click(await screen.findByRole('button', { name: /新增人员类别/ }));
 
     expect(await screen.findByRole('textbox', { name: /代码/ })).toBeInTheDocument();
-    // 权重是 InputNumber，可访问角色为 spinbutton
-    expect(await screen.findByRole('spinbutton', { name: /权重/ })).toBeInTheDocument();
+    // 排序是 InputNumber，可访问角色为 spinbutton；权重项已随权重一起删除
+    expect(await screen.findByRole('spinbutton', { name: /排序/ })).toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: /权重/ })).toBeNull();
   });
 });

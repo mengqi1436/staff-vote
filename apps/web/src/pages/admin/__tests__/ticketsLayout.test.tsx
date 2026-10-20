@@ -29,7 +29,6 @@ vi.mock('../../../lib/api.js', async () => {
             id: 'a',
             code: 'A',
             name: '领导班子',
-            weightPercent: 100,
             sortOrder: 1,
             enabled: true,
             issuedCount: 10,
@@ -63,7 +62,7 @@ const listMock = vi.mocked(adminApi.tickets.list);
 
 const UNUSED_ROW = {
   id: 'k1',
-  code: 'ABCD2345',
+  code: '123456789012',
   status: 'unused' as const,
   usedAt: null,
   createdAt: '2026-09-19T02:00:00.000Z',
@@ -106,7 +105,7 @@ describe('随机码页操作流布局', () => {
   it('「一键作废未使用码」在未使用码卡内，不在发码卡内', async () => {
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
 
     const unusedCard = cardOf('未使用随机码');
     expect(within(unusedCard).getByRole('button', { name: /一键作废未使用码/ })).toBeInTheDocument();
@@ -118,7 +117,7 @@ describe('随机码页操作流布局', () => {
   it('评议部门排在数量表格之前（选部门 → 填数量 → 生成）', async () => {
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
 
     const department = screen.getByLabelText('评议部门');
     const quantityHeader = screen.getByText(/本批发放数量/);
@@ -128,7 +127,7 @@ describe('随机码页操作流布局', () => {
   it('卡片顺序是 发码 → 未使用码 → 使用统计', async () => {
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
 
     expect(precedes(cardOf('批量发码'), cardOf('未使用随机码'))).toBe(true);
     expect(precedes(cardOf('未使用随机码'), cardOf('人员类别使用统计'))).toBe(true);
@@ -138,7 +137,7 @@ describe('随机码页操作流布局', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await screen.findByText('ABCD2345');
+    await screen.findByText('123456789012');
     // 未填写时给出下一步，而不是空白
     expect(screen.getByText('填写数量后生成')).toBeInTheDocument();
 

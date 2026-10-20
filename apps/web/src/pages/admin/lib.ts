@@ -1,8 +1,8 @@
 /**
  * 后台管理页面的纯函数工具集。
  *
- * 单独成文件是为了可单测：权重合计、按权重拆分数量，
- * 都是算错了会直接影响发码的逻辑，不能只靠肉眼核对。
+ * 单独成文件是为了可单测：时间格式化、后端错误文案提取，
+ * 都是每个页面都会用到、写错了会直接让管理员看不懂原因的逻辑。
  */
 import dayjs from 'dayjs';
 import { ApiError } from '../../lib/api.js';
@@ -23,29 +23,6 @@ export function formatDate(value: string | null | undefined): string {
   if (!value) return EMPTY_TEXT;
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.format('YYYY-MM-DD') : EMPTY_TEXT;
-}
-
-export interface WeightSummary {
-  /** 启用人员类别的权重合计 */
-  total: number;
-  /** 距 100 的差额：正数表示还差多少，负数表示超出多少 */
-  diff: number;
-  /** 启用人员类别数量 */
-  enabledCount: number;
-}
-
-/**
- * 汇总启用人员类别的权重。
- *
- * 后端校验的是「启用人员类别权重合计 = 100」，因此停用人员类别一律不计入，
- * 否则管理员会被一个与后端说明不同的数字误导。
- */
-export function summarizeWeights(
-  types: Array<{ weightPercent: number; enabled: boolean }>,
-): WeightSummary {
-  const enabled = types.filter((type) => type.enabled);
-  const total = enabled.reduce((sum, type) => sum + type.weightPercent, 0);
-  return { total, diff: 100 - total, enabledCount: enabled.length };
 }
 
 /**

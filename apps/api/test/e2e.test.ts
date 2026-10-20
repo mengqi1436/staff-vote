@@ -93,14 +93,14 @@ beforeAll(async () => {
   // 主场次由用例 1b 经接口创建并 start；这里只建它前面的场次名占位（draft）。
   sessionId = await createTestSession(prisma, 'e2e-主评议', 'draft');
 
-  // 票种由本文件自行建立，不依赖 seed：端到端测试跑在独立的测试库上，
-  // 而 seed 只写开发库。权重仍为 50/30/20（合计 100），
-  // 这样用例 14 的加权归一化断言才有确定的分母。
+  // 人员类别由本文件自行建立，不依赖 seed：端到端测试跑在独立的测试库上，
+  // 而 seed 只写开发库。类别只决定发码数量（一码一票），不参与任何加权；
+  // 用例 14 按类别分别断言，因此 A/B/C 三个类别都要在。
   await prisma.ticketType.createMany({
     data: [
-      { sessionId, code: 'A', name: 'A 票（领导评议）', weightPercent: 50, sortOrder: 0 },
-      { sessionId, code: 'B', name: 'B 票（部门互评）', weightPercent: 30, sortOrder: 1 },
-      { sessionId, code: 'C', name: 'C 票（职工评议）', weightPercent: 20, sortOrder: 2 },
+      { sessionId, code: 'A', name: 'A 票（领导评议）', sortOrder: 0 },
+      { sessionId, code: 'B', name: 'B 票（部门互评）', sortOrder: 1 },
+      { sessionId, code: 'C', name: 'C 票（职工评议）', sortOrder: 2 },
     ],
   });
 
@@ -218,18 +218,13 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.status).toBeLessThan(500);
   });
 
-  it('5. 配置人员类别权重（合计必须 100）', async () => {
+  it('5. 读取本场次的人员类别（发码与结果用例要用到 id）', async () => {
     const types = await admin.get('/api/admin/ticket-types');
     expect(types.status).toBe(200);
-    // 人员类别由本文件的 beforeAll 建立（A/B/C = 50/30/20）
-    expect(types.body).toHaveLength(3);
+    // 人员类别由本文件的 beforeAll 建立（A/B/C 各一类，只决定发码数量）
+    expect(types.body.map((t: { code: string }) => t.code).sort()).toEqual(['A', 'B', 'C']);
     ticketTypeAId = types.body.find((t: { code: string }) => t.code === 'A').id;
     ticketTypeBId = types.body.find((t: { code: string }) => t.code === 'B').id;
-
-    // 把 A 的权重改成 60，合计会变成 110，必须被拒绝
-    const bad = await admin.patch(`/api/admin/ticket-types/${ticketTypeAId}`).send({ weightPercent: 60 });
-    expect(bad.status).toBeGreaterThanOrEqual(400);
-    expect(bad.status).toBeLessThan(500);
   });
 
   it('6. 非开放时段（评议未 start）：投票状态为关闭，登录被拒', async () => {
@@ -272,8 +267,8 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(genB.status).toBe(200);
     generatedCodes = [genA.body.codes[0] as string, genB.body.codes[0] as string];
     expect(new Set(generatedCodes).size).toBe(2);
-    // A 票码应为 8 位且不含易混字符
-    expect(generatedCodes[0]).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
+    // A 票码应为 12 位纯数字
+    expect(generatedCodes[0]).toMatch(/^[0-9]{12}$/);
   });
 
   it('8. 职工凭 A 票码登录并取到动态打分表', async () => {
@@ -422,36 +417,62 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(res.body.voteWindow.open).toBe(true);
   });
 
-  it('14. 结果按人员类别加权并对实际有票的人员类别归一化', async () => {
+  it('14. 结果按人员类别分别输出：每类独立得分与类别内排名，C 票零票不出行', async () => {
     const res = await admin.get(`/api/admin/results?departmentId=${departmentId}`);
     expect(res.status).toBe(200);
 
-    // 只有 A(50%) 与 B(30%) 有票，C(20%) 零票 → 权重按 80 归一化
+    // A / B 各一张表，C 零票 → 只有两个类别参与，各 3 列 = 6 行
     expect(res.body.ticketTypesInvolved.map((t: { code: string }) => t.code).sort()).toEqual(['A', 'B']);
     expect(res.body.sheetCount).toBe(2);
+    expect(res.body.rows).toHaveLength(6);
+    expect(
+      (res.body.rows as Array<{ ticketTypeCode: string }>).every((row) => row.ticketTypeCode !== 'C'),
+    ).toBe(true);
 
-    const director = res.body.rows.find((r: { voteColumnName: string }) => r.voteColumnName === '主任');
-    expect(director).toBeTruthy();
+    const rowOf = (
+      code: string,
+      voteColumnId: string,
+    ): {
+      rank: number;
+      comprehensiveScore: number;
+      criteria: Array<{ criterionName: string; rawScore: number; normalizedScore: number }>;
+    } =>
+      res.body.rows.find(
+        (row: { ticketTypeCode: string; voteColumnId: string }) =>
+          row.ticketTypeCode === code && row.voteColumnId === voteColumnId,
+      );
 
-    const score = director.criteria.find(
-      (c: { criterionName: string }) => c.criterionName === '工作业绩',
+    // A 票·主任：业绩 90/100 → 90；质量 8/10 → 80；综合 (90+80)/2 = 85
+    const aFirst = rowOf('A', voteColumnAId);
+    expect(aFirst).toMatchObject({ rank: 1, comprehensiveScore: 85 });
+    expect(aFirst.criteria.find((c) => c.criterionName === '工作业绩')).toMatchObject({
+      rawScore: 90,
+      normalizedScore: 90,
+    });
+    // 质量满分只有 10：8 分归一化后是 80，不是 8
+    expect(aFirst.criteria.find((c) => c.criterionName === '工作质量')).toMatchObject({
+      rawScore: 8,
+      normalizedScore: 80,
+    });
+
+    // A 票类别内排名只看本类：85（主任 sort0）> 75（第二个主任）> 65（党支部书记）
+    expect(rowOf('A', voteColumnAId).rank).toBe(1);
+    expect(rowOf('A', voteColumnCId).rank).toBe(2);
+    expect(rowOf('A', voteColumnBId).rank).toBe(3);
+    expect(rowOf('A', voteColumnCId).comprehensiveScore).toBe(75);
+    expect(rowOf('A', voteColumnBId).comprehensiveScore).toBe(65);
+
+    // B 票自己一套：70/6→65、60/5→55、50/4→45；排名独立，不被 A 票的高分影响
+    expect(rowOf('B', voteColumnAId)).toMatchObject({ rank: 1, comprehensiveScore: 65 });
+    expect(rowOf('B', voteColumnCId)).toMatchObject({ rank: 2, comprehensiveScore: 55 });
+    expect(rowOf('B', voteColumnBId)).toMatchObject({ rank: 3, comprehensiveScore: 45 });
+
+    // 跨类别不合并：旧口径的 (90×50 + 70×30)/80 = 82.5、(82.5+72.5)/2 = 77.5 都不得出现
+    const combined = new Set(
+      (res.body.rows as Array<{ comprehensiveScore: number }>).map((row) => row.comprehensiveScore),
     );
-    // (90*50 + 70*30) / 80 = 82.5
-    expect(score.rawScore).toBeCloseTo(82.5, 2);
-
-    const quality = director.criteria.find(
-      (c: { criterionName: string }) => c.criterionName === '工作质量',
-    );
-    // (8*50 + 6*30) / 80 = 7.25，归一化到 0-100 → 72.5
-    expect(quality.rawScore).toBeCloseTo(7.25, 2);
-    expect(quality.normalizedScore).toBeCloseTo(72.5, 2);
-
-    // 综合得分 = (82.5 + 72.5) / 2 = 77.5
-    // 若把原始分直接相加再平均会得到 (82.5+7.25)/2 = 44.875，这条断言守住口径
-    expect(director.comprehensiveScore).toBeCloseTo(77.5, 2);
-
-    expect(res.body.rows[0].rank).toBe(1);
-    expect(res.body.rows[0].voteColumnName).toBe('主任');
+    expect(combined.has(82.5)).toBe(false);
+    expect(combined.has(77.5)).toBe(false);
   });
 
   it('15. 导出 Excel 可被解析且含真实数据', async () => {
@@ -480,7 +501,7 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(text).toContain('被评对象');
     expect(text).toContain('主任');
 
-    // 统计四说明：人员类别单项明细 / 票别合计明细 两个新 sheet
+    // 统计四说明：人员类别单项明细 / 人员类别合计明细 两个新 sheet
     const sheetNames = workbook.worksheets.map((sheet) => sheet.name);
     expect(sheetNames).toContain('人员类别单项明细');
     expect(sheetNames).toContain('人员类别合计明细');
@@ -513,7 +534,7 @@ describe('端到端：职工素质评议完整流程', () => {
     const codes = sheet
       ?.getSheetValues()
       .flat()
-      .filter((v): v is string => typeof v === 'string' && /^[A-HJ-NP-Z2-9]{8}$/.test(v));
+      .filter((v): v is string => typeof v === 'string' && /^[0-9]{12}$/.test(v));
     expect(codes && codes.length).toBeGreaterThanOrEqual(1);
 
     const headerRow = sheet?.getRow(1).values;
@@ -546,6 +567,12 @@ describe('端到端：职工素质评议完整流程', () => {
     expect(created.status).toBe(200);
     sessionBId = created.body.session.id;
     expect(created.body.session.status).toBe('draft');
+    // 向导按字典部门名称把场内部门建成车间问卷（名称含「车间」），
+    // 场次打分范围必须与之一致，否则 start 会被完整性校验拒绝。
+    await prisma.voteSession.update({
+      where: { id: sessionBId },
+      data: { scoreScope: 'workshop' },
+    });
     // 向导按所选字典部门自动在场内插入同名部门
     expect(created.body.session.orgDepartmentName).toBe('e2e-字典车间');
 
@@ -559,7 +586,7 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '车间主任' });
     const criterionB = await admin
       .post('/api/admin/criteria')
-      .send({ sessionId: sessionBId, templateType: 'person', name: '安全', minScore: 0, maxScore: 100 });
+      .send({ sessionId: sessionBId, templateType: 'workshop', name: '安全', minScore: 0, maxScore: 100 });
     expect(colB.status).toBe(200);
     expect(criterionB.status).toBe(200);
 
@@ -569,11 +596,10 @@ describe('端到端：职工素质评议完整流程', () => {
       .send({ sessionId: sessionBId, departmentId: departmentB.id, name: '王五' });
     expect(empB.status).toBe(200);
 
-    // 票种 code 场次内唯一（同码可用于不同场次）；第二场次用独立编码 D 以区分语义；
-    // 权重校验按场次内启用票种合计，本场次从 0 起算，100 合法。
+    // 票种 code 场次内唯一（同码可用于不同场次）；第二场次用独立编码 D 以区分语义。
     const typeBCreated = await admin
       .post('/api/admin/ticket-types')
-      .send({ sessionId: sessionBId, code: 'D', name: 'D 票（第二评议）', weightPercent: 100 });
+      .send({ sessionId: sessionBId, code: 'D', name: 'D 票（第二评议）' });
     expect(typeBCreated.status).toBe(200);
     const typeBRow = typeBCreated.body;
 
@@ -603,14 +629,26 @@ describe('端到端：职工素质评议完整流程', () => {
       departmentB.id,
     ]);
 
-    // 完整提交（1 列 × 1 项点 = 1 格）
+    // 完整提交：向导建场时已自动种下 5 个默认项点，这里按打分表实际返回的
+    // 项点全集填分，不依赖「测试自己只建了一个项点」的假设。
+    const sheetB = await request(app)
+      .get('/api/vote/sheet')
+      .query({ departmentId: departmentB.id })
+      .set('Authorization', `Bearer ${loginB.body.token}`);
+    expect(sheetB.status).toBe(200);
+    const itemsB = (
+      sheetB.body.criteria as Array<{ id: string; maxScore: number }>
+    ).map((criterion) => ({
+      // 车间问卷没有被评列：整表唯一一格虚拟「得分」列，voteColumnId 必须为 null。
+      voteColumnId: null,
+      criterionId: criterion.id,
+      // 默认项点的满分不同（如 0-20），按各自上限填分才合法。
+      score: criterion.maxScore,
+    }));
     const submitB = await request(app)
       .post('/api/vote/submit')
       .set('Authorization', `Bearer ${loginB.body.token}`)
-      .send({
-        departmentId: departmentB.id,
-        items: [{ voteColumnId: colB.body.id, criterionId: criterionB.body.id, score: 85 }],
-      });
+      .send({ departmentId: departmentB.id, items: itemsB });
     expect(submitB.status).toBe(200);
 
     // 统计：发放/使用口径可见（码不记名，无领码人留痕）

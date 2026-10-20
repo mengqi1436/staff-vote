@@ -28,13 +28,14 @@ import { voteColumnsRouter } from './voteColumns.js';
  *   /sessions           GET POST PATCH DELETE（写需 settings.write）；
  *                       DELETE /:id 仅允许删除无答卷的场次（有答卷 409 SESSION_HAS_SHEETS）
  *                       POST /:id/start 前做配置完整性校验（缺项 409 SESSION_INCOMPLETE）
- *   /sessions/:id/ticket-plan PUT  票别分配聚合：提交启用票种全集并发码
+ *   /sessions/:id/ticket-plan PUT  人员类别分配聚合：提交启用人员类别全集并发码
  *                       （需 ticketTypes.write + tickets.generate）
  *   /sessions/:id/export.xlsx GET  整场整合导出（results.export）
- *   /ticket-types      GET POST PATCH DELETE   权重合计=100 校验（写需 ticketTypes.write）
+ *   /ticket-types      GET POST PATCH DELETE   人员类别（无权重，差异只在发码数量）
+ *                         （写需 ticketTypes.write）
  *   /tickets           GET（分页筛选）
- *   /tickets/generate  POST { ticketTypeId, count }  → 批量发码，记 TicketBatch 与 AuditLog
- *                                                   （tickets.generate）
+ *   /tickets/generate  POST { ticketTypeId, count }  → 批量发码（count 即该类别发码数），
+ *                                                   记 TicketBatch 与 AuditLog（tickets.generate）
  *   /tickets/export    GET  → xlsx
  *   /tickets/:id/export.xlsx GET  按随机码导出答卷（results.export）
  *   /tickets/:id/revoke POST → 作废单张未使用的码（tickets.revoke）

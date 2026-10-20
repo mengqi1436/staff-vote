@@ -42,7 +42,7 @@ type CodePairRow = {
  * 本次生成的一个码。
  *
  * 必须带人员类别：一次发码可以同时给多个人员类别生成，只记码的字符串会让管理员
- * 面对一堆码却分不清哪个属于哪个人员类别（发错人员类别等于发错权重）。
+ * 面对一堆码却分不清哪个属于哪个人员类别（发错类别等于把码发给了错的人）。
  */
 type GeneratedCode = {
   code: string;
@@ -145,7 +145,7 @@ export function AdminTickets() {
 
   const typeOptions = (ticketTypes.data ?? []).map((type) => ({
     value: type.id,
-    label: `${type.name}（${type.code}，权重 ${type.weightPercent}%）${type.enabled ? '' : ' · 已停用'}`,
+    label: `${type.name}（${type.code}）${type.enabled ? '' : ' · 已停用'}`,
   }));
 
   /** 本次生成的码按人员类别分组；组内两栏排布，便于按人员类别打印后逐组核对。 */
@@ -542,7 +542,7 @@ export function AdminTickets() {
               title: '人员类别',
               key: 'name',
               render: (_: unknown, row: TicketTypeDto) =>
-                `${row.name}（${row.code} · 权重 ${row.weightPercent}%）`,
+                `${row.name}（${row.code}）`,
             },
             {
               title: '已发放（张）',
@@ -571,7 +571,7 @@ export function AdminTickets() {
               ),
             },
           ]}
-          locale={{ emptyText: '没有启用的人员类别，请先到「人员类别权重」页签配置' }}
+          locale={{ emptyText: '没有启用的人员类别，请先到「人员类别」页签配置' }}
         />
         <div
           style={{
@@ -718,7 +718,7 @@ export function AdminTickets() {
           columns={typeStatsColumns}
           dataSource={ticketTypes.data ?? []}
           pagination={false}
-          locale={{ emptyText: '还没有人员类别，请先到「人员类别权重」页签配置' }}
+          locale={{ emptyText: '还没有人员类别，请先到「人员类别」页签配置' }}
         />
       </Card>
     </>

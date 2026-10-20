@@ -18,7 +18,7 @@ import { SessionStats } from './StatsDashboard.js';
  * 单页评议工作台（/admin/sessions/:id）。
  *
  * 把原多个管理页整合到一个页面：页头常驻本场的开放控制（状态 Tag + 状态机按钮 +
- * 开放窗口展示与编辑），页签按评议工作流排列打分表 → 人员类别权重 → 随机码 →
+ * 开放窗口展示与编辑），页签按评议工作流排列打分表 → 人员类别 → 随机码 →
  * 结果导出。「部门」「评议项目」「职工」页签已移除：场内部门在建场时按全局部门列表
  * 自动落一条，评议项目的增删与上下移由打分表网格承接，职工名单迁到全局人员管理。
  *
@@ -183,7 +183,7 @@ export function SessionWorkspace() {
             // 评议项目的增删与上下移由打分表网格承接（components/admin/QuestionnaireGrid），
             // 职工名单已迁到全局人员管理（/admin/employees）
             { key: 'questionnaire', label: '打分表', children: <AdminQuestionnaire /> },
-            { key: 'ticket-types', label: '人员类别权重', children: <AdminTicketTypes /> },
+            { key: 'ticket-types', label: '人员类别', children: <AdminTicketTypes /> },
             { key: 'tickets', label: '随机码', children: <AdminTickets /> },
             {
               key: 'stats',
