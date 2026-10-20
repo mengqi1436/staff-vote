@@ -36,6 +36,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
+const { generateCode } = await import('../src/lib/code.js');
 const { cleanupRbac, createAdmin, createRole } = await import('./rbac-fixtures.js');
 const { DEFAULT_SESSION_ID, ensureDefaultSession } = await import('./session-fixtures.js');
 
@@ -72,8 +73,7 @@ interface MadeTickets {
 /**
  * 造「票种 + 批次 + 指定状态的码」。
  *
- * 票种一律 `weightPercent: 0` 且不启用：权重合计是同库其他用例的全局约束，
- * 这里不参与接口层的权重校验，夹具也不该影响别人。
+ * 人员类别一律停用：停用即不进启用集合，夹具不该影响同库其他用例。
  * 不传 sessionId 时归属默认场次。
  */
 async function makeTickets(
@@ -87,7 +87,6 @@ async function makeTickets(
       sessionId: sessionId ?? (await ensureDefaultSession(prisma)),
       code,
       name: `${TAG}人员类别-${label}`,
-      weightPercent: 0,
       enabled: false,
     },
   });
@@ -101,7 +100,7 @@ async function makeTickets(
   }> = [];
   let usedCode: string | null = null;
   const push = (status: 'unused' | 'used' | 'revoked', index: number): void => {
-    const ticketCode = `${code}-${status}${index}`;
+    const ticketCode = generateCode();
     if (status === 'used' && !usedCode) usedCode = ticketCode;
     rows.push({
       code: ticketCode,
@@ -391,7 +390,6 @@ describeDb('一键作废随机码', () => {
         sessionId: await ensureDefaultSession(prisma),
         code: `${TAG}启用人员类别${nextSeq()}`,
         name: `${TAG}人员类别-可发码`,
-        weightPercent: 0,
         enabled: true,
       },
     });

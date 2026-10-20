@@ -22,9 +22,11 @@ import {
  * 导出三件套：本页排名汇总、Excel、可打印的正式打分表。
  *
  * 说明必须写在页面上（产品原则 4「结果可复现、可解释」）：
- *   - 各项得分是「人员类别加权后的原始分」，仍落在该项的 min/max 区间内；
+ *   - 结果按人员类别分别统计，不做跨类合并；
+ *   - 各项得分是该类别在本项的平均原始分，仍落在该项的 min/max 区间内；
  *   - 综合得分是各项归一化到百分制后的等权平均；
- *   - 某人员类别在本部门零票时会被归一化排除，所以必须标出「实际参与计算的人员类别」，
+ *   - 排名是同一人员类别内的排名，不同类别之间不可比；
+ *   - 某人员类别在本部门零票时没有行，所以必须标出「实际参与计算的人员类别」，
  *     否则管理员会以为结果算错了。
  * 计分说明收进「成绩排名」标题旁的说明图标，术语与后端 src/lib/scoring.ts 的实现一致。
  */
@@ -65,9 +67,16 @@ export function AdminResults() {
   const columns: TableColumnsType<ResultRowDto> = data
     ? [
         {
-          title: '排名',
+          title: '人员类别',
+          dataIndex: 'ticketTypeCode',
+          width: 100,
+          fixed: 'left',
+          render: (value: string) => <span className="tabular">{value}</span>,
+        },
+        {
+          title: '类别内排名',
           dataIndex: 'rank',
-          width: 76,
+          width: 96,
           align: 'right',
           fixed: 'left',
           render: (value: number) => <span className="tabular">{value}</span>,
@@ -126,7 +135,7 @@ export function AdminResults() {
     <>
       <PageHeader
         title="结果与导出"
-        description="按综合得分从高到低排名。各项得分是把不同人员类别打的分按权重合并后的原始分；综合得分是把各项换算成百分制后的平均分。计算方法都写明在页面上，数字可以自己复算。"
+        description="结果按人员类别分别统计，不做跨类合并；排名是同一人员类别内的排名，不同类别之间不可比。各项得分是该类别在本项的平均原始分，综合得分是把各项换算成百分制后的平均分。计算方法都写明在页面上，数字可以自己复算。"
         extra={
           <>
             <Select
@@ -196,7 +205,7 @@ export function AdminResults() {
       {data ? (
         <Card
           title={
-            <HelpLabel help="每项得分是把各类人员打的分按权重合并，仍落在这项自己的分数区间里；综合得分是把每项换算成百分制再取平均。某项没有人打分就不参与平均，不会按 0 分算；弃权或没填的格子按 0 分算。某一类人员一张表都没交时，这类不参与计算（那是没发这类码，不算弃权）。同分并列，同一分数按被评对象名称排序。被评对象是职务或车间，不是具体职工。本页数字和导出的 Excel 一致。">
+            <HelpLabel help="结果按人员类别分别统计：每行是一个人员类别在一个被评对象上的成绩，不做跨类合并。各项得分是该类别在本项的平均原始分，仍落在这项自己的分数区间里；综合得分是把每项换算成百分制再取平均。某项没有人打分就不参与平均，不会按 0 分算；弃权或没填的格子按 0 分算。某一类人员一张表都没交时，这类不参与计算（那是没发这类码，不算弃权）。排名只在同一人员类别内比较：同分并列，同一分数按被评对象名称排序。被评对象是职务或车间，不是具体职工。本页数字和导出的 Excel 一致。">
               成绩排名
             </HelpLabel>
           }
@@ -239,8 +248,7 @@ export function AdminResults() {
             {data.ticketTypesInvolved.length ? (
               data.ticketTypesInvolved.map((type) => (
                 <span key={type.id}>
-                  <span className="tabular">{type.code}</span> {type.name}（权重{' '}
-                  <span className="tabular">{type.weightPercent}%</span>）
+                  <span className="tabular">{type.code}</span> {type.name}
                 </span>
               ))
             ) : (
@@ -255,7 +263,7 @@ export function AdminResults() {
             />
           ) : (
             <Table<ResultRowDto>
-              rowKey="voteColumnId"
+              rowKey={(row) => `${row.ticketTypeId}|${row.voteColumnId ?? 'score'}`}
               size="small"
               loading={results.loading}
               columns={columns}

@@ -20,7 +20,6 @@ const TICKET_TYPE: TicketTypeDto = {
   id: 't1',
   code: 'FRONT',
   name: '一线职工票',
-  weightPercent: 60,
   sortOrder: 1,
   enabled: true,
 };
@@ -151,9 +150,9 @@ describe('投票入口（Gate）', () => {
     fetchMock.mockResolvedValueOnce(
       reply(200, { token: 'tok-1', ticketType: TICKET_TYPE, departments: [DEPARTMENT] }),
     );
-    const { container } = renderGate('/?code=K7M2QP9X');
+    const { container } = renderGate('/?code=123456789012');
 
-    expect(await screen.findByRole('textbox')).toHaveValue('K7M2QP9X');
+    expect(await screen.findByRole('textbox')).toHaveValue('123456789012');
     expectCurrentStep(container, '验证身份');
 
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
@@ -166,7 +165,7 @@ describe('投票入口（Gate）', () => {
     fetchMock.mockResolvedValueOnce(reply(401, { error: { code: 'TICKET_USED', message: '该票据已使用' } }));
     renderGate('/');
 
-    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'AAAA2222' } });
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '100000000002' } });
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
     expect(await screen.findByText(/该随机码无效或已被使用/)).toBeInTheDocument();
@@ -179,7 +178,7 @@ describe('投票入口（Gate）', () => {
     fetchMock.mockResolvedValueOnce(reply(429, { error: { code: 'RATE_LIMITED', message: 'too many requests' } }));
     renderGate('/');
 
-    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'AAAA2222' } });
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '100000000002' } });
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
     expect(await screen.findByText(/尝试过于频繁/)).toBeInTheDocument();
@@ -188,7 +187,7 @@ describe('投票入口（Gate）', () => {
   it('没有任何可评议部门时留在入口并说明原因，不静默弹回', async () => {
     renderGateToSheet({ token: 'tok-1', ticketType: TICKET_TYPE, departments: [] });
 
-    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '123456789012' } });
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
     // 空部门是服务端的合法状态，必须说清楚「为什么进不去」，而不是把职工弹回一个没变化的页面
@@ -294,7 +293,7 @@ describe('多场评议（Gate 容错）', () => {
     });
     renderGate('/');
 
-    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '123456789012' } });
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
     expect(await screen.findByText(/本次评议未开放/)).toBeInTheDocument();
@@ -320,7 +319,7 @@ describe('多场评议（Gate 容错）', () => {
     });
     renderGate('/');
 
-    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'K7M2QP9X' } });
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: '123456789012' } });
     fireEvent.click(screen.getByRole('button', { name: /进入打分/ }));
 
     expect(await screen.findByText('已进入打分表页')).toBeInTheDocument();

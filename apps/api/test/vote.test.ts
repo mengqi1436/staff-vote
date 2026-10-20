@@ -25,6 +25,7 @@ process.env.DATABASE_URL = testDatabaseUrl;
 
 const { createApp } = await import('../src/app.js');
 const { createPrismaClient, prisma: appPrisma } = await import('../src/db.js');
+const { generateCode } = await import('../src/lib/code.js');
 const { VOTE_CLOSED_MESSAGE } = await import('../src/lib/settings.js');
 const { signAdminToken, verifyVoteToken } = await import('../src/lib/token.js');
 const { createTestSession } = await import('./session-fixtures.js');
@@ -36,6 +37,8 @@ const prisma = createPrismaClient(testDatabaseUrl);
 
 const tag = randomUUID().replaceAll('-', '').slice(0, 8).toUpperCase();
 const MISSING_ID = '00000000-0000-7000-8000-000000000000';
+/** 不存在的 12 位数字码：随机生成的码恰好等于它的概率是 1e-12，可忽略。 */
+const MISSING_CODE = '000000000000';
 
 interface Fixture {
   /** 本夹具专用评议（voting）：所有业务数据都挂在它下面，登录/提交的场次校验因此可用 */
@@ -84,10 +87,14 @@ interface CriterionFixture {
 async function createFixture(): Promise<Fixture> {
   // 场次直接置为 voting：登录与提交都要求「票所属场次 = voting」。
   const sessionId = await createTestSession(prisma, `投票测试评议-${tag}`, 'voting');
+  // 本文件的部门是车间问卷（questionnaireType=workshop），场次范围必须与之一致；
+  // 否则 /vote/sheet 与 /vote/submit 会按「本评议不评议该类打分表」返回 403。
+  // 需要 person / both 的用例各自在用例内改写 scoreScope。
+  await prisma.voteSession.update({ where: { id: sessionId }, data: { scoreScope: 'workshop' } });
   // 占位一场（draft）：让「库里 ≥2 场」成为本文件的稳定前提。
   const placeholderSessionId = await createTestSession(prisma, `投票测试占位评议-${tag}`, 'draft');
   const ticketType = await prisma.ticketType.create({
-    data: { sessionId, code: `VT${tag}`, name: `投票测试人员类别-${tag}`, weightPercent: 100 },
+    data: { sessionId, code: `VT${tag}`, name: `投票测试人员类别-${tag}` },
   });
   // 表头三件套在 0010 起的真源是场次模板表：显式给非默认值，用默认值断言不出
   // "原样回传"，硬编码默认值也能蒙混过关。
@@ -199,7 +206,6 @@ async function createFixture(): Promise<Fixture> {
 
 const fixture = await createFixture();
 
-let ticketSeq = 0;
 let loginSeq = 0;
 
 /**
@@ -223,7 +229,6 @@ async function setVoteWindow(
 
 /** 建一张孤立票据（自带批次），让每个用例从"未使用的码"出发，互不消耗。 */
 async function createTicket(status: 'unused' | 'used' | 'revoked' = 'unused') {
-  ticketSeq += 1;
   const batch = await prisma.ticketBatch.create({
     data: {
       ticketTypeId: fixture.ticketTypeId,
@@ -234,7 +239,7 @@ async function createTicket(status: 'unused' | 'used' | 'revoked' = 'unused') {
   });
   return prisma.ticket.create({
     data: {
-      code: `${tag}${ticketSeq}`,
+      code: generateCode(),
       ticketTypeId: fixture.ticketTypeId,
       batchId: batch.id,
       sessionId: fixture.sessionId,
@@ -449,36 +454,64 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
       id: fixture.ticketTypeId,
       code: fixture.ticketTypeCode,
       name: fixture.ticketTypeName,
-      weightPercent: 100,
     });
     // 响应带票所属场次（投票端按它展示与判定开放状态）；scoreScope 决定双表流程。
     expect(res.body.session).toEqual({
       id: fixture.sessionId,
       name: `投票测试评议-${tag}`,
       status: 'voting',
-      scoreScope: 'person',
+      scoreScope: 'workshop',
     });
 
-    // 部门只含启用项、按 sortOrder：夹具两个部门 sortOrder 1 / 2，停用部门不出现。
+    // 部门只含启用项：本场次 score_scope=workshop，只返回车间部门；
+    // 默认 person 类型的「他部门」与停用部门都不出现。
     const ids = (res.body.departments as Array<{ id: string }>).map((department) => department.id);
     expect(ids).toContain(fixture.departmentId);
-    expect(ids.indexOf(fixture.departmentId)).toBeLessThan(ids.indexOf(fixture.otherDepartmentId));
+    expect(ids).not.toContain(fixture.otherDepartmentId);
     expect(ids).not.toContain(fixture.disabledDepartmentId);
 
     // 令牌里只有票据 ID 与票种 ID，响应体里不出现码明文。
     expect(JSON.stringify(res.body)).not.toContain(ticket.code);
   });
 
-  it('小写与带空格的码同样可登录（规范化）', async () => {
-    const ticket = await createTicket();
+  it('部门列表按 sortOrder 返回（同类型内）', async () => {
+    const second = await prisma.department.create({
+      data: {
+        sessionId: fixture.sessionId,
+        name: `投票测试车间二-${tag}`,
+        sortOrder: 2,
+        questionnaireType: 'workshop',
+      },
+    });
+    try {
+      const ticket = await createTicket();
+      const res = await login(ticket.code);
 
-    const res = await login(`  ${ticket.code.toLowerCase()} `);
+      expect(res.status).toBe(200);
+      const ids = (res.body.departments as Array<{ id: string }>).map(
+        (department) => department.id,
+      );
+      expect(ids).toContain(fixture.departmentId);
+      expect(ids).toContain(second.id);
+      expect(ids.indexOf(fixture.departmentId)).toBeLessThan(ids.indexOf(second.id));
+    } finally {
+      await prisma.department.delete({ where: { id: second.id } });
+    }
+  });
 
-    expect(res.status).toBe(200);
+  it('带空格与连字符的 12 位数字码同样可登录（规范化）', async () => {
+    // 打印发放的码常被手工抄成 4 位一组：规范化只去空白与连字符，纯数字无大小写概念
+    const spaced = await createTicket();
+    const grouped = `${spaced.code.slice(0, 4)} ${spaced.code.slice(4, 8)} ${spaced.code.slice(8)}`;
+    expect((await login(`  ${grouped} `)).status).toBe(200);
+
+    const dashed = await createTicket();
+    const hyphenated = `${dashed.code.slice(0, 4)}-${dashed.code.slice(4, 8)}-${dashed.code.slice(8)}`;
+    expect((await login(hyphenated)).status).toBe(200);
   });
 
   it('码不存在 → 401', async () => {
-    const res = await login(`ZZ${tag}ZZ`);
+    const res = await login(MISSING_CODE);
 
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('INVALID_CODE');
@@ -547,7 +580,7 @@ describe('POST /api/vote/session —— 凭码换令牌', () => {
   it('未开放时优先按码判定：无效码仍然是 401 而不是 403', async () => {
     await setVoteWindow(false);
 
-    const res = await login(`ZZ${tag}ZZ`);
+    const res = await login(MISSING_CODE);
 
     expect(res.status).toBe(401);
   });

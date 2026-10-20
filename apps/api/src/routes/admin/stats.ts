@@ -56,6 +56,7 @@ resultsRouter.get('/export.xlsx', async (req, res) => {
     generatedAt: new Date(dto.generatedAt),
     rows: dto.rows.map((row) => ({
       rank: row.rank,
+      ticketTypeCode: row.ticketTypeCode,
       voteColumnName: row.voteColumnName,
       comprehensiveScore: row.comprehensiveScore,
       criterionCount: row.criteria.length,

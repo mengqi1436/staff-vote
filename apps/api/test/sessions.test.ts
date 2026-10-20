@@ -88,11 +88,11 @@ async function newDepartment(sessionId: string, name: string): Promise<string> {
   return res.body.id;
 }
 
-/** 给评议建一个 100% 权重的人员类别（走接口；评议内启用合计从 0 起算）。 */
+/** 给评议建一个人员类别（走接口；类别只决定发码数量，没有跨行合计约束）。 */
 async function newTicketType(sessionId: string, code: string): Promise<string> {
   const res = await agent
     .post('/api/admin/ticket-types')
-    .send({ sessionId, code, name: `${TAG}人员类别-${code}`, weightPercent: 100 });
+    .send({ sessionId, code, name: `${TAG}人员类别-${code}` });
   expect(res.status).toBe(200);
   return res.body.id;
 }
@@ -339,7 +339,7 @@ describeDb('评议管理', () => {
 
     const type = await agent
       .post('/api/admin/ticket-types')
-      .send({ code: `${TAG}NOSESS`, name: '无评议人员类别', weightPercent: 10 });
+      .send({ code: `${TAG}NOSESS`, name: '无评议人员类别' });
     expect(type.status).toBe(400);
     expect(type.body.error.code).toBe('SESSION_REQUIRED');
 

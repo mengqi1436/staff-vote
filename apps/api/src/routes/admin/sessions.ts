@@ -71,14 +71,13 @@ const ActionParamSchema = z.object({
   action: z.enum(['start', 'pause', 'end']),
 });
 
-/** 人员类别分配的一行：编码 1-8 字符、名称 1-32 字符、权重整数、数量 ≥0。 */
+/** 人员类别分配的一行：编码 1-8 字符、名称 1-32 字符、发码数量 ≥0（数量即该类别发的码数）。 */
 const TicketPlanSchema = z.object({
   types: z
     .array(
       z.object({
         code: z.string().trim().min(1, '人员类别编码不能为空').max(8, '人员类别编码最长 8 个字符'),
         name: z.string().trim().min(1, '人员类别名称不能为空').max(32, '人员类别名称最长 32 个字符'),
-        weightPercent: z.number().int('权重必须为整数').min(0, '权重不能为负'),
         count: z.number().int('数量必须为整数').min(0, '数量不能为负'),
       }),
     )
@@ -116,8 +115,8 @@ sessionsRouter.delete('/:id', requirePermission('settings.write'), async (req, r
 });
 
 /**
- * 票别分配（向导第三步）：本次提交集合 = 启用票种全集，权重合计必须 100，
- * count>0 的票种自动建批次发码（响应不返回明文码）。
+ * 人员类别分配（向导第三步）：本次提交集合 = 启用人员类别全集，
+ * count 就是该类别要发的码数，count>0 自动建批次发码（响应不返回明文码）。
  * 先挂 ticketTypes.write 再挂 tickets.generate：两个权限缺一不可。
  */
 sessionsRouter.put(
@@ -155,6 +154,7 @@ sessionsRouter.get('/:id/export.xlsx', requirePermission('results.export'), asyn
           generatedAt: new Date(dto.generatedAt),
           rows: dto.rows.map((row) => ({
             rank: row.rank,
+            ticketTypeCode: row.ticketTypeCode,
             voteColumnName: row.voteColumnName,
             comprehensiveScore: row.comprehensiveScore,
             criterionCount: row.criteria.length,

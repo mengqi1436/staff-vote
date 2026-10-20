@@ -239,6 +239,8 @@ export function QuestionnaireGrid({
   );
   const sessionState = usePolling(loadSessionState, 0);
   const scoreScope = sessionState.data?.scoreScope ?? 'person';
+  /** 本场次所属车间：选人只搜该车间人员（人员目录按 orgDepartmentId 过滤）。 */
+  const staffOrgDepartmentId = sessionState.data?.orgDepartmentId ?? undefined;
 
   // 人员管理：被评议人列第二行「职务与姓名」里选人用的候选池。
   // 全局搜索（姓名 / 工号 / 部门名）交给服务端：评议的部门名单再多也不把全量拉到前端。
@@ -250,7 +252,12 @@ export function QuestionnaireGrid({
     const seq = ++staffSearchSeq.current;
     setStaffLoading(true);
     try {
-      const rows = await adminApi.staffDirectory.list({ q: keyword.trim() || undefined, limit: 50 });
+      // 只搜本场次所属车间的人员：其他车间同名的人不该出现在候选里。
+      const rows = await adminApi.staffDirectory.list({
+        q: keyword.trim() || undefined,
+        orgDepartmentId: staffOrgDepartmentId,
+        limit: 50,
+      });
       // 丢弃过期响应：快速输入时先发的请求可能后到，不能用旧结果覆盖新结果。
       if (seq === staffSearchSeq.current) setStaffOptions(rows);
     } catch {
@@ -258,7 +265,7 @@ export function QuestionnaireGrid({
     } finally {
       if (seq === staffSearchSeq.current) setStaffLoading(false);
     }
-  }, []);
+  }, [staffOrgDepartmentId]);
 
   useEffect(() => {
     void searchStaff('');
@@ -278,9 +285,6 @@ export function QuestionnaireGrid({
   const [footerDraft, setFooterDraft] = useState('');
   /** 表尾新增评议项目的草稿行开关。 */
   const [criterionDraft, setCriterionDraft] = useState(false);
-  /** 新增被评议人列草稿的重置序号：仅创建成功后递增，重挂载输入框清空草稿。 */
-  const [columnDraftSeq, setColumnDraftSeq] = useState(0);
-
   const handleFailure = (caught: unknown, fallback = '操作失败，请重试'): void => {
     if (caught instanceof ApiError && caught.status === 403) {
       setDenied(caught.message);
@@ -413,17 +417,14 @@ export function QuestionnaireGrid({
     }
   };
 
-  /** 表尾空列头内联新增被评议人列：输入列名失焦即创建（排序取现有列数 + 1）。 */
-  const commitNewColumn = async (name: string): Promise<void> => {
-    const trimmed = name.trim();
-    if (!trimmed || !departmentId) return;
+  /** 表尾右侧「＋」新增一列：默认名「新增列N」，列头可直接改名。 */
+  const commitNewColumn = async (): Promise<void> => {
+    if (!departmentId) return;
+    const nextIndex = (columns.data ?? []).filter((column) => column.enabled).length + 1;
+    const name = `新增列${nextIndex}`;
     try {
-      await adminApi.voteColumns.create(
-        { departmentId, name: trimmed, sortOrder: (columns.data?.length ?? 0) + 1 },
-        sessionId,
-      );
-      notify.success(`被评议人列「${trimmed}」已创建`);
-      setColumnDraftSeq((value) => value + 1);
+      await adminApi.voteColumns.create({ departmentId, name, sortOrder: nextIndex }, sessionId);
+      notify.success(`被评议人列「${name}」已创建`);
       columns.refresh();
     } catch (caught) {
       handleFailure(caught);
@@ -487,6 +488,7 @@ export function QuestionnaireGrid({
   // 只显示启用的被评议人列：删除是软删（历史评分保留），表上不应再出现
   const voteColumns = (columns.data ?? []).filter((column) => column.enabled);
   const enabledCriteria = (criteria.data ?? []).filter((item) => item.enabled);
+  const lastColumn = voteColumns[voteColumns.length - 1];
   // 表尾空列头（内联新增被评议人列）：只有可写时出现
   const canAddColumn = canWriteColumn && Boolean(current);
   // 车间打分表固定三列（附件8 sheet2：序号 | 评议项目 | 得分，无被评议人列）；
@@ -748,17 +750,39 @@ export function QuestionnaireGrid({
                       </th>
                     ))}
                     {canAddColumn ? (
-                      <th className="cell-col-head">
-                        {/* 表尾空列头：输入列名失焦即创建（契约：新增被评议人列不再跳页/弹窗）。
-                            key 绑定重置序号：创建成功后重挂载清空草稿，失败保留便于改错重试。 */}
-                        <InlineInput
-                          key={columnDraftSeq}
-                          ariaLabel="新增被评议人列"
-                          value=""
-                          className="col-name-input"
-                          placeholder="＋ 新增列"
-                          onCommit={(next) => void commitNewColumn(next)}
-                        />
+                      <th className="cell-col-head col-add-head">
+                        {/* 表尾右侧成对按钮：＋ 新增一列（默认名可在列头改）、－ 删最后一列。 */}
+                        <div className="col-add-actions">
+                          <Button
+                            type="text"
+                            size="small"
+                            aria-label="新增被评议人列"
+                            title="新增一列"
+                            onClick={() => void commitNewColumn()}
+                          >
+                            ＋
+                          </Button>
+                          {lastColumn ? (
+                            <Popconfirm
+                              title={`删除最后一列「${lastColumn.name}」？`}
+                              description="删除即停用：该列不再出现在打分表，历史评分保留。"
+                              okText="删除"
+                              cancelText="取消"
+                              okButtonProps={{ danger: true }}
+                              onConfirm={() => void removeColumn(lastColumn)}
+                            >
+                              <Button
+                                type="text"
+                                size="small"
+                                danger
+                                aria-label="删除最后一列"
+                                title="删除最后一列"
+                              >
+                                －
+                              </Button>
+                            </Popconfirm>
+                          ) : null}
+                        </div>
                       </th>
                     ) : null}
                   </>
@@ -789,7 +813,18 @@ export function QuestionnaireGrid({
                               ? [{ value: column.staffDirectoryId, label: column.employeeName }]
                               : [];
                           return (
-                            <td key={column.id}>
+                            <td
+                              key={column.id}
+                              onClick={(event) => {
+                                // 单击单元格即展开选人搜索：点输入框外的空白处也能直接搜。
+                                if (!canWriteColumn) return;
+                                const input = event.currentTarget.querySelector('input');
+                                if (!input || event.target === input) return;
+                                input.focus();
+                                // antd Select 在 mousedown 时展开，click 不够。
+                                input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                              }}
+                            >
                               <Select
                                 className="col-employee-select"
                                 aria-label={`${column.name}被评议人`}
@@ -809,9 +844,8 @@ export function QuestionnaireGrid({
                                     )
                                     .map((entry) => ({
                                       value: entry.id,
-                                      label: entry.orgDepartmentName
-                                        ? `${entry.orgDepartmentName} / ${entry.name}`
-                                        : entry.name,
+                                      // 搜索范围已限定为本场次车间，候选只需显示姓名。
+                                      label: entry.name,
                                     })),
                                 ]}
                                 loading={staffLoading}

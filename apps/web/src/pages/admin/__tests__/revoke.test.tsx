@@ -46,7 +46,7 @@ const { AdminTickets } = await import('../Tickets.js');
 const listMock = vi.mocked(adminApi.tickets.list);
 const revokeBulkMock = vi.mocked(adminApi.tickets.revokeBulk);
 
-const UNUSED_CODE = 'ABCD2345';
+const UNUSED_CODE = '123456789012';
 
 /** 未使用码总数：既决定一键作废按钮的 disabled，也决定确认框里的 N。 */
 let unusedTotal = 3;
@@ -73,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   vi.mocked(adminApi.ticketTypes.list).mockResolvedValue([
-    { id: 'a', code: 'A', name: '领导班子', weightPercent: 100, sortOrder: 1, enabled: true },
+    { id: 'a', code: 'A', name: '领导班子', sortOrder: 1, enabled: true },
   ]);
   vi.mocked(adminApi.tickets.generate).mockResolvedValue({
     batchId: 'batch1',
@@ -132,12 +132,11 @@ describe('一键作废未使用码', () => {
     expect(await screen.findByText(/无「作废随机码（单张与一键）」权限/)).toBeInTheDocument();
   }, 15_000);
 
-  it('无 tickets.generate 权限时不渲染发码与按权重一键发码按钮', async () => {
+  it('无 tickets.generate 权限时不渲染发码按钮', async () => {
     renderPage(['tickets.revoke']);
 
     expect(await screen.findByText('批量发码')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /生成随机码/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /按权重一键发码/ })).toBeNull();
     // 有作废权限，一键作废照常渲染
     expect(await screen.findByRole('button', { name: /一键作废未使用码/ })).toBeInTheDocument();
   }, 15_000);

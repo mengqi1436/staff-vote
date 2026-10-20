@@ -5,7 +5,7 @@
  *
  * 约定：
  *   - 删除一律软删除（enabled = false），历史评分始终可读（设计文档第 15 节）。
- *   - 发码、改权重、改开放时间等管理动作写 AuditLog 留痕。
+ *   - 发码、启停人员类别、改开放时间等管理动作写 AuditLog 留痕。
  *   - 时间字段回传 ISO 8601 字符串，前端不再猜格式。
  */
 import { prisma } from '../db.js';
@@ -374,7 +374,7 @@ export async function deleteSession(id: string, operator: string): Promise<void>
  * 管理员一次就能看到所有要补的地方）：
  *   1. 启用部门 ≥1；
  *   2. 每个启用部门的启用项点 ≥1 且启用被评列 ≥1；
- *   3. 启用票种 ≥1 且启用票种 weightPercent 合计 = 100；
+ *   3. 启用票种 ≥1；
  *   4. 未使用随机码 ≥1。
  *
  * @returns 中文缺项清单；空数组 = 配置完整
@@ -433,17 +433,12 @@ async function checkSessionCompleteness(sessionId: string): Promise<string[]> {
     }
   }
 
-  const ticketTypes = await prisma.ticketType.findMany({
+  // 票种差异只体现在发码数量上，没有权重，因此这里只要求「至少一个启用类别」。
+  const enabledTicketTypeCount = await prisma.ticketType.count({
     where: { sessionId, enabled: true },
-    select: { code: true, weightPercent: true },
   });
-  if (ticketTypes.length === 0) {
+  if (enabledTicketTypeCount === 0) {
     issues.push('尚未配置启用人员类别：至少需要一个启用人员类别');
-  } else {
-    const weightSum = ticketTypes.reduce((sum, type) => sum + type.weightPercent, 0);
-    if (weightSum !== 100) {
-      issues.push(`启用人员类别权重合计为 ${weightSum}%，必须等于 100%`);
-    }
   }
 
   const unusedCount = await prisma.ticket.count({ where: { sessionId, status: 'unused' } });
@@ -458,7 +453,6 @@ export interface TicketTypeDto {
   id: string;
   code: string;
   name: string;
-  weightPercent: number;
   sortOrder: number;
   enabled: boolean;
   /** 以下三项目前仅在列表接口返回 */
@@ -568,45 +562,13 @@ function toIso(value: Date | null): string | null {
 }
 
 // -----------------------------------------------------------------------------
-// 票种与权重
+// 票种
 // -----------------------------------------------------------------------------
-
-/**
- * 权重合计校验。
- *
- * 规则：写入后启用票种合计【不得超过 100】。
- *   - 合计不变或变小（降权、停用、新建 0 权重）→ 通过：降权是重分配的合法过渡步骤；
- *   - 升权但合计仍 ≤100 → 通过：「先降腾空间、再分多步补齐」是重新分配权重的唯一通路，
- *     中间步（如 90→95）若被拒，任何含两个以上升权项的重分配都无法完成 ——
- *     只有最后一步恰好落在 100；
- *   - 写入后合计 >100 → 409 并给出差额。
- *
- * 为什么允许合计 ≠100 的中间状态：计分不依赖「合计恰好 100」——
- * lib/scoring.ts 按实际有票票种的权重合计归一化，合计 90 或 95 都不会污染结果。
- * 合计=100 是配置完整性要求，由前端「权重分配」表单强制（≠100 时禁止保存），
- * 后端只守上限这条硬边界。
- *
- * @param after 写入后启用票种权重合计
- * @param before 写入前启用票种权重合计
- * @returns 通过返回 null；否则返回给管理员看的差额说明
- */
-function weightSumViolation(after: number, before: number): string | null {
-  if (after <= before || after <= 100) return null;
-
-  const diff = 100 - after;
-  return `启用人员类别权重合计为 ${after}%，不得超过 100%（差额 ${diff}）`;
-}
-
-async function enabledWeightTotal(sessionId: string): Promise<number> {
-  const rows = await prisma.ticketType.findMany({ where: { enabled: true, sessionId } });
-  return rows.reduce((sum, row) => sum + row.weightPercent, 0);
-}
 
 function toTicketTypeDto(row: {
   id: string;
   code: string;
   name: string;
-  weightPercent: number;
   sortOrder: number;
   enabled: boolean;
 }): TicketTypeDto {
@@ -614,7 +576,6 @@ function toTicketTypeDto(row: {
     id: row.id,
     code: row.code,
     name: row.name,
-    weightPercent: row.weightPercent,
     sortOrder: row.sortOrder,
     enabled: row.enabled,
   };
@@ -654,7 +615,6 @@ export interface TicketTypeCreateInput {
   sessionId?: string;
   code: string;
   name: string;
-  weightPercent: number;
   sortOrder?: number;
   enabled?: boolean;
 }
@@ -662,7 +622,6 @@ export interface TicketTypeCreateInput {
 export interface TicketTypePatchInput {
   code?: string;
   name?: string;
-  weightPercent?: number;
   sortOrder?: number;
   enabled?: boolean;
 }
@@ -680,24 +639,18 @@ export async function createTicketType(
   if (existing) throw ApiError.conflict(`人员类别编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
 
   const enabled = input.enabled ?? true;
-  const before = await enabledWeightTotal(sessionId);
-  const after = before + (enabled ? input.weightPercent : 0);
-  const violation = weightSumViolation(after, before);
-  if (violation) throw ApiError.conflict(violation, 'WEIGHT_SUM_INVALID');
 
   const created = await prisma.ticketType.create({
     data: {
       sessionId,
       code,
       name: input.name.trim(),
-      weightPercent: input.weightPercent,
       sortOrder: input.sortOrder ?? 0,
       enabled,
     },
   });
   await writeAudit('ticket_type.create', {
     code,
-    weightPercent: input.weightPercent,
     enabled,
     operator,
   });
@@ -721,30 +674,19 @@ export async function updateTicketType(
     if (conflict) throw ApiError.conflict(`人员类别编码 ${code} 已存在`, 'TICKET_TYPE_EXISTS');
   }
 
-  if (patch.weightPercent !== undefined || patch.enabled !== undefined) {
-    const before = await enabledWeightTotal(current.sessionId);
-    const nextWeight = patch.weightPercent ?? current.weightPercent;
-    const nextEnabled = patch.enabled ?? current.enabled;
-    const after =
-      before - (current.enabled ? current.weightPercent : 0) + (nextEnabled ? nextWeight : 0);
-    const violation = weightSumViolation(after, before);
-    if (violation) throw ApiError.conflict(violation, 'WEIGHT_SUM_INVALID');
-  }
-
   const updated = await prisma.ticketType.update({
     where: { id },
     data: {
       code: patch.code?.trim(),
       name: patch.name?.trim(),
-      weightPercent: patch.weightPercent,
       sortOrder: patch.sortOrder,
       enabled: patch.enabled,
     },
   });
-  if (patch.weightPercent !== undefined || patch.enabled !== undefined) {
+  // 只有启停改变投票有效性，才留审计；改名/改排序不需要。
+  if (patch.enabled !== undefined) {
     await writeAudit('ticket_type.update', {
       code: updated.code,
-      weightPercent: updated.weightPercent,
       enabled: updated.enabled,
       operator,
     });
@@ -772,10 +714,46 @@ export interface GenerateTicketsResult {
 }
 
 /**
+ * 发码写入的最大轮次。批内重复已由 `generateUniqueCodes` 去重；真实碰撞来自与存量码
+ * 相撞（约 批量 × 存量 / 10^12），3 轮已是极保守上限。
+ */
+const CODE_INSERT_MAX_ROUNDS = 3;
+
+/**
+ * 在事务内写入 `count` 个随机码，返回实际写入行数。
+ *
+ * 为什么用 `skipDuplicates` 而不是默认行为：默认行为一旦撞上已存在的码就抛 P2002，
+ * 整个事务进入 aborted 状态（后续语句报 25P02），只能在事务外整体回滚重试；
+ * `skipDuplicates`（PostgreSQL 的 ON CONFLICT DO NOTHING）只跳过冲突行，
+ * 事务仍然可用，因此可以在同一个事务里按差额补生成。它不指定冲突目标：
+ * 会跳过 `tickets` 上任何唯一约束的冲突行；当前只有 code 唯一，将来新增唯一约束时
+ * 行数不足会被误报为撞库，届时需要改为预查 code 或指定冲突目标。
+ *
+ * @returns 实际插入行数；调用方必须比对，不足即抛错让整批回滚
+ */
+async function insertTicketCodes(
+  tx: Prisma.TransactionClient,
+  base: { ticketTypeId: string; batchId: string; sessionId: string; departmentId: string | null },
+  count: number,
+): Promise<number> {
+  let inserted = 0;
+  for (let round = 0; round < CODE_INSERT_MAX_ROUNDS && inserted < count; round += 1) {
+    const candidates = generateUniqueCodes(count - inserted);
+    const result = await tx.ticket.createMany({
+      data: candidates.map((code) => ({ code, ...base })),
+      skipDuplicates: true,
+    });
+    inserted += result.count;
+  }
+  return inserted;
+}
+
+/**
  * 批量发码（单票种指定数量）。
  *
  * 批次与随机码在同一事务里写入：批次记录了发放数量，若两者不一致会留下
- * 无法对账的孤儿批次。写码时用批次数量与插入行数比对兜底。
+ * 无法对账的孤儿批次。写码时用批次数量与插入行数比对兜底（撞库由
+ * `insertTicketCodes` 在事务内补生成，最多 3 轮）。
  *
  * @param ticketTypeId 票种；必须属于解析出的场次
  * @param count 发码数量
@@ -812,26 +790,26 @@ export async function generateTickets(
   // 这批码仍会带上该部门；后果仅是持码人在 Gate 看到空问卷（部门已停用查不出），
   // 不会越权评议其它部门，故不为此加锁。
 
-  const codes = generateUniqueCodes(count);
-
   const result = await prisma.$transaction(async (tx) => {
     const batch = await tx.ticketBatch.create({
-      data: { ticketTypeId, sessionId, departmentId, count: codes.length, operator },
+      data: { ticketTypeId, sessionId, departmentId, count, operator },
     });
-    const inserted = await tx.ticket.createMany({
-      data: codes.map((code) => ({
-        code,
-        ticketTypeId,
-        batchId: batch.id,
-        sessionId,
-        departmentId,
-      })),
-    });
-    if (inserted.count !== codes.length) {
-      // 随机码理论上不会撞库；真撞上就整体回滚，不留下数量对不上的批次。
-      throw new Error(`随机码生成冲突：期望 ${codes.length} 条，实际写入 ${inserted.count} 条`);
+    const inserted = await insertTicketCodes(
+      tx,
+      { ticketTypeId, batchId: batch.id, sessionId, departmentId },
+      count,
+    );
+    if (inserted !== count) {
+      // 补生成 3 轮仍写不满：撞库概率已被压到实际不可能，出现即说明随机源异常，整批回滚。
+      throw new Error(`随机码生成冲突：期望 ${count} 条，实际写入 ${inserted} 条`);
     }
-    return { batchId: batch.id, count: inserted.count };
+    // 明文码按批次回查：被 skipDuplicates 跳过的码绝不能出现在返回给前端的清单里。
+    const rows = await tx.ticket.findMany({
+      where: { batchId: batch.id },
+      select: { code: true },
+      orderBy: { code: 'asc' },
+    });
+    return { batchId: batch.id, count: inserted, codes: rows.map((row) => row.code) };
   });
 
   await writeAudit('ticket.generate', {
@@ -842,19 +820,18 @@ export async function generateTickets(
     operator,
     departmentId,
   });
-  return { batchId: result.batchId, count: result.count, codes };
+  return { batchId: result.batchId, count: result.count, codes: result.codes };
 }
 
 // -----------------------------------------------------------------------------
 // 票别分配（新建场次向导第三步的聚合提交）
 // -----------------------------------------------------------------------------
 
-/** ticket-plan 的单行：编码/名称/权重/数量。 */
+/** ticket-plan 的单行：编码/名称/数量。 */
 export interface TicketPlanRow {
   code: string;
   name: string;
-  weightPercent: number;
-  /** ≥0；>0 自动建批次发码，=0 只建人员类别不发码 */
+  /** ≥0；>0 自动建批次发码（这批就是该票别的发码数量），=0 只建人员类别不发码 */
   count: number;
 }
 
@@ -870,13 +847,13 @@ export interface TicketPlanResult {
  * 语义（与前端票别分配表一一对应）：
  *   - 本次提交的 types 数组就是该场次的启用票种全集，数组顺序即 sortOrder；
  *     现有未列入者置 enabled=false（软停用，历史数据可读）；
- *   - 逐票种按 (sessionId, code) upsert：命中则更新 name/weightPercent/排序，
- *     未命中则新建；
- *   - 启用票种权重合计必须 = 100，否则 422 WEIGHT_SUM（整批拒绝，不留中间态）；
+ *   - 逐票种按 (sessionId, code) upsert：命中则更新 name/排序，未命中则新建；
+ *   - types 不能为空：空数组等效于「停用全部人员类别」，由 422 TICKET_PLAN_EMPTY 拦下；
  *   - 已产生答卷的启用票种必须仍在提交集合中：它一旦被移出（等效于改码或删除），
  *     已有答卷的票别归属就断了，409 TICKET_TYPE_HAS_SHEETS；
  *   - count > 0 的票种自动建 TicketBatch 并生成随机码（同 generateTickets 的
- *     事务写法：批次与码一起写、行数比对兜底）；count = 0 只建票种不发码。
+ *     事务写法：批次与码一起写，撞库在事务内补生成、行数比对兜底）；
+ *     count = 0 只建票种不发码。
  *
  * 全部写入在同一个事务里：向导的第三步要么整批成功，要么整批回滚。
  */
@@ -888,13 +865,9 @@ export async function applyTicketPlan(
   const session = await prisma.voteSession.findUnique({ where: { id: sessionId } });
   if (!session) throw ApiError.notFound('评议不存在');
 
-  // 权重合计是对「提交后启用票种全集」的要求，提交前就能算完，不占事务。
-  const weightSum = input.types.reduce((sum, row) => sum + row.weightPercent, 0);
-  if (weightSum !== 100) {
-    throw ApiError.unprocessable(
-      `启用人员类别权重合计必须等于 100%，当前为 ${weightSum}%`,
-      'WEIGHT_SUM',
-    );
+  // 空集合会把本场次全部人员类别软停用（等于一次误操作的批量停用），提交前就拦下。
+  if (input.types.length === 0) {
+    throw ApiError.unprocessable('人员类别分配不能为空：至少需要一个人员类别', 'TICKET_PLAN_EMPTY');
   }
 
   const codes = input.types.map((row) => row.code);
@@ -931,7 +904,6 @@ export async function applyTicketPlan(
                 sessionId,
                 code: row.code,
                 name: row.name,
-                weightPercent: row.weightPercent,
                 sortOrder: index,
               },
             })
@@ -942,7 +914,6 @@ export async function applyTicketPlan(
           where: { id: match.id },
           data: {
             name: row.name,
-            weightPercent: row.weightPercent,
             sortOrder: index,
             enabled: true,
           },
@@ -950,21 +921,20 @@ export async function applyTicketPlan(
       }
 
       if (row.count > 0) {
-        // 与 generateTickets 相同的事务写法：批次与码一起写入，行数比对兜底
-        // （随机码理论不撞库，真撞上整体回滚，不留数量对不上的批次）。
-        const batchCodes = generateUniqueCodes(row.count);
+        // 与 generateTickets 相同的事务写法：批次与码一起写入，撞库在事务内补生成。
+        // 计划提交的码不绑定部门（要按部门定点发放请到「随机码」页签发）。
         const batch = await tx.ticketBatch.create({
-          data: { ticketTypeId, sessionId, count: batchCodes.length, operator },
+          data: { ticketTypeId, sessionId, count: row.count, operator },
         });
-        const inserted = await tx.ticket.createMany({
-          data: batchCodes.map((code) => ({ code, ticketTypeId, batchId: batch.id, sessionId })),
-        });
-        if (inserted.count !== batchCodes.length) {
-          throw new Error(
-            `随机码生成冲突：期望 ${batchCodes.length} 条，实际写入 ${inserted.count} 条`,
-          );
+        const inserted = await insertTicketCodes(
+          tx,
+          { ticketTypeId, batchId: batch.id, sessionId, departmentId: null },
+          row.count,
+        );
+        if (inserted !== row.count) {
+          throw new Error(`随机码生成冲突：期望 ${row.count} 条，实际写入 ${inserted} 条`);
         }
-        batches.push({ ticketTypeId, batchId: batch.id, count: inserted.count });
+        batches.push({ ticketTypeId, batchId: batch.id, count: inserted });
       }
     }
 
@@ -979,7 +949,7 @@ export async function applyTicketPlan(
 
   await writeAudit('ticket_plan.apply', {
     sessionId,
-    types: input.types.map((row) => `${row.code}:${row.weightPercent}%×${row.count}`).join(','),
+    types: input.types.map((row) => `${row.code}×${row.count}`).join(','),
     operator,
   });
 

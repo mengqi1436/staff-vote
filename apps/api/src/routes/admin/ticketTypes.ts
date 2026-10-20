@@ -1,7 +1,7 @@
 /**
- * 票种与权重。
+ * 人员类别（票种）。
  *
- * 权重合计必须为 100 的校验放在 `services/admin.ts`（含过渡写的例外规则说明）。
+ * 人员类别没有权重：差异只体现在发码数量上，发码接口按类别分别指定 count。
  * 这里的 DELETE 是停用（软删除），不是物理删除：已发出的随机码与已提交的评分表
  * 都引用了票种，物理删除会连带毁掉历史数据。
  *
@@ -24,7 +24,6 @@ const CreateSchema = z.object({
   sessionId: z.string().min(1).optional(),
   code: z.string().trim().min(1, '人员类别编码不能为空').max(20),
   name: z.string().trim().min(1, '人员类别名称不能为空').max(100),
-  weightPercent: z.number().int().min(0).max(100),
   sortOrder: z.number().int().min(0).optional(),
   enabled: z.boolean().optional(),
 });

@@ -31,8 +31,6 @@ export interface TicketTypeView {
   id: string;
   code: string;
   name: string;
-  /** 计分权重百分比，投票页可据此提示"你的人员类别占 X%" */
-  weightPercent: number;
 }
 
 export interface DepartmentView {
@@ -210,7 +208,6 @@ export async function createVoteSession(code: string): Promise<VoteSessionResult
       id: ticket.ticketType.id,
       code: ticket.ticketType.code,
       name: ticket.ticketType.name,
-      weightPercent: ticket.ticketType.weightPercent,
     },
     session: {
       id: ticket.session.id,

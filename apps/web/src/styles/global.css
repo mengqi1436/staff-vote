@@ -507,6 +507,14 @@ body {
   opacity: 1;
 }
 
+/* 表尾新增/删除列按钮：右侧成对显示 */
+.sheet-excel .col-add-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
 /* 项点行：名称粗体 + 描述缩进（原表富文本：名称 b 标签，描述换行后接续）。
    名称与描述都是常驻无框输入，className 直接落在 input/textarea 上。 */
 .sheet-excel .cell-criterion {
@@ -660,12 +668,6 @@ body {
 .rank-plain {
   color: rgba(0, 0, 0, 0.45);
   font-variant-numeric: tabular-nums;
-}
-
-/* 「ABC汇总」行：浅蓝底 + 加粗，与单票别行区分（rowClassName 落在 tr 上） */
-.sample-summary-row > td {
-  background: #f0f6ff !important;
-  font-weight: 600;
 }
 
 /* 综合评价得分列：数据主角，主蓝加粗 */

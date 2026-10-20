@@ -8,8 +8,9 @@
 
 为单位职工素质评议提供一套可落地的打分系统：
 
-- **投票入口**：职工凭后台发放的票种随机码登录，选择部门，在一张类 Excel 的表单上按素质项点给该部门职工逐格打分，匿名提交。
-- **后台管理**：管理员配置部门、职工、项点（每个部门一套列）、票种与权重、批量发放随机码，实时查看票种发放与使用情况，控制投票开放时间窗，并在投票结束后生成汇总结果。
+- **投票入口**：职工凭后台发放的随机码登录，选择部门，在一张类 Excel 的表单上按素质项点给该部门职工逐格打分，匿名提交。
+- **后台管理**：管理员配置部门、职工、项点（每个部门一套列）、人员类别与各类别发码数量，批量发放随机码，实时查看各类别发码与使用情况，控制投票开放时间窗，并在投票结束后生成汇总结果。
+- **统计口径**：按人员类别分别统计 —— 类别内取均分，不跨类别合并、不加权、不产出跨类别总分。
 - **匿名性**：评分数据与随机码之间不存在任何可反推的个人关联。
 
 ## 2. 成功标准
@@ -40,8 +41,10 @@
 |---|---|
 | 打分表结构 | 行 = 被评职工，列 = 素质项点，单元格填分数 |
 | 投票范围 | 一码只能评一个部门，提交后作废 |
-| 票种含义 | 占比 = 计分权重百分比，直接加权求和 |
-| 发码方式 | 管理员设定各票种数量，系统批量生成并可导出 |
+| 人员类别含义 | 只决定发码数量，不参与计分；类别之间不比较、不加权 |
+| 统计口径 | 按人员类别分别统计：类别内多张答卷取均分，不跨类别合并，排名只在类别内有效 |
+| 发码方式 | 管理员设定各人员类别数量，系统批量生成并可导出 |
+| 随机码格式 | 12 位纯数字（允许前导零），跨场次全局唯一 |
 | 码的使用 | 一码一票，提交即作废，不可修改 |
 | 分数精度 | 仅整数，不得小数 |
 | 后端框架 | Express 5 |
@@ -241,13 +244,13 @@ staff-vote/
 | `Department` | name, sortOrder, enabled | 唯一名 |
 | `Employee` | departmentId, name, employeeNo?, sortOrder, enabled | 打分表的行；`employeeNo` 唯一，为接口对接预留 |
 | `Criterion` | departmentId, name, minScore, maxScore, sortOrder, enabled | 打分表的列，默认 0/100，整数 |
-| `TicketType` | code, name, weightPercent, sortOrder, enabled | code 在**场次内**唯一；保存时校验启用票种权重合计 = 100 |
-| `Ticket` | code(唯一), ticketTypeId, batchId, status, usedAt | 只记状态，不记投向 |
+| `TicketType` | code, name, sortOrder, enabled | code 在**场次内**唯一；类别只决定发码数量，不含任何计分占比字段 |
+| `Ticket` | code(唯一), ticketTypeId, batchId, status, usedAt | code 为 12 位纯数字、**跨场次全局唯一**；只记状态，不记投向 |
 | `TicketBatch` | ticketTypeId, count, createdAt, operator | 发放批次 |
 | `ScoreSheet` | departmentId, ticketTypeId, submittedAt | 无 ticketId、无 IP、无 UA |
 | `ScoreItem` | sheetId, voteColumnId, criterionId, score(Int) | 唯一 (sheetId, voteColumnId, criterionId) |
 | `Setting` | key(PK), value | 系统标题（投票开关与开放时间窗已下沉到场次 `VoteSession`） |
-| `AuditLog` | action, detail(Json), createdAt | 发码、改权重、改开放时间留痕 |
+| `AuditLog` | action, detail(Json), createdAt | 发码、改人员类别、改开放时间留痕 |
 
 ## 12. API 契约
 
@@ -256,7 +259,7 @@ staff-vote/
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/vote/status` | `{open, message, opensAt, closesAt, session}`（多场或零场时 `session` 为 null），未开放时 `message="当前未开放投票"` |
-| POST | `/api/vote/session` | 体 `{code}`；校验存在、未使用、投票开放；返回短期 JWT（携带 `ticketId` 供提交时原子核销、`ticketTypeId` 供加权，**不含码明文**）与部门列表 |
+| POST | `/api/vote/session` | 体 `{code}`；校验存在、未使用、投票开放；返回短期 JWT（携带 `ticketId` 供提交时原子核销、`ticketTypeId` 记录答卷所属人员类别，**不含码明文**）与部门列表 |
 | GET | `/api/vote/sheet?departmentId=` | 该部门项点列（含 min/max）与职工行 |
 | POST | `/api/vote/submit` | 体 `{departmentId, items[{employeeId, criterionId, score}]}`，`Authorization: Bearer <vote token>` |
 
@@ -266,7 +269,7 @@ staff-vote/
 |---|---|
 | 认证 | `POST /login`、`POST /logout`、`GET /me` |
 | 场次 | `GET/POST /sessions`、`PATCH /sessions/:id`、`POST /sessions/:id/start` / `pause` / `end`（状态机流转，非法流转 409） |
-| 票种 | `GET/POST/PATCH/DELETE /ticket-types` |
+| 人员类别 | `GET/POST/PATCH/DELETE /ticket-types` |
 | 发码 | `POST /tickets/generate`、`GET /tickets`、`GET /tickets/export`、`POST /tickets/:id/revoke` |
 | 批次 | `GET /ticket-batches` |
 | 部门 | `GET/POST/PATCH/DELETE /departments` |
@@ -280,17 +283,17 @@ staff-vote/
 
 ## 13. 计分口径
 
-### 13.1 票种加权
+### 13.1 按人员类别分别统计
 
 ```
-某被评列在某项点 d 的最终得分 =
-  Σ_t(该票种在 d 上的均分 × 票种权重%) / Σ_t(票种权重%)
-  t 遍历该部门在 d 上实际有票的票种
+某被评列在某项点 d 的得分 = 该人员类别在 d 上所有答卷的均分（缺某格按 0 分计入）
 ```
 
-对实际收到票的票种归一化。否则某部门未收到 A 票会让那 50% 权重按 0 计入，把全体分数整体压低，而现实中无法保证每部门各票种都有票。
+计分只在**同一个人员类别内部**进行：类别内多张答卷取均分，类别之间不合并、不加权、不产出跨类别总分。人员类别只决定发码数量，不携带任何「占比」或「重要性」语义 —— 因此不存在「某类别没票要不要归一化」的问题，没收到票的类别整类别不出现在结果里。
 
-**弃权、不填视为 0 分**（参考表填写说明的口径）：某票种在本部门只要有已提交的表，该票种在本部门的每一格都参与平均 —— 某张表缺某一格即按 0 分计入分母；该票种一张表都没有时整票种跳过（那是没发这种票，不是弃权）。
+**弃权、不填视为 0 分**（参考表填写说明的口径）：某人员类别在本部门只要有已提交的表，该类别在本部门的每一格都参与平均 —— 某张表缺某一格即按 0 分计入分母；该类别一张表都没有时整类别跳过（那是没发这类别的票，不是弃权）。
+
+> 历史口径：本节早期版本是「票种按权重百分比加权求和，缺少某票种时按实际有票的票种归一化」。该口径已于 2026-10-20 取消，系统内不再有 `weightPercent` 字段与「启用合计 = 100%」校验（见 `docs/superpowers/plans/2026-10-20-remove-ticket-type-weight.md`）。
 
 ### 13.2 项点间汇总
 
@@ -299,16 +302,16 @@ staff-vote/
 ```
 某项归一化分 = (该项得分 − 该项 min) / (该项 max − 该项 min) × 100
 综合得分     = Σ(各项归一化分) / 项点数        # 各项等权
-排名         = 按综合得分降序，同分并列
+排名         = 同一人员类别内按综合得分降序，同分并列
 ```
 
 各项 min/max 全相同时，综合得分即等权算术平均。导出与打印同时给出综合得分与各项原始分，不做黑箱。
 
 ### 13.3 不记名的物理边界
 
-`ScoreSheet` 不存随机码、IP、UA。投票 JWT 携带 `ticketId`（提交时用于原子核销）与 `ticketTypeId`（用于加权），但**评分表本身不写入 ticketId**，因此令牌与评分表之间不存在可关联的字段。
+`ScoreSheet` 不存随机码、IP、UA。投票 JWT 携带 `ticketId`（提交时用于原子核销）与 `ticketTypeId`（记录答卷所属人员类别），但**评分表本身不写入 ticketId**，因此令牌与评分表之间不存在可关联的字段。
 
-系统能按票种加权，但无法得知任何一张表由谁投出，因此也无法自动排除自评。
+系统能按人员类别分别统计，但无法得知任何一张表由谁投出，因此也无法自动排除自评。
 
 ## 14. 前端页面与关键交互
 
@@ -316,7 +319,7 @@ staff-vote/
 
 **打分表 `/vote/sheet`**：与 `docs/参考表.xlsx` 同形 —— 行 = 评价项点（序号 + 名称 + 描述），列 = 被评列（主任/党支部书记/得分…），表头含附件号与表标题，表尾是填写说明。原生表格；数值输入按该项 min/max 设 `min`/`max`/`step=1`；Tab 原生顺序连续录入，方向键/Enter 网格移动；非整数、越界、未填项标红并在提交前汇总提示。
 
-**后台 `/admin`**：场次列表 + 单页场次工作台（`/admin/sessions/:id`，页签为部门、项点、职工、问卷、票种权重、随机码、统计、结果导出，页头常驻开放控制）；问卷页签配问卷类型、附件号、表标题、填写说明与被评列；设置页只配系统标题；账号与权限为独立页（`/admin/admins`）。
+**后台 `/admin`**：场次列表 + 单页场次工作台（`/admin/sessions/:id`，页签为部门、项点、职工、问卷、人员类别、随机码、统计、结果导出，页头常驻开放控制）；问卷页签配问卷类型、附件号、表标题、填写说明与被评列；人员类别页签配编码、名称与该类别发码数量；设置页只配系统标题；账号与权限为独立页（`/admin/admins`）。
 
 **视觉**：`ConfigProvider` 定制主题 token，中文界面，dayjs 中文 locale。按 `design-taste-frontend` 的适用范围，其规则只作用于投票入口外壳与登录页，后台数据密集页走受控数据 UI 路线。本机无图像生成工具且内部系统无配图需求，不做图片资产。
 
@@ -327,20 +330,19 @@ staff-vote/
 | 非开放时段提交 | 403 + 「当前未开放投票」 |
 | 同一码并发提交 | 原子 `UPDATE ... WHERE code=? AND status='unused'`，影响行数为 0 即拒绝 |
 | 已使用的码再次登录 | 401「该票据已使用」 |
-| 暴力猜码 | 8 位随机码（字符集剔除 O/0/I/1）+ express-rate-limit 按 IP 限流，`trust proxy` 已配 |
+| 暴力猜码 | 12 位纯数字（10^12 码空间，允许前导零；`crypto.randomInt` 无模偏差）+ express-rate-limit 按 IP 限流，`trust proxy` 已配 |
 | 分数为小数或越界 | zod `int()` + 逐项 min/max 校验，拒绝并指明行 |
 | items 与部门不匹配 | 校验 voteColumnId/criterionId 均属该 departmentId，防越权写 |
 | 部门无所配被评列或无项点 | 投票页空白态说明，不报错；提交空 items 直接拒绝 |
-| 权重合计不为 100 | 保存票种时拒绝并提示差额 |
-| 某部门某票种零票 | 整票种不参与（归一化自动排除），结果页标注实际参与计算的票种 |
+| 某部门某人员类别零票 | 整类别不参与，结果按类别各自输出，不做跨类别合并 |
 | 某张表缺某一格 | 按 0 分计入该格平均（参考表口径：弃权、不填视为 0 分） |
 | 删除被引用的数据 | 软删除（`enabled=false`），已提交数据保持可读 |
 | 时区 | 服务器 `TZ=Asia/Shanghai`，列一律 `timestamptz`，前端按本地时区显示 |
 
 ## 16. 测试策略
 
-- **单元**：`scoring.test.ts`（单票种/多票种/缺票种归一化/min 非 0/满分不一致/零票）、`code.test.ts`（字符集与唯一性）、`password.test.ts`（正确口令通过、错口令拒绝、盐唯一、`timingSafeEqual` 路径）。
-- **接口**：`vote.test.ts`（状态、登录核销、重复提交、越权部门、小数与越界分数、非开放时段）、`admin.test.ts`（鉴权、权重合计校验、CRUD、导入）。
+- **单元**：`scoring.test.ts`（单类别/多类别分别统计/类别内均分/缺类别跳过/min 非 0/满分不一致/零票）、`code.test.ts`（12 位纯数字格式、前导零、全局唯一）、`password.test.ts`（正确口令通过、错口令拒绝、盐唯一、`timingSafeEqual` 路径）。
+- **接口**：`vote.test.ts`（状态、登录核销、重复提交、越权部门、小数与越界分数、非开放时段）、`admin.test.ts`（鉴权、人员类别 CRUD、按类别发码数量校验、导入）。
 - **端到端**：`e2e.test.ts` 用 supertest 串完整链路，断言统计与导出产物（Excel 可解析且含预期行）。
 - **前端**：vitest + jsdom + Testing Library 覆盖打分表键盘导航、非整数与越界标红、关闭态渲染。
 - **一致性**：`db:drift` 漂移校验进验收脚本。

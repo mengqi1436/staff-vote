@@ -184,7 +184,10 @@ vi.mock('../../../lib/api.js', async () => {
 
 const { AdminQuestionnaire } = await import('../Questionnaire.js');
 
-function renderQuestionnaire(permissions: string[] = ALL_PERMISSIONS) {
+function renderQuestionnaire(
+  permissions: string[] = ALL_PERMISSIONS,
+  sessionId: string | null = null,
+) {
   return renderWithAuth(
     <ConfigProvider>
       <AntApp>
@@ -194,6 +197,7 @@ function renderQuestionnaire(permissions: string[] = ALL_PERMISSIONS) {
       </AntApp>
     </ConfigProvider>,
     permissions,
+    sessionId,
   );
 }
 
@@ -395,22 +399,24 @@ describe('打分表配置页（附件8 Excel 版式）', () => {
     });
   }, TIMEOUT_MS);
 
-  it('表尾空列头输入列名失焦即新增被评议人列（不再弹窗/跳页）', async () => {
+  it('表尾右侧「＋」新增被评议人列、「－」删除最后一列', async () => {
     const user = userEvent.setup({ delay: null });
     renderQuestionnaire();
-    const input = await screen.findByLabelText('新增被评议人列');
+    await screen.findByLabelText('被评议人列：主任');
 
-    await user.type(input, '副主任');
-    await user.tab();
-
+    // ＋ 新增：默认名「新增列3」（现有 2 列），可在列头改名
+    await user.click(screen.getByRole('button', { name: '新增被评议人列' }));
     await waitFor(() => expect(mocks.columnCreate).toHaveBeenCalledTimes(1));
     expect(mocks.columnCreate.mock.calls[0]?.[0]).toMatchObject({
       departmentId: 'd1',
-      name: '副主任',
+      name: '新增列3',
       sortOrder: 3,
     });
-    // 输入留空失焦不创建
-    expect(await screen.findByLabelText('新增被评议人列')).toHaveValue('');
+
+    // － 删除最后一列（v2），二次确认后调用删除
+    await user.click(screen.getByRole('button', { name: '删除最后一列' }));
+    await user.click(await screen.findByRole('button', { name: /^删\s*除$/ }));
+    await waitFor(() => expect(mocks.columnRemove).toHaveBeenCalledWith('v2'));
   }, TIMEOUT_MS);
 
   it('评议项目行「新增」插入表尾草稿行，输入名称失焦即创建（默认分值 0～100）', async () => {
@@ -524,7 +530,7 @@ describe('打分表配置页（附件8 Excel 版式）', () => {
 
     await user.click(combo);
     // 人员管理选项的 label 是「车间 / 姓名」，同名的人靠车间区分
-    await user.click(await screen.findByTitle('贵阳西车间 / 张三'));
+    await user.click(await screen.findByTitle('张三'));
 
     await waitFor(() => expect(mocks.columnUpdate).toHaveBeenCalledTimes(1));
     expect(mocks.columnUpdate.mock.calls[0]?.[0]).toBe('v1');
@@ -533,6 +539,44 @@ describe('打分表配置页（附件8 Excel 版式）', () => {
     // 选人后下拉回显所选人员（下拉浮层与选中框里都带姓名）
     const shown = await screen.findAllByText(/张三/);
     expect(shown.length).toBeGreaterThan(0);
+  }, TIMEOUT_MS);
+
+  it('选人搜索只查本场次所属车间的人员', async () => {
+    mocks.sessionsList.mockImplementation(async () => ({
+      sessions: [
+        {
+          id: 's9',
+          name: '测试评议',
+          status: 'draft',
+          scoreScope: 'person',
+          orgDepartmentId: 'od1',
+          orgDepartmentName: '贵阳西车间',
+          startAt: null,
+          endedAt: null,
+          opensAt: null,
+          closesAt: null,
+          createdAt: '',
+        },
+      ],
+    }));
+    renderQuestionnaire(ALL_PERMISSIONS, 's9');
+    await screen.findByLabelText('被评议人列：主任');
+
+    await waitFor(() =>
+      expect(mocks.staffList).toHaveBeenCalledWith(
+        expect.objectContaining({ orgDepartmentId: 'od1' }),
+      ),
+    );
+  }, TIMEOUT_MS);
+
+  it('单击「职务与姓名」单元格即展开选人搜索', async () => {
+    const user = userEvent.setup({ delay: null });
+    renderQuestionnaire();
+    const combo = await screen.findByRole('combobox', { name: '主任被评议人' });
+
+    await user.click(combo.closest('td') as HTMLElement);
+
+    expect(await screen.findByTitle('张三')).toBeInTheDocument();
   }, TIMEOUT_MS);
 
   it('评议项目名称在表上直接编辑，失焦 PATCH 只带 name', async () => {

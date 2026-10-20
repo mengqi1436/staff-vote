@@ -21,7 +21,6 @@ import { type Dayjs } from 'dayjs';
 import { useNavigate } from 'react-router';
 import {
   adminApi,
-  ApiError,
   type AdminSessionDto,
   type OrgDepartmentDto,
   type TicketPlanItem,
@@ -35,7 +34,7 @@ import { HelpLabel, HelpTip, useNotify } from './shared.js';
  * 新建评议向导（三步）：
  *   ① 基本信息：名称（默认「{部门名}评议」）+ 全局部门 + 开始/结束时间 → 创建评议；
  *   ② 打分表基础表：复用共享打分表网格，所见即所得、即时保存；
- *   ③ 人员类别分配：编码/名称/权重/数量，权重合计实时校验 = 100 → 一次提交建种与发码。
+ *   ③ 人员类别分配：编码/名称/数量，一次提交建类别与发码。
  *
  * 三步严格按接口契约串联：第 1 步成功才有评议 id，第 2/3 步都作用于这个新评议
  * （显式传 sessionId，不依赖「当前评议」上下文——新建的评议还没被设为当前）。
@@ -53,7 +52,6 @@ interface PlanRow {
   key: number;
   code: string;
   name: string;
-  weightPercent: number;
   count: number;
 }
 
@@ -132,8 +130,6 @@ export function SessionCreateWizard({
     }
   };
 
-  const weightTotal = planRows.reduce((sum, row) => sum + (Number(row.weightPercent) || 0), 0);
-  const weightBalanced = planRows.length > 0 && weightTotal === 100;
   const planReady = planRows.every(
     (row) => row.code.trim() !== '' && row.name.trim() !== '',
   );
@@ -143,7 +139,7 @@ export function SessionCreateWizard({
   };
 
   const addRow = (): void => {
-    setPlanRows((prev) => [...prev, { key: nextRowKey, code: '', name: '', weightPercent: 0, count: 0 }]);
+    setPlanRows((prev) => [...prev, { key: nextRowKey, code: '', name: '', count: 0 }]);
     setNextRowKey((value) => value + 1);
   };
 
@@ -189,7 +185,6 @@ export function SessionCreateWizard({
     const types: TicketPlanItem[] = planRows.map((row) => ({
       code: row.code.trim(),
       name: row.name.trim(),
-      weightPercent: Number(row.weightPercent) || 0,
       count: Number(row.count) || 0,
     }));
     setSubmittingPlan(true);
@@ -198,11 +193,7 @@ export function SessionCreateWizard({
       setPlanResult(result);
       notify.success('人员类别已保存，随机码已按数量生成');
     } catch (caught) {
-      if (caught instanceof ApiError && caught.code === 'WEIGHT_SUM') {
-        notify.error(describeError(caught, '权重合计必须为 100%'));
-      } else {
-        notify.error(describeError(caught, '人员类别保存失败，请重试'));
-      }
+      notify.error(describeError(caught, '人员类别保存失败，请重试'));
     } finally {
       setSubmittingPlan(false);
     }
@@ -241,23 +232,6 @@ export function SessionCreateWizard({
           maxLength={32}
           placeholder="如 职工代表"
           onChange={(event) => updateRow(row.key, { name: event.target.value })}
-        />
-      ),
-    },
-    {
-      title: '权重（%）',
-      width: 140,
-      align: 'right',
-      render: (_: unknown, row: PlanRow) => (
-        <InputNumber
-          aria-label={`人员类别权重（第 ${row.key} 行）`}
-          value={row.weightPercent}
-          min={0}
-          max={100}
-          precision={0}
-          suffix="%"
-          style={{ width: '100%' }}
-          onChange={(value) => updateRow(row.key, { weightPercent: Number(value) || 0 })}
         />
       ),
     },
@@ -407,7 +381,7 @@ export function SessionCreateWizard({
         <>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
             <Typography.Text strong>分配人员类别</Typography.Text>
-            <HelpTip text="这次提交的人员类别就是全部启用的类别：表里没有的旧类别会被停用。数量填 0 表示只建类别、不发随机码；权重合计必须正好 100%。已经有答卷的人员类别不能改编码（随机码和答卷都按编码对应）。这里发出的随机码不分部门；要按部门定点发放，请到「随机码」页签。" />
+            <HelpTip text="这次提交的人员类别就是全部启用的类别：表里没有的旧类别会被停用。数量填 0 表示只建类别、不发随机码。已经有答卷的人员类别不能改编码（随机码和答卷都按编码对应）。这里发出的随机码不分部门；要按部门定点发放，请到「随机码」页签。" />
           </div>
           <Table<PlanRow>
             rowKey="key"
@@ -434,13 +408,6 @@ export function SessionCreateWizard({
             <Button icon={<PlusOutlined />} onClick={addRow}>
               添加人员类别
             </Button>
-            <Typography.Text>
-              权重合计{' '}
-              <span className="tabular" style={{ fontWeight: 600 }}>
-                {weightTotal}%
-              </span>
-              ，{weightBalanced ? '符合要求' : weightTotal < 100 ? `还差 ${100 - weightTotal}%` : `超出 ${weightTotal - 100}%`}
-            </Typography.Text>
             {!planReady && planRows.length > 0 ? (
               <Typography.Text type="secondary">每行都需填写编码与名称</Typography.Text>
             ) : null}
@@ -450,7 +417,7 @@ export function SessionCreateWizard({
             <Button
               type="primary"
               loading={submittingPlan}
-              disabled={!weightBalanced || !planReady}
+              disabled={!planReady || planRows.length === 0}
               onClick={() => void handlePlanSubmit()}
             >
               保存人员类别并生成随机码

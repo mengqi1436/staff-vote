@@ -138,7 +138,6 @@ describeDb('管理端写端点的权限门控', () => {
         sessionId,
         code: `${TAG}TT-BASE`,
         name: `${TAG}人员类别-夹具`,
-        weightPercent: 0,
         enabled: false,
       },
     });
@@ -258,7 +257,7 @@ describeDb('管理端写端点的权限门控', () => {
   it('人员类别：只读账号写操作 403，有权限账号可写，GET 不受限', async () => {
     const code = `${TAG}TT-RO`;
     expect(
-      (await viewer.post('/api/admin/ticket-types').send({ code, name: `${TAG}人员类别-只读新建`, weightPercent: 0, enabled: false }))
+      (await viewer.post('/api/admin/ticket-types').send({ code, name: `${TAG}人员类别-只读新建`, enabled: false }))
         .status,
     ).toBe(403);
     expect(
@@ -275,11 +274,10 @@ describeDb('管理端写端点的权限门控', () => {
     const list = await viewer.get('/api/admin/ticket-types').expect(200);
     expect((list.body as Array<{ id: string }>).some((row) => row.id === ticketTypeId)).toBe(true);
 
-    // 用停用票种（不参与权重合计校验）验证有权限账号可以正常写入
+    // 用停用人员类别验证有权限账号可以正常写入（停用即不进启用集合）
     const ok = await editor.post('/api/admin/ticket-types').send({
       code: `${TAG}TT-RW`,
       name: `${TAG}人员类别-编辑新建`,
-      weightPercent: 0,
       enabled: false,
     });
     expect(ok.status).toBe(200);

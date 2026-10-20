@@ -46,28 +46,44 @@ describe('buildTicketsByTypeWorkbook', () => {
 
   it('第一行是人员类别表头，列下依次是该人员类别的码', () => {
     const rows = readRows([
-      { header: '领导班子（A）', codes: ['AAAAAAAA', 'BBBBBBBB'] },
-      { header: '职工（C）', codes: ['CCCCCCCC'] },
+      { header: '领导班子（A）', codes: ['100000000001', '100000000002'] },
+      { header: '职工（C）', codes: ['100000000003'] },
     ]);
 
     expect(rows[0]).toEqual(['领导班子（A）', '职工（C）']);
-    expect(rows[1]).toEqual(['AAAAAAAA', 'CCCCCCCC']);
+    expect(rows[1]).toEqual(['100000000001', '100000000003']);
   });
 
   it('各人员类别数量不等时，短列留空而不是把别人的码顶上', () => {
     const rows = readRows([
-      { header: '领导班子（A）', codes: ['AAAAAAAA', 'BBBBBBBB', 'DDDDDDDD'] },
-      { header: '职工（C）', codes: ['CCCCCCCC'] },
+      { header: '领导班子（A）', codes: ['100000000001', '100000000002', '100000000004'] },
+      { header: '职工（C）', codes: ['100000000003'] },
     ]);
 
     expect(rows).toHaveLength(4); // 表头 + 最长列的 3 行
-    expect(rows[2]).toEqual(['BBBBBBBB', '']);
-    expect(rows[3]).toEqual(['DDDDDDDD', '']);
+    expect(rows[2]).toEqual(['100000000002', '']);
+    expect(rows[3]).toEqual(['100000000004', '']);
   });
 
   it('只有一个人员类别时就是单列', () => {
-    const rows = readRows([{ header: '职工（C）', codes: ['CCCCCCCC'] }]);
-    expect(rows).toEqual([['职工（C）'], ['CCCCCCCC']]);
+    const rows = readRows([{ header: '职工（C）', codes: ['100000000003'] }]);
+    expect(rows).toEqual([['职工（C）'], ['100000000003']]);
+  });
+
+  it('12 位纯数字码按文本写入，前导零不丢', () => {
+    // 随机码现在是 12 位纯数字，可能以 0 开头；导出件必须原样保留字符串
+    const rows = readRows([{ header: '职工（C）', codes: ['000123456789'] }]);
+    expect(rows[1]).toEqual(['000123456789']);
+  });
+
+  it('随机码列是文本格式，列宽够放 12 位数字', () => {
+    const workbook = buildTicketsByTypeWorkbook([
+      { header: '职工（C）', codes: ['000123456789'] },
+    ]);
+    const sheet = workbook.getWorksheet('随机码')!;
+    // 只断言字符串值不够：单元格本来就是 string；numFmt='@' 才能防止人工重存时转数值。
+    expect(sheet.getColumn(1).numFmt).toBe('@');
+    expect(sheet.getColumn(1).width).toBeGreaterThanOrEqual(16);
   });
 
   it('空输入不抛错（没有码可导出的边界）', () => {

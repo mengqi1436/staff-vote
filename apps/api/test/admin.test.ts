@@ -8,15 +8,21 @@
  *
  * 数据隔离方式：本文件的所有夹具都带 `AT` 前缀，`beforeEach` 只清理自己前缀的数据，
  * 不做全表清空。因此即使被指向与别的测试文件相同的库，也不会清掉别人的夹具。
- * 票种权重是全局约束，相关用例先读取当前启用合计再构造场景，两种库上都能跑。
+ * 人员类别只由编码 / 名称 / 排序标识，跨行没有合计约束，夹具直接写库即可。
  *
- * 覆盖：鉴权、登录/登出、人员类别权重合计、发码/作废/批次、导出 xlsx、部门/被评列/职工/项点
+ * 覆盖：鉴权、登录/登出、人员类别 CRUD、发码/作废/批次、导出 xlsx、部门/被评列/职工/项点
  * CRUD 与软删除、部门问卷表头配置、名单导入、设置、统计口径、结果计分与多 sheet 导出。
  */
 import 'dotenv/config';
 import ExcelJS from 'exceljs';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 撞库补生成用例需要控制码源；默认仍走真实的 CSPRNG。
+vi.mock('../src/lib/code.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/code.js')>();
+  return { ...actual, generateUniqueCodes: vi.fn(actual.generateUniqueCodes) };
+});
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL ?? '';
 /** 没给测试库就跳过整组用例，而不是退回去连开发库。 */
@@ -38,7 +44,7 @@ if (suiteEnabled) process.env.TEST_DATABASE_URL = testDatabaseUrl;
 
 const { createApp } = await import('../src/app.js');
 const { prisma } = await import('../src/db.js');
-const { CODE_ALPHABET, CODE_LENGTH } = await import('../src/lib/code.js');
+const { CODE_LENGTH, generateCode, generateUniqueCodes } = await import('../src/lib/code.js');
 const { hashPassword } = await import('../src/lib/password.js');
 const { ADMIN_COOKIE } = await import('../src/middleware/adminAuth.js');
 const { ALL_PERMISSION_CODES } = await import('../src/lib/permissions.js');
@@ -62,7 +68,7 @@ let passwordHash = '';
 let adminId = '';
 let sequence = 0;
 
-const CODE_PATTERN = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`);
+const CODE_PATTERN = new RegExp(`^[0-9]{${CODE_LENGTH}}$`);
 
 function nextCode(): string {
   sequence += 1;
@@ -123,30 +129,18 @@ async function clearOwnAdmin(): Promise<void> {
   await prisma.adminRole.deleteMany({ where: { code: { startsWith: TAG } } });
 }
 
-/** 直接写库造人员类别（夹具用，绕开接口的权重校验；校验本身另有专门用例）。 */
-async function newTicketType(
-  weightPercent = 100,
-  enabled = true,
-): Promise<{ id: string; code: string }> {
+/** 直接写库造人员类别（夹具用，绕开接口的编码查重；查重本身另有专门用例）。 */
+async function newTicketType(enabled = true): Promise<{ id: string; code: string }> {
   const code = nextCode();
   const created = await prisma.ticketType.create({
     data: {
       sessionId: await ensureDefaultSession(prisma),
       code,
       name: `${TAG}人员类别-${code}`,
-      weightPercent,
       enabled,
     },
   });
   return { id: created.id, code: created.code };
-}
-
-async function enabledWeightSum(): Promise<number> {
-  const res = await agent.get('/api/admin/ticket-types');
-  expect(res.status).toBe(200);
-  return (res.body as Array<{ weightPercent: number; enabled: boolean }>)
-    .filter((row) => row.enabled)
-    .reduce((sum, row) => sum + row.weightPercent, 0);
 }
 
 async function createDepartment(name: string): Promise<{ id: string; name: string }> {
@@ -223,7 +217,7 @@ async function setupScoredDepartment(): Promise<{
   const criterionB = await createCriterion(department.id, '能', 0, 50);
   const first = await createVoteColumn(department.id, '主任', 0);
   const second = await createVoteColumn(department.id, '党支部书记', 1);
-  const ticketType = await newTicketType(100);
+  const ticketType = await newTicketType();
 
   await submitSheet(department.id, ticketType.id, [
     { voteColumnId: first.id, criterionId: criterionA.id, score: 90 },
@@ -341,7 +335,7 @@ describeDb('管理端接口', () => {
     const anonymous = request.agent(app);
     const responses = await Promise.all([
       anonymous.get('/api/admin/ticket-types'),
-      anonymous.post('/api/admin/ticket-types').send({ code: 'X', name: 'X', weightPercent: 0 }),
+      anonymous.post('/api/admin/ticket-types').send({ code: 'X', name: 'X' }),
       anonymous.get('/api/admin/tickets'),
       anonymous.post('/api/admin/tickets/generate').send({ ticketTypeId: 'x', count: 1 }),
       anonymous.get('/api/admin/tickets/export'),
@@ -444,11 +438,11 @@ describeDb('管理端接口', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 票种与权重
+  // 人员类别
   // ---------------------------------------------------------------------------
 
   it('GET /ticket-types 返回人员类别与发放/使用计数', async () => {
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
     const generated = await agent
       .post('/api/admin/tickets/generate')
       .send({ ticketTypeId: ticketType.id, count: 3 });
@@ -470,7 +464,6 @@ describeDb('管理端接口', () => {
     const row = (res.body as Array<{ id: string }>).find((item) => item.id === ticketType.id);
     expect(row).toMatchObject({
       code: ticketType.code,
-      weightPercent: 100,
       enabled: true,
       issuedCount: 3,
       usedCount: 1,
@@ -478,134 +471,22 @@ describeDb('管理端接口', () => {
     });
   });
 
-  it('权重合计校验：新建与升权不得超过 100，降权可作过渡步骤', async () => {
-    // 权重合计是全局约束，先看当前环境（空库为 0；与别的测试文件同库时可能已是 100）
-    const sum = await enabledWeightSum();
-    expect(sum).toBeLessThanOrEqual(100);
-
-    // 1) 新建票种允许逐步搭建，但不得超过 100
-    const headroom = 100 - sum;
-    const fillerWeight = headroom >= 2 ? headroom - 2 : 0;
-    const created = await agent
-      .post('/api/admin/ticket-types')
-      .send({ code: nextCode(), name: `${TAG}人员类别-新建`, weightPercent: fillerWeight });
-    expect(created.status).toBe(200);
-    expect(created.body.weightPercent).toBe(fillerWeight);
-    const total = sum + fillerWeight;
-    expect(await enabledWeightSum()).toBe(total);
-
-    // 2) 再新建一个会越过 100 的票种 → 409 且提示差额
-    const over = await agent
-      .post('/api/admin/ticket-types')
-      .send({ code: nextCode(), name: `${TAG}人员类别-超限`, weightPercent: 100 - total + 1 });
-    expect(over.status).toBe(409);
-    expect(over.body.error.code).toBe('WEIGHT_SUM_INVALID');
-    expect(over.body.error.message).toContain('101%');
-    expect(over.body.error.message).toContain('差额');
-
-    // 3) 升权补到 100：允许（写入后合计恰好 100）
-    const fillWeight = fillerWeight + (100 - total);
-    const fill = await agent
-      .patch(`/api/admin/ticket-types/${created.body.id}`)
-      .send({ weightPercent: fillWeight });
-    expect(fill.status).toBe(200);
-    expect(await enabledWeightSum()).toBe(100);
-
-    // 4) 继续升权 1 点越过 100 → 409；降权是重新分配权重的过渡步骤 → 允许；再补齐回 100 → 允许
-    //    （票种权重已是 0 时没有下降空间，跳过这一段）
-    if (fillWeight > 0 && fillWeight < 100) {
-      const raised = await agent
-        .patch(`/api/admin/ticket-types/${created.body.id}`)
-        .send({ weightPercent: fillWeight + 1 });
-      expect(raised.status).toBe(409);
-      expect(raised.body.error.message).toContain('差额');
-
-      const lowered = await agent
-        .patch(`/api/admin/ticket-types/${created.body.id}`)
-        .send({ weightPercent: fillWeight - 1 });
-      expect(lowered.status).toBe(200);
-      expect(await enabledWeightSum()).toBe(100 - fillWeight + (fillWeight - 1));
-
-      const back = await agent
-        .patch(`/api/admin/ticket-types/${created.body.id}`)
-        .send({ weightPercent: fillWeight });
-      expect(back.status).toBe(200);
-      expect(await enabledWeightSum()).toBe(100);
-    }
-
-    // 5) 停用的票种不计入合计，可以随便建
-    const disabled = await agent
-      .post('/api/admin/ticket-types')
-      .send({ code: nextCode(), name: `${TAG}人员类别-停用`, weightPercent: 10, enabled: false });
-    expect(disabled.status).toBe(200);
-    expect(disabled.body.enabled).toBe(false);
-    expect(await enabledWeightSum()).toBe(100);
-
-    // 6) 只改名称不触发权重校验
-    const renamed = await agent
-      .patch(`/api/admin/ticket-types/${created.body.id}`)
-      .send({ name: `${TAG}人员类别-改名` });
-    expect(renamed.status).toBe(200);
-    expect(renamed.body.name).toBe(`${TAG}人员类别-改名`);
-
-    expect(
-      (await agent.patch('/api/admin/ticket-types/not-exist').send({ weightPercent: 0 })).status,
-    ).toBe(404);
-  });
-
-  it('权重重分配：多步升权的中间步（合计 ≤100）不被拒绝', async () => {
-    // 计分按实际权重合计归一化（lib/scoring.ts），合计 ≠100 本就是合法中间状态：
-    // 降权方向从来允许停在 90。「先降腾空间、再分多步补齐」是重新分配权重的唯一通路，
-    // 若中间步被拒，任何含两个以上升权项的重分配都无法完成 ——
-    // 只有最后一步恰好落在 100，之前的升权步全部会被卡死。
-    const sum = await enabledWeightSum();
-    const headroom = 100 - sum;
-    if (headroom < 21) {
-      // 与其他测试文件同库时可能没有余量，无法构造 TAG 降权方；如实跳过（同上一个用例的条件跳过）
-      console.warn(`[admin.test] 当前库余量仅 ${headroom}%，跳过多步升权场景`);
-      return;
-    }
-
-    const a = await newTicketType(0);
-    const b = await newTicketType(0);
-
-    // 两步升权：a 0→15（合计 sum+15 < 100），b 0→5（合计 sum+20 ≤ 99）
-    const raiseA = await agent
-      .patch(`/api/admin/ticket-types/${a.id}`)
-      .send({ weightPercent: 15 });
-    expect(raiseA.status).toBe(200);
-
-    const raiseB = await agent
-      .patch(`/api/admin/ticket-types/${b.id}`)
-      .send({ weightPercent: 5 });
-    expect(raiseB.status).toBe(200);
-    expect(await enabledWeightSum()).toBe(sum + 20);
-
-    // 越过 100 仍然拒绝：a 再加 headroom-19 → 合计恰好 101
-    const over = await agent
-      .patch(`/api/admin/ticket-types/${a.id}`)
-      .send({ weightPercent: 15 + (headroom - 20) + 1 });
-    expect(over.status).toBe(409);
-    expect(over.body.error.code).toBe('WEIGHT_SUM_INVALID');
-    expect(over.body.error.message).toContain('101%');
-  });
-
   it('新建人员类别编码重复返回 409', async () => {
     const code = nextCode();
     const first = await agent
       .post('/api/admin/ticket-types')
-      .send({ code, name: `${TAG}人员类别-A`, weightPercent: 0 });
+      .send({ code, name: `${TAG}人员类别-A` });
     expect(first.status).toBe(200);
 
     const duplicate = await agent
       .post('/api/admin/ticket-types')
-      .send({ code, name: `${TAG}人员类别-B`, weightPercent: 0 });
+      .send({ code, name: `${TAG}人员类别-B` });
     expect(duplicate.status).toBe(409);
     expect(duplicate.body.error.code).toBe('TICKET_TYPE_EXISTS');
   });
 
   it('删除人员类别是软删除，停用后仍可查询', async () => {
-    const ticketType = await newTicketType(0);
+    const ticketType = await newTicketType();
     expect((await agent.delete(`/api/admin/ticket-types/${ticketType.id}`)).status).toBe(204);
 
     const list = await agent.get('/api/admin/ticket-types');
@@ -621,7 +502,7 @@ describeDb('管理端接口', () => {
   // ---------------------------------------------------------------------------
 
   it('发码创建批次与未使用随机码并写审计日志', async () => {
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
     const res = await agent
       .post('/api/admin/tickets/generate')
       .send({ ticketTypeId: ticketType.id, count: 5 });
@@ -643,8 +524,37 @@ describeDb('管理端接口', () => {
     );
   });
 
+  it('撞库自动补生成：跳过已存在的码并按差额补齐', async () => {
+    const ticketType = await newTicketType();
+    const otherType = await newTicketType();
+    const sessionId = await ensureDefaultSession(prisma);
+    const existing = '000000000001';
+    await prisma.ticket.deleteMany({ where: { code: existing } });
+    const otherBatch = await prisma.ticketBatch.create({
+      data: { ticketTypeId: otherType.id, sessionId, count: 1, operator: TAG },
+    });
+    await prisma.ticket.create({
+      data: { code: existing, ticketTypeId: otherType.id, batchId: otherBatch.id, sessionId },
+    });
+
+    // 第一轮含 1 个已存在的码（被 skipDuplicates 跳过）；第二轮补足差额。
+    const mocked = vi.mocked(generateUniqueCodes);
+    mocked.mockReturnValueOnce([existing, '000000000002']);
+    mocked.mockReturnValueOnce(['000000000003', '000000000004']);
+
+    const res = await agent
+      .post('/api/admin/tickets/generate')
+      .send({ ticketTypeId: ticketType.id, count: 3 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(3);
+    expect(res.body.codes).toHaveLength(3);
+    expect(res.body.codes).not.toContain(existing);
+    expect(await prisma.ticket.count({ where: { batchId: res.body.batchId as string } })).toBe(3);
+  });
+
   it('非法发码参数被拒：数量越界、人员类别不存在、人员类别停用', async () => {
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
 
     const tooFew = await agent
       .post('/api/admin/tickets/generate')
@@ -670,8 +580,8 @@ describeDb('管理端接口', () => {
   });
 
   it('随机码列表分页与按状态/人员类别过滤', async () => {
-    const typeA = await newTicketType(100);
-    const typeB = await newTicketType(0);
+    const typeA = await newTicketType();
+    const typeB = await newTicketType();
     await agent.post('/api/admin/tickets/generate').send({ ticketTypeId: typeA.id, count: 3 });
     await agent.post('/api/admin/tickets/generate').send({ ticketTypeId: typeB.id, count: 2 });
 
@@ -712,7 +622,7 @@ describeDb('管理端接口', () => {
   });
 
   it('作废仅限未使用的码，重复作废与作废已使用都是 409', async () => {
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
     const generated = await agent
       .post('/api/admin/tickets/generate')
       .send({ ticketTypeId: ticketType.id, count: 2 });
@@ -746,14 +656,16 @@ describeDb('管理端接口', () => {
   });
 
   it('随机码导出 xlsx：列说明与行数符合预期', async () => {
-    const typeA = await newTicketType(100);
-    const typeB = await newTicketType(0);
+    const typeA = await newTicketType();
+    const typeB = await newTicketType();
     await agent.post('/api/admin/tickets/generate').send({ ticketTypeId: typeA.id, count: 3 });
     await agent.post('/api/admin/tickets/generate').send({ ticketTypeId: typeB.id, count: 2 });
 
     const workbook = await getWorkbook(`/api/admin/tickets/export?ticketTypeId=${typeA.id}`);
     const table = readTable(workbook.getWorksheet('随机码清单'), '随机码');
     expect(table.header).toEqual(['随机码', '人员类别', '批次', '创建时间']);
+    // 码列必须是文本格式：只写字符串不够，人工在 Excel 重存仍可能转数值丢前导零。
+    expect(workbook.getWorksheet('随机码清单')!.getColumn(1).numFmt).toBe('@');
     expect(table.rows).toHaveLength(3);
     expect(table.rows[0]?.[1]).toContain(typeA.code);
 
@@ -1054,7 +966,6 @@ describeDb('管理端接口', () => {
         sessionId: deptRow.sessionId,
         code: `${TAG}TP${Date.now()}`,
         name: `${TAG}打分表人员类别`,
-        weightPercent: 100,
       },
     });
     const sheetBatch = await prisma.ticketBatch.create({
@@ -1062,7 +973,7 @@ describeDb('管理端接口', () => {
     });
     const sheetTicket = await prisma.ticket.create({
       data: {
-        code: `${TAG}SH${Date.now()}`,
+        code: generateCode(),
         ticketTypeId: sheetType.id,
         batchId: sheetBatch.id,
         sessionId: deptRow.sessionId,
@@ -1148,7 +1059,7 @@ describeDb('管理端接口', () => {
     const department = await createDepartment(`${TAG}部门-软删`);
     const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
     await submitSheet(department.id, ticketType.id, [
       { voteColumnId: column.id, criterionId: criterion.id, score: 90 },
     ]);
@@ -1294,7 +1205,7 @@ describeDb('管理端接口', () => {
     const criterion = await createCriterion(department.id, '德', 0, 100);
     // 职工名单只影响 employeeCount；打分表的列是被评列
     const column = await createVoteColumn(department.id, '主任');
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
 
     const generated = await agent
       .post('/api/admin/tickets/generate')
@@ -1322,7 +1233,7 @@ describeDb('管理端接口', () => {
     const row = (res.body.ticketTypes as Array<{ id: string }>).find(
       (item) => item.id === ticketType.id,
     );
-    expect(row).toMatchObject({ issued: 4, used: 1, unused: 2, revoked: 1, weightPercent: 100 });
+    expect(row).toMatchObject({ issued: 4, used: 1, unused: 2, revoked: 1 });
 
     // 总量必须等于按票种汇总，且三种状态相加等于发放量
     const sumOf = (key: string): number =>
@@ -1407,14 +1318,15 @@ describeDb('管理端接口', () => {
     expect(normalized).toMatchObject({ rawScore: 45, normalizedScore: 90 });
   });
 
-  it('结果按实际收到票的人员类别加权归一化', async () => {
-    const department = await createDepartment(`${TAG}部门-加权`);
+  it('结果按人员类别分别输出：每类独立得分与类别内排名，不跨类别合并', async () => {
+    const department = await createDepartment(`${TAG}部门-分类别`);
     const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
-    const typeA = await newTicketType(50);
-    const typeB = await newTicketType(30);
+    const typeA = await newTicketType();
+    const typeB = await newTicketType();
 
-    // A(50%) 打 80，B(30%) 打 100：(80×50 + 100×30) / 80 = 87.5
+    // A 打 80、B 打 100：两个类别各出一行，各自 80 / 100。
+    // 旧口径会合并成 (80×50 + 100×30) / 80 = 87.5，这里不允许出现任何合并值。
     await submitSheet(department.id, typeA.id, [
       { voteColumnId: column.id, criterionId: criterion.id, score: 80 },
     ]);
@@ -1423,28 +1335,64 @@ describeDb('管理端接口', () => {
     ]);
 
     const res = await agent.get(`/api/admin/results?departmentId=${department.id}`);
-    const row = res.body.rows[0];
-    expect(row.criteria[0]).toMatchObject({ rawScore: 87.5, normalizedScore: 87.5 });
     expect(res.body.sheetCount).toBe(2);
+    expect(res.body.rows).toHaveLength(2);
+
+    const rowOf = (ticketTypeId: string): {
+      ticketTypeId: string;
+      ticketTypeCode: string;
+      rank: number;
+      comprehensiveScore: number;
+      criteria: Array<{ rawScore: number; normalizedScore: number; participatingTicketTypeIds: string[] }>;
+    } => res.body.rows.find((row: { ticketTypeId: string }) => row.ticketTypeId === ticketTypeId);
+
+    // 每个类别只有一列可比 → 类别内排名都是第 1
+    const rowA = rowOf(typeA.id);
+    const rowB = rowOf(typeB.id);
+    expect(rowA).toMatchObject({
+      ticketTypeCode: typeA.code,
+      rank: 1,
+      comprehensiveScore: 80,
+    });
+    expect(rowB).toMatchObject({
+      ticketTypeCode: typeB.code,
+      rank: 1,
+      comprehensiveScore: 100,
+    });
+    // 每格只由本类别贡献，participatingTicketTypeIds 不含另一类别
+    expect(rowA?.criteria[0]).toMatchObject({ rawScore: 80, participatingTicketTypeIds: [typeA.id] });
+    expect(rowB?.criteria[0]).toMatchObject({ rawScore: 100, participatingTicketTypeIds: [typeB.id] });
     expect(
       (res.body.ticketTypesInvolved as Array<{ id: string }>).map((item) => item.id).sort(),
     ).toEqual([typeA.id, typeB.id].sort());
   });
 
-  it('某部门某人员类别零票时按有票人员类别归一化，不按 0 分计入', async () => {
+  it('某部门某人员类别零票时整类别不出行，不按 0 分计入', async () => {
     const department = await createDepartment(`${TAG}部门-缺人员类别`);
     const column = await createVoteColumn(department.id, '主任');
     const criterion = await createCriterion(department.id, '德', 0, 100);
-    const typeC = await newTicketType(20);
+    const typeC = await newTicketType();
+    // 该类别一张表都没有：没发这类票 ≠ 弃权，整类别不参与、不出行。
+    const typeNoSheet = await newTicketType();
 
-    // 只有 20% 权重的人员类别有票，均分 90：归一化后仍是 90，而不是 90×20/100
     await submitSheet(department.id, typeC.id, [
       { voteColumnId: column.id, criterionId: criterion.id, score: 90 },
     ]);
 
     const res = await agent.get(`/api/admin/results?departmentId=${department.id}`);
+    expect(res.body.rows).toHaveLength(1);
+    expect(res.body.rows[0]).toMatchObject({
+      ticketTypeId: typeC.id,
+      ticketTypeCode: typeC.code,
+      rank: 1,
+    });
     expect(res.body.rows[0].criteria[0]).toMatchObject({ rawScore: 90, normalizedScore: 90 });
     expect(res.body.rows[0].criteria[0].participatingTicketTypeIds).toEqual([typeC.id]);
+    expect(
+      (res.body.rows as Array<{ ticketTypeId: string }>).some(
+        (row) => row.ticketTypeId === typeNoSheet.id,
+      ),
+    ).toBe(false);
     expect(res.body.ticketTypesInvolved.map((item: { id: string }) => item.id)).toEqual([typeC.id]);
   });
 
@@ -1454,7 +1402,7 @@ describeDb('管理端接口', () => {
     const first = await createVoteColumn(department.id, '甲', 0);
     const second = await createVoteColumn(department.id, '乙', 1);
     const third = await createVoteColumn(department.id, '丙', 2);
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
 
     await submitSheet(department.id, ticketType.id, [
       { voteColumnId: first.id, criterionId: criterion.id, score: 80 },
@@ -1471,24 +1419,17 @@ describeDb('管理端接口', () => {
     expect(rankOf(third.id)).toBe(3);
   });
 
-  it('没有任何评分的被评议人列得 0 分并排在末位', async () => {
+  it('没有任何评分的被评议人列不输出（只统计有票的列）', async () => {
     const { deptId } = await setupScoredDepartment();
     const column = await createVoteColumn(deptId, '副主任', 2);
     const res = await agent.get(`/api/admin/results?departmentId=${deptId}`);
 
-    const zero = res.body.rows.find(
+    // 去权重后按人员类别分别统计：该类别在该被评列一张表都没有，
+    // 整列不参与，不能伪造出「评了但给 0 分」的行。
+    const unscored = res.body.rows.find(
       (row: { voteColumnId: string }) => row.voteColumnId === column.id,
     );
-    expect(zero).toMatchObject({ voteColumnName: '副主任', comprehensiveScore: 0 });
-    // 弃权、不填视为 0 分：本部门有表，该列就在每个项点上按 0 分参与平均，
-    // 所以它的 criteria 不是空数组，而是「每项都是 0 分」
-    expect(zero.criteria).toHaveLength(2);
-    expect(
-      (zero.criteria as Array<{ rawScore: number; normalizedScore: number }>).every(
-        (row) => row.rawScore === 0 && row.normalizedScore === 0,
-      ),
-    ).toBe(true);
-    expect(zero.rank).toBe(3);
+    expect(unscored).toBeUndefined();
   });
 
   it('结果参数缺失或部门不存在时的错误码', async () => {
@@ -1500,31 +1441,57 @@ describeDb('管理端接口', () => {
     expect(notFound.status).toBe(404);
   });
 
-  it('结果导出 xlsx：三个 sheet，行数符合预期', async () => {
+  it('结果导出 xlsx：五个 sheet，人员类别明细含票数', async () => {
     const { deptId, criterionA, criterionB } = await setupScoredDepartment();
 
     const workbook = await getWorkbook(`/api/admin/results/export.xlsx?departmentId=${deptId}`);
 
+    // 两个人员类别明细是主表；不再有跨类别合并的表，也没有「权重百分比」列
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([
+      '综合排名',
+      '各项明细',
+      '参与人员类别说明',
+      '人员类别单项明细',
+      '人员类别合计明细',
+    ]);
+
     const ranking = readTable(workbook.getWorksheet('综合排名'), '排名');
-    expect(ranking.header).toEqual(['排名', '被评对象', '综合得分', '计分评议项目数']);
+    expect(ranking.header).toEqual(['排名', '人员类别', '被评对象', '综合得分', '计分项点数']);
     expect(ranking.rows).toHaveLength(2);
-    expect(ranking.rows[0]?.[1]).toBe('主任');
-    expect(ranking.rows[0]?.[2]).toBe('90');
-    expect(ranking.rows[0]?.[3]).toBe('2');
-    expect(ranking.rows[1]?.[1]).toBe('党支部书记');
+    // 单类别场次：两行同属一个人员类别，排名在类别内是 1 / 2
+    expect(ranking.rows[0]?.[1]).toBe(ranking.rows[1]?.[1]);
+    expect(ranking.rows[0]?.[0]).toBe('1');
+    expect(ranking.rows[0]?.[2]).toBe('主任');
+    expect(ranking.rows[0]?.[3]).toBe('90');
+    expect(ranking.rows[0]?.[4]).toBe('2');
+    expect(ranking.rows[1]?.[0]).toBe('2');
+    expect(ranking.rows[1]?.[2]).toBe('党支部书记');
+    expect(ranking.rows[1]?.[3]).toBe('60');
 
-    // 明细行数 = 被评列数 × 有数据的项点数
-    const details = readTable(workbook.getWorksheet('各项明细'), '被评对象');
-    expect(details.header).toEqual(['被评对象', '评议项目', '原始分', '归一化分', '参与人员类别']);
+    // 明细行数 = 人员类别数(1) × 被评列数(2) × 有数据的项点数(2)
+    const details = readTable(workbook.getWorksheet('各项明细'), '人员类别');
+    expect(details.header).toEqual(['人员类别', '被评对象', '项点', '原始分', '归一化分']);
     expect(details.rows).toHaveLength(4);
-    expect(details.rows.filter((row) => row[1] === criterionA.name)).toHaveLength(2);
-    expect(details.rows.filter((row) => row[1] === criterionB.name)).toHaveLength(2);
-    expect(details.rows.every((row) => row[4] !== '')).toBe(true);
+    expect(details.rows.filter((row) => row[2] === criterionA.name)).toHaveLength(2);
+    expect(details.rows.filter((row) => row[2] === criterionB.name)).toHaveLength(2);
+    expect(details.rows.every((row) => row[0] !== '')).toBe(true);
 
-    // 参与票种口径：本次参与计分的票种标「是」，其余标「否」
+    // 参与口径：本次参与计分的人员类别标「是」，其余标「否」
     const involved = readTable(workbook.getWorksheet('参与人员类别说明'), '人员类别');
-    expect(involved.header).toEqual(['人员类别', '名称', '权重百分比', '是否参与计分']);
-    expect(involved.rows.filter((row) => row[3] === '是')).toHaveLength(1);
+    expect(involved.header).toEqual(['人员类别', '名称', '是否参与计分']);
+    expect(involved.rows.filter((row) => row[2] === '是')).toHaveLength(1);
+
+    // 两张人员类别明细都带「票数」：一码一票，即该类别在本部门的已提交答卷数
+    const typeCriteria = readTable(workbook.getWorksheet('人员类别单项明细'), '人员类别');
+    expect(typeCriteria.header).toEqual(['人员类别', '被评对象', '项点', '平均分', '票数']);
+    expect(typeCriteria.rows).toHaveLength(4);
+    expect(typeCriteria.rows.every((row) => row[4] === '1')).toBe(true);
+
+    const typeColumns = readTable(workbook.getWorksheet('人员类别合计明细'), '人员类别');
+    expect(typeColumns.header).toEqual(['人员类别', '被评对象', '综合得分', '票数']);
+    expect(typeColumns.rows).toHaveLength(2);
+    expect(typeColumns.rows.map((row) => row[2])).toEqual(['90', '60']);
+    expect(typeColumns.rows.map((row) => row[3])).toEqual(['1', '1']);
 
     // 一个部门一套项点列，跨部门汇总没有意义：缺参数直接 400
     expect((await agent.get('/api/admin/results/export.xlsx')).status).toBe(400);
@@ -1534,7 +1501,7 @@ describeDb('管理端接口', () => {
     const department = await createDepartment(`${TAG}部门-审计`);
     await createEmployee(department.id, '张三');
     await createCriterion(department.id, '德', 0, 100);
-    const ticketType = await newTicketType(100);
+    const ticketType = await newTicketType();
     const generated = await agent
       .post('/api/admin/tickets/generate')
       .send({ ticketTypeId: ticketType.id, count: 1 });

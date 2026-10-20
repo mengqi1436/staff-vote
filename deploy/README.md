@@ -63,7 +63,7 @@ vi apps/api/.env                   # 见下方「必须填写的变量」
 cd apps/api                        # 以下脚本定义在 apps/api/package.json
 pnpm db:generate                   # 生成 Prisma Client
 pnpm db:deploy                     # 应用迁移（不创建 shadow 库、不重置数据）
-pnpm db:seed                       # 权限目录 + 内置角色 + 管理员 + 设置项（不预置场次与票种）
+pnpm db:seed                       # 权限目录 + 内置角色 + 管理员 + 设置项（不预置场次与人员类别）
 pnpm build                         # tsc 产出 apps/api/dist
 ```
 
@@ -171,7 +171,72 @@ pg_restore -h 127.0.0.1 -U staff -d staff --clean --if-exists /var/backups/staff
 
 建议加入 crontab 每日执行，并定期演练恢复 —— 没演练过的备份等于没有备份。
 
-## 10. 常见问题
+## 10. 随机码格式升级（清空重发）操作步骤
+
+升级到「12 位纯数字码」这一版时，历史码与新格式**不兼容**。注意：`0016` 的 CHECK 是 `NOT VALID`，它只跳过存量行的初始校验，**后续 INSERT / UPDATE 仍强制执行**——旧码在迁移后虽然还能登录，但核销与作废都会被数据库拒绝（23514，接口 500）。因此清空必须在 `db:deploy` 之后、服务对外可用之前完成。
+
+### 10.1 先备份，并演练一次恢复
+
+```bash
+pg_dump -h 127.0.0.1 -U staff -Fc staff > /var/backups/staff-vote-before-code-upgrade.dump
+
+# 演练恢复：备份不可用等于没有备份
+createdb -h 127.0.0.1 -U staff staff_rehearsal
+pg_restore -h 127.0.0.1 -U staff -d staff_rehearsal /var/backups/staff-vote-before-code-upgrade.dump
+psql -h 127.0.0.1 -U staff -d staff_rehearsal -c 'SELECT count(*) FROM tickets;'
+dropdb -h 127.0.0.1 -U staff staff_rehearsal
+```
+
+演练库里的 `tickets` 行数应与生产一致；不一致就停下来查备份策略，不要继续清空。
+
+### 10.2 量化影响
+
+```bash
+psql -h 127.0.0.1 -U staff -d staff <<'SQL'
+SELECT status, count(*) FROM tickets GROUP BY status ORDER BY status;
+SELECT count(*) AS mapped_sheets FROM sheet_ticket_map;
+SELECT count(DISTINCT session_id) AS sessions_with_batches FROM ticket_batches;
+SQL
+```
+
+**清空会级联删除按码导出关联**：`sheet_ticket_map` 因 `ticket_id ON DELETE CASCADE` 随 `tickets` 一起被删，历史答卷将失去「按随机码导出答卷」的关联。**只有确认没有历史评议需要按码导出时，才可以全清**。若确有这类评议要留，只能改用「只删未用码」：
+
+```bash
+DELETE FROM tickets WHERE status = 'unused';
+```
+
+该替代路径保留已用码与历史导出关联，但**已用的旧码仍留在库中**：未用的已删、不会再被登录，但后台若尝试作废这些已用旧码，仍会被 `0016` 的 CHECK 拒绝（23514）。不需要保留导出关联时，直接全清更干净。
+
+### 10.3 按顺序清空（维护窗口，先停服务）
+
+```bash
+sudo systemctl stop staff-vote-api
+
+psql -h 127.0.0.1 -U staff -d staff --single-transaction <<'SQL'
+DELETE FROM "sheet_ticket_map";
+DELETE FROM "tickets";
+DELETE FROM "ticket_batches";
+SQL
+```
+
+顺序不能反：`tickets.batch_id` 的外键是 RESTRICT，必须先删 `tickets` 才能删 `ticket_batches`；先删 `sheet_ticket_map` 是显式表达意图（即便它本来也会被 CASCADE 带走）。
+
+`tickets` 内的码状态、核销时间与领码人（发放留痕）随清空一并消失；`score_sheets` / `score_items` / `audit_logs` 不受影响，统计、结果、整场整合导出、打印照常。
+
+### 10.4 清空后校验，再开放投票
+
+```bash
+psql -h 127.0.0.1 -U staff -d staff -c 'SELECT count(*), min(length(code)), max(length(code)) FROM tickets;'
+```
+
+- 清空后预期 `count = 0`（`min/max` 为 NULL 属正常，表为空）。
+- 重新发码后**再查一次**：`count` 等于新发数量，`min(length(code))` 与 `max(length(code))` 都应为 12。出现长度不等于 12 的行，说明混进了旧码或导出环节丢了前导零，先排查再开放投票。
+
+```bash
+sudo systemctl start staff-vote-api
+```
+
+## 11. 常见问题
 
 | 现象 | 原因 |
 |---|---|
